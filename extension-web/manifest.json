@@ -1,29 +1,33 @@
 {
-  "manifest_version": 3,
-  "name": "ClickShield Web3 Protection",
-  "version": "0.1.0",
-  "description": "Neon-dark Web3 phishing and drainer protection powered by ClickShield.",
-  "permissions": [
-    "scripting",
-    "tabs",
-    "activeTab"
-  ],
-  "host_permissions": [
-    "<all_urls>"
-  ],
-  "background": {
-    "service_worker": "background.js",
-    "type": "module"
-  },
-  "content_scripts": [
-    {
-      "matches": [
-        "<all_urls>"
-      ],
-      "js": [
-        "contentScript.js"
-      ],
-      "run_at": "document_idle"
+    "manifest_version": 3,
+    "name": "ClickShield Web3 Protection",
+    "version": "0.2.0",
+    "description": "ClickShield protects you from Web3 drainers, phishing pages, and suspicious links with a neon danger shield and always-on risk badge.",
+    "permissions": [
+      "scripting",
+      "tabs",
+      "activeTab"
+    ],
+    "host_permissions": [
+      "<all_urls>"
+    ],
+    "background": {
+      "service_worker": "background.js",
+      "type": "module"
+    },
+    "content_scripts": [
+      {
+        "matches": [
+          "<all_urls>"
+        ],
+        "js": [
+          "contentScript.js"
+        ],
+        "run_at": "document_idle"
+      }
+    ],
+    "action": {
+      "default_title": "ClickShield Web3 Protection"
     }
-  ]
-}
+  }
+  

@@ -485,6 +485,165 @@ app.get('/weekly-report', (req, res) => {
     topThreatTypes,
   });
 });
+// AI-powered dashboard digest for the last 7 days
+app.get('/dashboard-ai-digest', async (req, res) => {
+  try {
+    const now = new Date();
+    const weekEnd = now.toISOString();
+    const weekStartDate = new Date(now);
+    weekStartDate.setDate(now.getDate() - 7);
+    const weekStart = weekStartDate.toISOString();
+
+    const inRange = recentScans.filter((s) => {
+      if (!s.checkedAt) return false;
+      return s.checkedAt >= weekStart && s.checkedAt <= weekEnd;
+    });
+
+    let totalScans = inRange.length;
+    let dangerousCount = 0;
+    let suspiciousCount = 0;
+    let safeCount = 0;
+    const typeCounts = {};
+
+    for (const s of inRange) {
+      const risk = (s.riskLevel || '').toString().toUpperCase();
+      if (risk === 'DANGEROUS') dangerousCount++;
+      else if (risk === 'SUSPICIOUS') suspiciousCount++;
+      else if (risk === 'SAFE') safeCount++;
+
+      const t = (s.threatType || 'UNKNOWN').toString();
+      typeCounts[t] = (typeCounts[t] || 0) + 1;
+    }
+
+    const topThreatTypes = Object.entries(typeCounts)
+      .map(([type, count]) => ({ type, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+
+    // If there is no OpenAI client, return a rule-only digest string
+    if (!openai) {
+      const plainDigest =
+        totalScans === 0
+          ? 'No scans were recorded for this period. ClickShield will summarize threats once activity begins.'
+          : `In the last 7 days, ClickShield processed ${totalScans} links: ${dangerousCount} dangerous, ${suspiciousCount} suspicious, and ${safeCount} safe. Top threat types were ${topThreatTypes
+              .map((t) => `${t.type} (${t.count})`)
+              .join(', ') || 'not yet observed'}.`;
+
+      return res.json({
+        weekStart,
+        weekEnd,
+        totalScans,
+        dangerousCount,
+        suspiciousCount,
+        safeCount,
+        topThreatTypes,
+        aiDigest: {
+          digest: plainDigest,
+          model: 'RULE_ONLY',
+        },
+      });
+    }
+
+    // AI-enhanced digest
+    const summaryForModel = {
+      weekStart,
+      weekEnd,
+      totalScans,
+      dangerousCount,
+      suspiciousCount,
+      safeCount,
+      topThreatTypes,
+      sampleScans: inRange.slice(0, 20).map((s) => ({
+        url: s.url,
+        riskLevel: s.riskLevel,
+        riskScore: s.riskScore,
+        threatType: s.threatType,
+        source: s.source,
+        userType: s.userType,
+        checkedAt: s.checkedAt,
+      })),
+    };
+
+    const prompt = `
+You are the AI analyst for ClickShield, a Web3 and consumer security platform.
+
+You are given a 7-day summary of URL scans:
+- Counts of SAFE, SUSPICIOUS, and DANGEROUS links
+- Top threat types
+- Example scans with risk levels and threat categories
+
+Write a short, executive-friendly summary (2–4 sentences) of what happened this week:
+- Highlight whether threat activity is high or low
+- Call out any notable phishing / drainer / wallet-connect patterns
+- Mention if most scans look safe, or if users are frequently hitting risky links
+
+Do NOT use bullet points, lists, markdown, or headings.
+Return only the paragraph of text.
+`;
+
+let digestText = null;
+    let modelUsed = 'gpt-4.1-mini';
+
+    try {
+      const response = await openai.responses.create({
+        model: 'gpt-4.1-mini',
+        input: [
+          {
+            role: 'system',
+            content: prompt,
+          },
+          {
+            role: 'user',
+            content: JSON.stringify(summaryForModel),
+          },
+        ],
+      });
+
+      const output = response.output?.[0]?.content?.[0];
+      const text = output && output.text ? output.text.trim() : null;
+      if (text) {
+        digestText = text;
+        modelUsed = response.model || 'gpt-4.1-mini';
+      }
+    } catch (err) {
+      console.error(
+        '[ClickShield][AI] Failed to generate dashboard digest:',
+        err.message || err
+      );
+    }
+
+    // If AI failed, fall back to rule-only digest text
+    if (!digestText) {
+      digestText =
+        totalScans === 0
+          ? 'No scans were recorded for this period. ClickShield will summarize threats once activity begins.'
+          : `In the last 7 days, ClickShield processed ${totalScans} links: ${dangerousCount} dangerous, ${suspiciousCount} suspicious, and ${safeCount} safe. Top threat types were ${topThreatTypes
+              .map((t) => `${t.type} (${t.count})`)
+              .join(', ') || 'not yet observed'}.`;
+      modelUsed = 'RULE_ONLY_FALLBACK';
+    }
+
+    res.json({
+      weekStart,
+      weekEnd,
+      totalScans,
+      dangerousCount,
+      suspiciousCount,
+      safeCount,
+      topThreatTypes,
+      aiDigest: {
+        digest: digestText,
+        model: modelUsed,
+      },
+    });
+  } catch (err) {
+    console.error(
+      'Error in /dashboard-ai-digest:',
+      err.message || err
+    );
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // Recent scans list for dashboard table
 app.get('/recent-scans', (req, res) => {
