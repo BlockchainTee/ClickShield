@@ -1,32 +1,29 @@
 {
-    "manifest_version": 3,
-    "name": "ClickShield Web3 Shield",
-    "version": "0.1.0",
-    "description": "Blocks dangerous crypto and phishing sites using your ClickShield backend.",
-    "permissions": [
-      "tabs",
-      "scripting",
-      "activeTab"
-    ],
-    "host_permissions": [
-      "<all_urls>"
-    ],
-    "background": {
-      "service_worker": "background.js"
-    },
-    "action": {
-      "default_title": "Scan this page with ClickShield"
-    },
-    "content_scripts": [
-      {
-        "matches": [
-          "<all_urls>"
-        ],
-        "js": [
-          "contentScript.js"
-        ],
-        "run_at": "document_idle"
-      }
-    ]
-  }
-  
+  "manifest_version": 3,
+  "name": "ClickShield Web3 Protection",
+  "version": "0.1.0",
+  "description": "Neon-dark Web3 phishing and drainer protection powered by ClickShield.",
+  "permissions": [
+    "scripting",
+    "tabs",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "contentScript.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

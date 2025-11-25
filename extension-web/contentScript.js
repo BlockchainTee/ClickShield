@@ -1,244 +1,536 @@
-// contentScript.js
-// Injected into pages. Shows a small risk badge on every page,
-// and a full-screen warning overlay for dangerous/suspicious sites.
+// contentScript.js - ClickShield neon shield overlay + premium corner badge
 
-(function () {
-    const currentUrl = window.location.href;
-  
-    // Skip internal browser pages
-    if (
-      currentUrl.startsWith('chrome://') ||
-      currentUrl.startsWith('edge://') ||
-      currentUrl.startsWith('about:') ||
-      currentUrl.startsWith('chrome-extension://')
-    ) {
-      return;
+const href = window.location.href || '';
+
+// Only run on http/https pages
+if (href.startsWith('http://') || href.startsWith('https://')) {
+  console.log('[ClickShield][CS] Content script loaded on:', href);
+  scanWithBackground(href);
+}
+
+function scanWithBackground(url) {
+  // Avoid scanning inside iframes
+  if (window.top !== window.self) return;
+
+  console.log('[ClickShield][CS] Requesting scan for:', url);
+
+  chrome.runtime.sendMessage(
+    {
+      type: 'SCAN_URL',
+      url,
+      browser: 'chrome',
+    },
+    (response) => {
+      if (chrome.runtime.lastError) {
+        console.warn(
+          '[ClickShield][CS] Message error:',
+          chrome.runtime.lastError.message
+        );
+        // If backend unreachable, still show neutral badge so user knows shield is present
+        showCornerBadge({
+          riskLevel: 'UNKNOWN',
+          threatType: 'ENGINE_ERROR',
+        });
+        return;
+      }
+      if (!response || !response.ok) {
+        console.warn(
+          '[ClickShield][CS] Scan failed or no response:',
+          response && response.error
+        );
+        showCornerBadge({
+          riskLevel: 'UNKNOWN',
+          threatType: 'ENGINE_ERROR',
+        });
+        return;
+      }
+
+      console.log('[ClickShield][CS] Raw scan result:', response.data);
+      handleScanResult(response.data);
     }
-  
-    // Ask background.js to scan this URL
-    chrome.runtime.sendMessage(
-      { type: 'SCAN_URL', url: currentUrl },
-      (response) => {
-        if (!response || !response.ok) {
-          console.warn('[ClickShield] Scan failed or no response');
-          return;
-        }
-  
-        const data = response.data || {};
-        const riskLevel = (data.riskLevel || 'UNKNOWN').toUpperCase();
-  
-        // Always show a small badge so we know it's working
-        showRiskBadge(riskLevel, data, currentUrl);
-  
-        // Only block if dangerous or suspicious
-        if (riskLevel === 'DANGEROUS' || riskLevel === 'SUSPICIOUS') {
-          showWarningOverlay(data, currentUrl);
+  );
+}
+
+function normalizeScanResult(result = {}) {
+  // Support both camelCase and snake_case from backend
+  const rawRiskLevel = result.riskLevel || result.risk_level || 'UNKNOWN';
+  const rawRiskScore =
+    typeof result.riskScore === 'number'
+      ? result.riskScore
+      : typeof result.risk_score === 'number'
+      ? result.risk_score
+      : null;
+  const rawThreatType =
+    result.threatType || result.threat_type || 'UNKNOWN';
+
+  const riskLevel = String(rawRiskLevel).toUpperCase();
+  const riskScore = rawRiskScore;
+  const threatType = String(rawThreatType);
+
+  const reason =
+    result.reason ||
+    result.explanation ||
+    'No additional explanation available.';
+
+  const baseShortAdvice =
+    result.shortAdvice ||
+    result.advice ||
+    (riskLevel === 'SAFE'
+      ? 'Link appears low-risk, but always verify before connecting wallets or logging in.'
+      : 'Treat this link as risky. Avoid connecting wallets or entering credentials unless you fully trust the source.');
+
+  const url =
+    result.url || result.scannedUrl || window.location.href;
+
+  return {
+    riskLevel,
+    riskScore,
+    threatType,
+    reason,
+    shortAdvice: baseShortAdvice,
+    url,
+  };
+}
+
+function handleScanResult(rawResult) {
+  const normalized = normalizeScanResult(rawResult);
+  const { riskLevel, riskScore, threatType, reason, shortAdvice, url } =
+    normalized;
+
+  console.log('[ClickShield][CS] Normalized scan result:', normalized);
+
+  if (riskLevel === 'DANGEROUS') {
+    // Full-screen shield, no corner badge needed
+    showFullScreenShield({
+      riskLevel,
+      riskScore,
+      threatType,
+      reason,
+      shortAdvice,
+      url,
+    });
+    return;
+  }
+
+  // For SAFE / SUSPICIOUS / UNKNOWN, show corner badge
+  showCornerBadge({
+    riskLevel,
+    riskScore,
+    threatType,
+  });
+}
+
+function showFullScreenShield(info) {
+  if (document.getElementById('clickshield-overlay-root')) {
+    return;
+  }
+
+  const root = document.createElement('div');
+  root.id = 'clickshield-overlay-root';
+  root.innerHTML = getOverlayHtml(info);
+  document.documentElement.appendChild(root);
+
+  const leaveBtn = document.getElementById('clickshield-leave-btn');
+  const proceedBtn = document.getElementById('clickshield-proceed-btn');
+
+  if (leaveBtn) {
+    leaveBtn.addEventListener('click', () => {
+      try {
+        if (window.history.length > 1) {
+          window.history.back();
         } else {
-          console.log('[ClickShield] URL considered safe/low risk:', riskLevel);
+          window.location.href = 'about:blank';
         }
+      } catch (e) {
+        window.location.href = 'about:blank';
       }
-    );
-  
-    function showRiskBadge(riskLevel, data, url) {
-      if (document.getElementById('clickshield-risk-badge')) {
-        return;
+    });
+  }
+
+  if (proceedBtn) {
+    proceedBtn.addEventListener('click', () => {
+      root.remove();
+    });
+  }
+}
+
+function getOverlayHtml(info) {
+  const riskLabel = info.riskLevel || 'DANGEROUS';
+  const score = info.riskScore != null ? info.riskScore : '–';
+  const threatType = info.threatType || 'Unknown';
+  const reason = info.reason || '';
+  const shortAdvice = info.shortAdvice || '';
+  const url = info.url || window.location.href;
+
+  return `
+    <style>
+      #clickshield-overlay-root {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif;
       }
-  
-      const badge = document.createElement('div');
-      badge.id = 'clickshield-risk-badge';
-  
-      const bg =
-        riskLevel === 'DANGEROUS'
-          ? '#DC2626'
-          : riskLevel === 'SUSPICIOUS'
-          ? '#F97316'
-          : riskLevel === 'SAFE'
-          ? '#16A34A'
-          : '#4B5563';
-  
-      const label =
-        riskLevel === 'UNKNOWN' ? 'UNKNOWN' : riskLevel.toUpperCase();
-  
-      Object.assign(badge.style, {
-        position: 'fixed',
-        bottom: '12px',
-        right: '12px',
-        zIndex: '2147483647',
-        backgroundColor: bg,
-        color: '#F9FAFB',
-        padding: '4px 10px',
-        borderRadius: '999px',
-        fontSize: '11px',
-        fontFamily:
-          'system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif',
-        boxShadow: '0 6px 16px rgba(0,0,0,0.4)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: '6px',
-        cursor: 'default',
-      });
-  
-      const dot = document.createElement('span');
-      Object.assign(dot.style, {
-        width: '8px',
-        height: '8px',
-        borderRadius: '999px',
-        backgroundColor: '#F9FAFB',
-        opacity: '0.9',
-      });
-  
-      const text = document.createElement('span');
-      text.textContent = `ClickShield: ${label}`;
-  
-      badge.appendChild(dot);
-      badge.appendChild(text);
-  
-      document.addEventListener('DOMContentLoaded', () => {
-        if (!document.body.contains(badge)) {
-          document.body.appendChild(badge);
-        }
-      });
-  
-      if (document.body) {
-        document.body.appendChild(badge);
+
+      .cs-backdrop {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at top, #0f172a 0, #020617 45%, #000 100%);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        box-sizing: border-box;
       }
-    }
-  
-    function showWarningOverlay(data, url) {
-      // Don't duplicate overlay
-      if (document.getElementById('clickshield-warning-overlay')) {
-        return;
+
+      .cs-grid {
+        position: absolute;
+        inset: 0;
+        background-image: linear-gradient(rgba(148, 163, 184, 0.08) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(148, 163, 184, 0.08) 1px, transparent 1px);
+        background-size: 24px 24px;
+        pointer-events: none;
+        opacity: 0.5;
       }
-  
-      const overlay = document.createElement('div');
-      overlay.id = 'clickshield-warning-overlay';
-      Object.assign(overlay.style, {
-        position: 'fixed',
-        top: '0',
-        left: '0',
-        width: '100%',
-        height: '100%',
-        background: 'rgba(0,0,0,0.88)',
-        color: '#fff',
-        zIndex: '2147483647',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, sans-serif',
-        padding: '20px',
-        boxSizing: 'border-box',
-      });
-  
-      overlay.innerHTML = `
-        <div style="
-          max-width: 520px;
-          width: 100%;
-          background: #020617;
+
+      .cs-panel {
+        position: relative;
+        max-width: 640px;
+        width: 100%;
+        background: rgba(15, 23, 42, 0.96);
+        border-radius: 24px;
+        border: 1px solid rgba(56, 189, 248, 0.5);
+        box-shadow:
+          0 0 0 1px rgba(15, 23, 42, 1),
+          0 0 80px rgba(8, 47, 73, 0.9);
+        padding: 24px;
+        color: #e5e7eb;
+        overflow: hidden;
+      }
+
+      .cs-panel::before {
+        content: '';
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(circle at top, rgba(56, 189, 248, 0.25), transparent 55%);
+        opacity: 0.4;
+        pointer-events: none;
+      }
+
+      .cs-header-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        position: relative;
+        z-index: 1;
+      }
+
+      .cs-product-tag {
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #38bdf8;
+        margin-bottom: 4px;
+      }
+
+      .cs-title {
+        font-size: 20px;
+        font-weight: 800;
+        color: #f9fafb;
+        margin: 0;
+      }
+
+      .cs-subtitle {
+        font-size: 12px;
+        color: #9ca3af;
+        margin-top: 4px;
+      }
+
+      .cs-shield {
+        width: 72px;
+        height: 72px;
+        border-radius: 999px;
+        border: 2px solid rgba(248, 113, 113, 0.7);
+        background: radial-gradient(circle at top, #ef4444, #7f1d1d);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow:
+          0 0 40px rgba(248, 113, 113, 0.75),
+          0 0 0 1px rgba(15, 23, 42, 1);
+      }
+
+      .cs-shield-icon {
+        font-size: 32px;
+        color: #fee2e2;
+      }
+
+      .cs-body {
+        margin-top: 16px;
+        position: relative;
+        z-index: 1;
+      }
+
+      .cs-url {
+        font-size: 11px;
+        color: #9ca3af;
+        margin-bottom: 8px;
+        word-break: break-all;
+      }
+
+      .cs-risk-row {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+
+      .cs-risk-badge {
+        font-size: 11px;
+        font-weight: 700;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid #ef4444;
+        background: rgba(127, 29, 29, 0.85);
+        color: #fee2e2;
+      }
+
+      .cs-score-pill {
+        font-size: 11px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(56, 189, 248, 0.6);
+        color: #e0f2fe;
+        background: rgba(15, 23, 42, 0.9);
+      }
+
+      .cs-threat-pill {
+        font-size: 11px;
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(251, 191, 36, 0.7);
+        color: #facc15;
+        background: rgba(23, 23, 23, 0.9);
+      }
+
+      .cs-reason {
+        font-size: 12px;
+        color: #e5e7eb;
+        margin-bottom: 8px;
+      }
+
+      .cs-advice {
+        font-size: 12px;
+        color: #bfdbfe;
+        margin-bottom: 16px;
+      }
+
+      .cs-buttons {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .cs-btn-primary {
+        flex: 1;
+        min-width: 120px;
+        border-radius: 999px;
+        border: none;
+        padding: 9px 14px;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        background: linear-gradient(90deg, #0ea5e9, #22d3ee);
+        color: #0b1120;
+        box-shadow: 0 0 24px rgba(56, 189, 248, 0.8);
+      }
+
+      .cs-btn-secondary {
+        flex: 1;
+        min-width: 120px;
+        border-radius: 999px;
+        border: 1px solid rgba(148, 163, 184, 0.7);
+        padding: 9px 14px;
+        font-size: 13px;
+        font-weight: 500;
+        cursor: pointer;
+        background: rgba(15, 23, 42, 0.9);
+        color: #e5e7eb;
+      }
+
+      .cs-footer {
+        margin-top: 12px;
+        font-size: 10px;
+        color: #6b7280;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+        align-items: center;
+      }
+
+      .cs-footer span {
+        white-space: nowrap;
+      }
+
+      .cs-footer-right {
+        text-align: right;
+      }
+
+      @media (max-width: 640px) {
+        .cs-panel {
+          padding: 16px;
           border-radius: 18px;
-          border: 1px solid #1F2937;
-          box-shadow: 0 24px 60px rgba(0,0,0,0.7);
-          padding: 20px 20px 16px;
-          text-align: left;
-        ">
-          <div style="
-            display:inline-flex;
-            padding:2px 8px;
-            border-radius:999px;
-            border:1px solid ${data.riskLevel === 'DANGEROUS' ? '#DC2626' : '#F97316'};
-            background-color:${data.riskLevel === 'DANGEROUS' ? '#DC262633' : '#F9731633'};
-            color:${data.riskLevel === 'DANGEROUS' ? '#FECACA' : '#FED7AA'};
-            font-size:11px;
-            font-weight:700;
-            margin-bottom:8px;
-          ">
-            ${data.riskLevel === 'DANGEROUS' ? 'DANGEROUS' : 'SUSPICIOUS'}
+        }
+        .cs-header-row {
+          align-items: flex-start;
+        }
+        .cs-shield {
+          width: 60px;
+          height: 60px;
+        }
+      }
+    </style>
+
+    <div class="cs-backdrop">
+      <div class="cs-grid"></div>
+      <div class="cs-panel">
+        <div class="cs-header-row">
+          <div>
+            <div class="cs-product-tag">ClickShield · Web3 Protection</div>
+            <h1 class="cs-title">Dangerous link blocked</h1>
+            <p class="cs-subtitle">
+              We detected high-risk crypto scam patterns on this page. Your wallet and assets may be at risk.
+            </p>
           </div>
-  
-          <h1 style="color:#F9FAFB; font-size:20px; font-weight:800; margin:0 0 4px;">
-            ClickShield blocked this page
-          </h1>
-  
-          <p style="font-size:13px; color:#9CA3AF; margin:0 0 12px;">
-            This site looks like a crypto or phishing threat. Proceed only if you fully trust it.
-          </p>
-  
-          <p style="
-            font-size:12px;
-            color:#E5E7EB;
-            margin:0 0 8px;
-            word-break:break-all;
-          ">
-            ${url}
-          </p>
-  
-          <p style="font-size:12px; color:#D1D5DB; margin:0 0 4px;">
-            ${data.reason || 'This page matches high-risk patterns in your ClickShield engine.'}
-          </p>
-  
-          <p style="font-size:12px; color:#BFDBFE; margin:0 0 12px;">
-            Advice: ${
-              data.shortAdvice ||
-              'Do not connect wallets, sign transactions, or enter seed phrases on this page.'
-            }
-          </p>
-  
-          <div style="
-            display:flex;
-            justify-content:space-between;
-            font-size:11px;
-            color:#6B7280;
-            margin-bottom:12px;
-            flex-wrap:wrap;
-            gap:6px;
-          ">
-            <span>Threat: ${data.threatType || data.rule?.ruleThreatCategory || 'UNKNOWN'}</span>
-            <span>Risk score: ${
-              typeof data.riskScore === 'number' ? data.riskScore : 'n/a'
-            }</span>
-          </div>
-  
-          <div style="display:flex; justify-content:flex-end; gap:8px;">
-            <button id="clickshield-leave" style="
-              padding:6px 12px;
-              border-radius:999px;
-              border:none;
-              background:#DC2626;
-              color:#F9FAFB;
-              font-size:13px;
-              font-weight:600;
-              cursor:pointer;
-            ">
-              Leave site
-            </button>
-            <button id="clickshield-proceed" style="
-              padding:6px 12px;
-              border-radius:999px;
-              border:1px solid #4B5563;
-              background:#020617;
-              color:#E5E7EB;
-              font-size:13px;
-              font-weight:500;
-              cursor:pointer;
-            ">
-              Proceed anyway
-            </button>
+          <div class="cs-shield">
+            <div class="cs-shield-icon">⚠️</div>
           </div>
         </div>
-      `;
-  
-      document.body.appendChild(overlay);
-  
-      document.getElementById('clickshield-leave').onclick = () => {
-        try {
-          window.location.href = 'about:blank';
-        } catch (e) {
-          window.history.back();
-        }
-      };
-  
-      document.getElementById('clickshield-proceed').onclick = () => {
-        overlay.remove();
-      };
-    }
-  })();
-  
+
+        <div class="cs-body">
+          <div class="cs-url">${escapeHtml(url)}</div>
+
+          <div class="cs-risk-row">
+            <div class="cs-risk-badge">${escapeHtml(riskLabel)}</div>
+            <div class="cs-threat-pill">${escapeHtml(threatType)}</div>
+            <div class="cs-score-pill">Risk score: ${escapeHtml(String(score))}</div>
+          </div>
+
+          <div class="cs-reason">${escapeHtml(reason)}</div>
+          <div class="cs-advice">${escapeHtml(shortAdvice)}</div>
+
+          <div class="cs-buttons">
+            <button id="clickshield-leave-btn" class="cs-btn-primary">
+              Leave this site
+            </button>
+            <button id="clickshield-proceed-btn" class="cs-btn-secondary">
+              Ignore and continue
+            </button>
+          </div>
+
+          <div class="cs-footer">
+            <div>
+              <span>Engine: ClickShield rule engine</span>
+            </div>
+              <span>Protected by ClickShield</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function showCornerBadge(info) {
+  // Always remove previous badge so the text updates with each scan
+  const existing = document.getElementById('clickshield-corner-badge');
+  if (existing) existing.remove();
+
+  const riskLevel = (info.riskLevel || 'UNKNOWN').toUpperCase();
+
+  let text = 'ClickShield: MONITORING';
+  let subtext = '';
+  let bg =
+    'linear-gradient(90deg, rgba(37,99,235,0.95), rgba(8,47,73,0.95))';
+  let border = '1px solid rgba(129,140,248,0.8)';
+
+  if (riskLevel === 'SAFE') {
+    text = 'ClickShield: SAFE';
+    subtext = 'Low-risk page';
+    bg =
+      'linear-gradient(135deg, rgba(34,197,94,0.95), rgba(21,128,61,0.95))';
+    border = '1px solid rgba(190,242,100,0.9)';
+  } else if (riskLevel === 'SUSPICIOUS') {
+    text = 'ClickShield: CHECK LINK';
+    subtext = 'Suspicious patterns detected';
+    bg =
+      'linear-gradient(135deg, rgba(234,179,8,0.98), rgba(133,77,14,0.98))';
+    border = '1px solid rgba(254,240,138,0.95)';
+  } else if (riskLevel === 'DANGEROUS') {
+    text = 'ClickShield: BLOCKED';
+    subtext = 'Dangerous link';
+    bg =
+      'linear-gradient(135deg, rgba(248,113,113,0.98), rgba(127,29,29,0.98))';
+    border = '1px solid rgba(254,202,202,0.95)';
+  } else {
+    text = 'ClickShield: MONITORING';
+    subtext = 'Engine unavailable';
+    bg =
+      'linear-gradient(135deg, rgba(148,163,184,0.95), rgba(30,64,175,0.95))';
+    border = '1px solid rgba(209,213,219,0.9)';
+  }
+
+  console.log('[ClickShield][CS] Rendering corner badge with:', {
+    riskLevel,
+    text,
+    subtext,
+  });
+
+  const badge = document.createElement('div');
+  badge.id = 'clickshield-corner-badge';
+  badge.style.position = 'fixed';
+  badge.style.bottom = '12px';
+  badge.style.right = '12px';
+  badge.style.zIndex = '2147483646';
+  badge.style.fontFamily =
+    "system-ui, -apple-system, BlinkMacSystemFont, 'SF Pro Text', sans-serif";
+  badge.style.fontSize = '11px';
+  badge.style.color = '#f9fafb';
+  badge.style.background = bg;
+  badge.style.borderRadius = '999px';
+  badge.style.padding = '6px 12px';
+  badge.style.boxShadow = '0 16px 40px rgba(15,23,42,0.85)';
+  badge.style.border = border;
+  badge.style.display = 'flex';
+  badge.style.alignItems = 'center';
+  badge.style.gap = '8px';
+  badge.style.backdropFilter = 'blur(12px)';
+  badge.style.WebkitBackdropFilter = 'blur(12px)';
+  badge.style.maxWidth = '260px';
+
+  const textHtml = subtext
+    ? `<div style="display:flex;flex-direction:column;line-height:1.2;">
+         <span style="font-weight:600;">${escapeHtml(text)}</span>
+         <span style="opacity:0.85;font-size:10px;">${escapeHtml(
+           subtext
+         )}</span>
+       </div>`
+    : `<div style="line-height:1.2;font-weight:600;">
+         ${escapeHtml(text)}
+       </div>`;
+
+  badge.innerHTML = textHtml;
+
+  document.documentElement.appendChild(badge);
+}
+
+function escapeHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
+}

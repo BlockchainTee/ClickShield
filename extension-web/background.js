@@ -1,12 +1,23 @@
-// background.js
-// Handles calls to your ClickShield backend.
+// background.js - ClickShield backend proxy
 
-const API_BASE = 'http://localhost:4000'; // change if you use a different IP
+const API_BASE = 'http://localhost:4000';
 
+// Log basic lifecycle
+chrome.runtime.onInstalled.addListener(() => {
+  console.log('ClickShield Web3 Protection installed.');
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  console.log('ClickShield Web3 Protection started.');
+});
+
+// Listen for scan requests from content scripts
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === 'SCAN_URL') {
+  if (message && message.type === 'SCAN_URL') {
     const url = message.url;
-    console.log('[ClickShield] Scanning URL:', url);
+    const browserName = message.browser || 'chromium';
+
+    console.log('[ClickShield][BG] Scanning URL from content script:', url);
 
     fetch(`${API_BASE}/scan-url`, {
       method: 'POST',
@@ -15,12 +26,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       },
       body: JSON.stringify({
         url,
-        userType: 'browser-extension',
+        userType: 'consumer',
         orgId: 'personal',
         orgName: 'Personal',
         userId: 'browser-extension-user',
         userEmail: 'browser-extension@clickshield.app',
-        deviceId: `browser-${message.browser || 'chromium'}`
+        deviceId: `browser-${browserName}`,
+        source: 'browser-extension',
       }),
     })
       .then(async (res) => {
@@ -31,14 +43,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return res.json();
       })
       .then((data) => {
+        console.log('[ClickShield][BG] Scan success:', data);
         sendResponse({ ok: true, data });
       })
       .catch((err) => {
-        console.error('[ClickShield] Backend error:', err);
-        sendResponse({ ok: false, error: err.message });
+        console.error('[ClickShield][BG] Scan failed:', err?.message || err);
+        sendResponse({ ok: false, error: err?.message || 'Unknown error' });
       });
 
-    // Keep channel open for async sendResponse
+    // Tell Chrome we will reply asynchronously
     return true;
   }
 });

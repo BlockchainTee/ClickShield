@@ -1,10 +1,36 @@
-// server.js - clean, stable ClickShield backend
+// server.js - clean, stable ClickShield backend with optional AI layer
 
 const express = require('express');
 const cors = require('cors');
+const OpenAI = require('openai');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+
+// ===================== OpenAI / AI Setup =======================
+
+let openai = null;
+
+if (process.env.OPENAI_API_KEY) {
+  try {
+    openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY,
+    });
+    console.log(
+      '[ClickShield][AI] OpenAI client initialized. Engine: RULE_PLUS_AI when available.'
+    );
+  } catch (err) {
+    console.error(
+      '[ClickShield][AI] Failed to initialize OpenAI client:',
+      err.message || err
+    );
+    openai = null;
+  }
+} else {
+  console.log(
+    '[ClickShield][AI] OPENAI_API_KEY not set. Running in RULE_ONLY mode.'
+  );
+}
 
 // Basic middleware
 app.use(cors());
@@ -43,12 +69,49 @@ const RECENT_SCANS_MAX = 200;
 const recentScans = [];
 
 // =====================================================
+// ============== TRUSTED DOMAIN HELPERS ===============
+// =====================================================
+
+const TRUSTED_DOMAINS = [
+  'lowes.com',
+  'www.lowes.com',
+  'openai.com',
+  'platform.openai.com',
+  'www.openai.com',
+];
+
+function isTrustedDomain(rawUrl) {
+  if (!rawUrl) return false;
+  try {
+    const normalized =
+      rawUrl.startsWith('http://') || rawUrl.startsWith('https://')
+        ? rawUrl
+        : `https://${rawUrl}`;
+    const u = new URL(normalized);
+    const host = (u.hostname || '').toLowerCase();
+    return TRUSTED_DOMAINS.includes(host);
+  } catch {
+    return false;
+  }
+}
+
+// =====================================================
 // ============== SIMPLE RULE ENGINE ===================
 // =====================================================
 
 function runRuleEngine(rawUrl) {
   const url = (rawUrl || '').toString();
   const lower = url.toLowerCase();
+
+  // 0. Trusted allowlist: always SAFE, very low score
+  if (isTrustedDomain(url)) {
+    return {
+      ruleRiskLevel: 'SAFE',
+      ruleThreatCategory: 'TRUSTED_SITE',
+      ruleScore: 5,
+      ruleReason: 'Domain is on ClickShield trusted allowlist.',
+    };
+  }
 
   let riskLevel = 'SAFE';
   let threatType = 'GENERIC';
@@ -119,13 +182,12 @@ function runRuleEngine(rawUrl) {
       'URL contains common crypto airdrop / login lure patterns. Treat with caution.';
   }
 
-  // Very short / weird URLs also suspicious
+  // Very short / weird URLs: note in the reason, but DO NOT flip to SUSPICIOUS
   if (url.length < 15 && riskLevel === 'SAFE') {
-    riskLevel = 'SUSPICIOUS';
-    threatType = 'GENERIC_SHORT_URL';
-    score = 40;
+    // keep SAFE, just slightly adjust score + explanation
+    score = 15;
     reason =
-      'Very short URL. Could be a redirect or obfuscated link. Verify source before using.';
+      'Short URL with no known scam patterns detected. Appears low-risk but always verify the source.';
   }
 
   return {
@@ -134,6 +196,80 @@ function runRuleEngine(rawUrl) {
     ruleScore: score,
     ruleReason: reason,
   };
+}
+
+// =====================================================
+// =================== AI ANALYSIS =====================
+// =====================================================
+
+async function runAiAnalysis({
+  url,
+  ruleResult,
+  effectiveUserType,
+  source,
+}) {
+  if (!openai) {
+    return null;
+  }
+
+  try {
+    const prompt = `
+You are the AI engine for ClickShield, a Web3 and consumer security platform.
+
+You receive:
+- A URL that was just scanned
+- The output of a deterministic rule engine (risk level, threat type, score, reason)
+- Basic context: is this a consumer or business user, and the source (extension, mobile, dashboard, api).
+
+Your job:
+1. Briefly validate or lightly refine the rule engine's assessment.
+2. Write a concise, business-friendly narrative (2-3 sentences) explaining the risk in clear language.
+3. If the URL looks extremely benign, you can slightly reinforce SAFE, but do not override to SAFE if rules said DANGEROUS.
+4. Focus heavily on wallet drainers, seed phrase theft, phishing, and common Web3 scam patterns.
+5. Avoid long walls of text. No bullet points. No markdown. No headings.
+
+Return ONLY a short paragraph (2–3 sentences) suitable for showing in a security dashboard or browser overlay.
+`;
+
+    const inputDescription = {
+      url,
+      ruleResult,
+      userType: effectiveUserType,
+      source,
+    };
+
+    const response = await openai.responses.create({
+      model: 'gpt-4.1-mini',
+      input: [
+        {
+          role: 'system',
+          content: prompt,
+        },
+        {
+          role: 'user',
+          content: JSON.stringify(inputDescription),
+        },
+      ],
+    });
+
+    const output = response.output?.[0]?.content?.[0];
+    const text = output && output.text ? output.text.trim() : null;
+
+    if (!text) {
+      return null;
+    }
+
+    return {
+      aiNarrative: text,
+      aiModel: response.model || 'gpt-4.1-mini',
+    };
+  } catch (err) {
+    console.error(
+      '[ClickShield][AI] AI analysis failed:',
+      err.message || err
+    );
+    return null;
+  }
 }
 
 // =====================================================
@@ -187,26 +323,22 @@ app.post('/scan-url', async (req, res) => {
     const effectiveUserType =
       userType === 'business' ? 'business' : 'consumer';
 
-    // 1. Run rule engine
+    // 1. Run rule engine (deterministic baseline)
     const ruleResult = runRuleEngine(url);
-
-    // For now we skip AI; this is a stable rule-only engine.
-    const finalRiskLevel = ruleResult.ruleRiskLevel;
-    const finalThreatType = ruleResult.ruleThreatCategory;
-    const finalRiskScore = ruleResult.ruleScore;
 
     const now = new Date().toISOString();
     const id =
       Date.now().toString() + Math.random().toString(36).slice(2);
 
+    // Base response (rule-only)
     const responseBody = {
       url,
-      riskLevel: finalRiskLevel,
-      riskScore: finalRiskScore,
-      threatType: finalThreatType,
+      riskLevel: ruleResult.ruleRiskLevel,
+      riskScore: ruleResult.ruleScore,
+      threatType: ruleResult.ruleThreatCategory,
       reason: ruleResult.ruleReason,
       shortAdvice:
-        finalRiskLevel === 'SAFE'
+        ruleResult.ruleRiskLevel === 'SAFE'
           ? 'Link appears low-risk, but always verify before connecting wallets or logging in.'
           : 'Treat this link as risky. Avoid connecting wallets or entering credentials unless you fully trust the source.',
       checkedAt: now,
@@ -222,13 +354,34 @@ app.post('/scan-url', async (req, res) => {
       },
     };
 
-    // Update in-memory recentScans buffer
+    // 2. Optional AI layer (narrative on top of rules)
+    let aiResult = null;
+    try {
+      aiResult = await runAiAnalysis({
+        url,
+        ruleResult,
+        effectiveUserType,
+        source,
+      });
+    } catch (err) {
+      console.error(
+        '[ClickShield][AI] Unexpected AI error:',
+        err.message || err
+      );
+    }
+
+    if (aiResult && aiResult.aiNarrative) {
+      responseBody.engine = 'RULE_PLUS_AI';
+      responseBody.ai = aiResult;
+    }
+
+    // 3. Update in-memory recentScans buffer
     try {
       recentScans.unshift({
         id,
         url: responseBody.url,
         riskLevel: responseBody.riskLevel,
-        riskScore: finalRiskScore,
+        riskScore: responseBody.riskScore,
         threatType: responseBody.threatType,
         userEmail: responseBody.context.userEmail || 'unknown',
         userType: responseBody.context.userType || effectiveUserType,
@@ -237,6 +390,7 @@ app.post('/scan-url', async (req, res) => {
         deviceId: responseBody.context.deviceId || null,
         checkedAt: responseBody.checkedAt,
         source: responseBody.source || source,
+        engine: responseBody.engine,
       });
       if (recentScans.length > RECENT_SCANS_MAX) {
         recentScans.length = RECENT_SCANS_MAX;
@@ -335,6 +489,85 @@ app.get('/weekly-report', (req, res) => {
 // Recent scans list for dashboard table
 app.get('/recent-scans', (req, res) => {
   res.json(recentScans);
+});
+
+// =====================================================
+// ================ EXPORT ENDPOINTS ===================
+// =====================================================
+
+// Export recent scans as JSON (business-friendly)
+app.get('/export/recent-scans.json', (req, res) => {
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    total: recentScans.length,
+    scans: recentScans,
+  };
+
+  res.setHeader('Content-Type', 'application/json');
+  res.setHeader(
+    'Content-Disposition',
+    'attachment; filename="clickshield-recent-scans.json"'
+  );
+  res.json(payload);
+});
+
+// Export recent scans as CSV
+app.get('/export/recent-scans.csv', (req, res) => {
+  const headers = [
+    'id',
+    'url',
+    'riskLevel',
+    'riskScore',
+    'threatType',
+    'userEmail',
+    'userType',
+    'orgId',
+    'orgName',
+    'deviceId',
+    'checkedAt',
+    'source',
+    'engine',
+  ];
+
+  function escapeCsvValue(value) {
+    if (value === null || value === undefined) return '';
+    const str = String(value);
+    if (str.includes('"') || str.includes(',') || str.includes('\n')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  }
+
+  const lines = [];
+  lines.push(headers.join(','));
+
+  for (const s of recentScans) {
+    const row = [
+      s.id,
+      s.url,
+      s.riskLevel,
+      s.riskScore,
+      s.threatType,
+      s.userEmail,
+      s.userType,
+      s.orgId,
+      s.orgName,
+      s.deviceId,
+      s.checkedAt,
+      s.source,
+      s.engine,
+    ].map(escapeCsvValue);
+    lines.push(row.join(','));
+  }
+
+  const csv = lines.join('\n');
+
+  res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+  res.setHeader(
+    'Content-Disposition',
+    'attachment; filename="clickshield-recent-scans.csv"'
+  );
+  res.send(csv);
 });
 
 // =====================================================
