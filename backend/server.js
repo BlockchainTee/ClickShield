@@ -410,6 +410,129 @@ app.post('/scan-url', async (req, res) => {
 });
 
 // =====================================================
+// ===== MOBILE REAL-TIME SAFE BROWSING ENDPOINT =======
+// =====================================================
+
+app.post('/mobile-safe-browse', async (req, res) => {
+  try {
+    const {
+      url,
+      deviceId,
+      platform,
+      appVersion,
+      userId,
+      userEmail,
+      orgId,
+      orgName,
+    } = req.body || {};
+
+    if (!url || typeof url !== 'string') {
+      return res
+        .status(400)
+        .json({ error: 'url is required as a string' });
+    }
+
+    const source = 'mobile';
+    const effectiveUserType = 'consumer';
+
+    // 1. Run rule engine (same as /scan-url)
+    const ruleResult = runRuleEngine(url);
+
+    const now = new Date().toISOString();
+    const id =
+      Date.now().toString() + Math.random().toString(36).slice(2);
+
+    // Base response
+    const responseBody = {
+      url,
+      riskLevel: ruleResult.ruleRiskLevel,
+      riskScore: ruleResult.ruleScore,
+      threatType: ruleResult.ruleThreatCategory,
+      reason: ruleResult.ruleReason,
+      shortAdvice:
+        ruleResult.ruleRiskLevel === 'SAFE'
+          ? 'Link appears low-risk, but always verify before connecting wallets or logging in.'
+          : 'Treat this link as risky. Avoid connecting wallets or entering credentials unless you fully trust the source.',
+      checkedAt: now,
+      source, // "mobile"
+      engine: 'RULE_ONLY',
+      context: {
+        userType: effectiveUserType,
+        orgId: orgId || 'personal',
+        orgName: orgName || 'Personal',
+        userId: userId || 'mobile-safe-browse-user',
+        userEmail: userEmail || 'mobile-safe-browse@clickshield.app',
+        deviceId: deviceId || `mobile-${platform || 'unknown'}`,
+        platform: platform || null,
+        appVersion: appVersion || null,
+      },
+    };
+
+    // 2. Optional AI narrative
+    let aiResult = null;
+    try {
+      aiResult = await runAiAnalysis({
+        url,
+        ruleResult,
+        effectiveUserType,
+        source,
+      });
+    } catch (err) {
+      console.error(
+        '[ClickShield][AI] Unexpected AI error (mobile-safe-browse):',
+        err.message || err
+      );
+    }
+
+    if (aiResult && aiResult.aiNarrative) {
+      responseBody.engine = 'RULE_PLUS_AI';
+      responseBody.ai = aiResult;
+    }
+
+    // 3. Log into recentScans buffer
+    try {
+      recentScans.unshift({
+        id,
+        url: responseBody.url,
+        riskLevel: responseBody.riskLevel,
+        riskScore: responseBody.riskScore,
+        threatType: responseBody.threatType,
+        userEmail: responseBody.context.userEmail || 'unknown',
+        userType: responseBody.context.userType || effectiveUserType,
+        orgId: responseBody.context.orgId || null,
+        orgName: responseBody.context.orgName || null,
+        deviceId: responseBody.context.deviceId || null,
+        checkedAt: responseBody.checkedAt,
+        source: responseBody.source || source,
+        engine: responseBody.engine,
+      });
+      if (recentScans.length > RECENT_SCANS_MAX) {
+        recentScans.length = RECENT_SCANS_MAX;
+      }
+    } catch (err) {
+      console.error(
+        '[ClickShield] Failed to update recentScans (mobile-safe-browse):',
+        err.message || err
+      );
+    }
+
+    res.json(responseBody);
+  } catch (err) {
+    console.error(
+      'Error in /mobile-safe-browse:',
+      err.message || err
+    );
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+   
+
+    
+    
+
+// =====================================================
 // ============ DASHBOARD DATA ENDPOINTS ===============
 // =====================================================
 
