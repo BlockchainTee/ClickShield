@@ -1,11 +1,10 @@
-// src/App.tsx
-// ClickShield Desktop Agent - Health + Quick URL Scan + Clipboard Auto-Scan + Document Scan
+// src/App.tsx - ClickShield Desktop Agent v1
+// Simple, stable: health card + Quick URL Scan + Pasted Document Scan
+// (Clipboard Guard reserved for v2)
 
-import { useEffect, useState } from "react";
-import "./App.css";
-import { readText } from "@tauri-apps/plugin-clipboard-manager";
+import React, { useEffect, useState } from "react";
 
-type ScanResult = {
+type UrlScanResult = {
   url: string;
   riskLevel: string;
   riskScore: number;
@@ -13,15 +12,15 @@ type ScanResult = {
   reason: string;
   shortAdvice: string;
   checkedAt: string;
-  source?: string;
-  engine?: string;
+  source: string;
+  engine: string;
   ai?: {
     aiNarrative: string;
     aiModel: string;
   };
 };
 
-type DocumentScanResult = {
+type DocScanResult = {
   id: string;
   filename: string | null;
   mimeType: string | null;
@@ -30,611 +29,379 @@ type DocumentScanResult = {
   threatType: string;
   reason: string;
   checkedAt: string;
-  engine?: string;
+  source: string;
+  engine: string;
   ai?: {
     aiNarrative: string;
     aiModel: string;
-  };
+  } | null;
+  encryption?: any;
+  context?: any;
 };
 
-type Health = {
-  status: string;
-  service: string;
-};
+type HealthState = "unknown" | "ok" | "error";
 
-function App() {
-  const [health, setHealth] = useState<Health | null>(null);
-  const [healthError, setHealthError] = useState<string | null>(null);
+const BACKEND_BASE = "http://localhost:4000";
 
+// -------- Helper: basic URL heuristic --------
+function looksLikeUrl(value: string): boolean {
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  if (trimmed.length < 8) return false;
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return true;
+  }
+
+  return /\.[a-z]{2,}($|[\/\?#])/.test(trimmed);
+}
+
+const App: React.FC = () => {
+  // ------------ Health -------------
+  const [health, setHealth] = useState<HealthState>("unknown");
+
+  // ------------ Quick URL scan -------------
   const [urlInput, setUrlInput] = useState("");
-  const [scanResult, setScanResult] = useState<ScanResult | null>(null);
-  const [isScanning, setIsScanning] = useState(false);
-  const [scanError, setScanError] = useState<string | null>(null);
+  const [urlScanLoading, setUrlScanLoading] = useState(false);
+  const [urlScanResult, setUrlScanResult] = useState<UrlScanResult | null>(
+    null
+  );
+  const [urlScanError, setUrlScanError] = useState<string | null>(null);
 
-  const [autoScanResult, setAutoScanResult] = useState<ScanResult | null>(null);
+  // ------------ Doc scan -------------
+  const [docText, setDocText] = useState("");
+  const [docFilename, setDocFilename] = useState("pasted-document.txt");
+  const [docScanLoading, setDocScanLoading] = useState(false);
+  const [docScanResult, setDocScanResult] = useState<DocScanResult | null>(
+    null
+  );
+  const [docScanError, setDocScanError] = useState<string | null>(null);
 
-  // Document scan state
-  const [docFilename, setDocFilename] = useState("");
-  const [docContent, setDocContent] = useState("");
-  const [docResult, setDocResult] = useState<DocumentScanResult | null>(null);
-  const [docScanning, setDocScanning] = useState(false);
-  const [docError, setDocError] = useState<string | null>(null);
-
-  // ---------------- HEALTH CHECK ----------------
+  // =====================================================
+  // Health check on load
+  // =====================================================
   useEffect(() => {
-    async function fetchHealth() {
+    let cancelled = false;
+
+    async function checkHealth() {
       try {
-        const res = await fetch("http://localhost:4000/health");
+        const res = await fetch(`${BACKEND_BASE}/health`);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        setHealth(data);
-        setHealthError(null);
-      } catch (err: any) {
-        console.error("[ClickShield][Desktop] Health check failed:", err);
-        setHealth(null);
-        setHealthError("Backend unreachable on http://localhost:4000");
+        if (cancelled) return;
+        if (data && data.status === "ok") {
+          setHealth("ok");
+        } else {
+          setHealth("error");
+        }
+      } catch {
+        if (!cancelled) setHealth("error");
       }
     }
 
-    fetchHealth();
+    checkHealth();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // ---------------- MANUAL URL SCAN ----------------
-  async function handleManualScan() {
-    if (!urlInput.trim()) return;
+  // =====================================================
+  // Quick URL scan handler
+  // =====================================================
+  async function handleUrlScanSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setUrlScanError(null);
+    setUrlScanResult(null);
 
-    setIsScanning(true);
-    setScanError(null);
-    setScanResult(null);
+    const trimmed = urlInput.trim();
+    if (!trimmed) {
+      setUrlScanError("Please enter a URL to scan.");
+      return;
+    }
 
+    setUrlScanLoading(true);
     try {
-      const res = await fetch("http://localhost:4000/scan-url", {
+      const res = await fetch(`${BACKEND_BASE}/scan-url`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          url: urlInput.trim(),
+          url: trimmed,
           userType: "business",
-          userEmail: "desktop-admin@clickshield.local",
-          source: "desktop-agent",
+          userEmail: "desktop@clickshield.app",
+          source: "desktop",
         }),
       });
 
       if (!res.ok) {
         const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text}`);
+        throw new Error(
+          `Backend returned ${res.status}: ${text || "Unknown error"}`
+        );
       }
 
-      const data = (await res.json()) as ScanResult;
-      setScanResult(data);
+      const data = (await res.json()) as UrlScanResult;
+      setUrlScanResult(data);
     } catch (err: any) {
-      console.error("[ClickShield][Desktop] Manual scan failed:", err);
-      setScanError(err?.message || "Scan failed");
+      setUrlScanError(err?.message || "Failed to scan URL.");
     } finally {
-      setIsScanning(false);
+      setUrlScanLoading(false);
     }
   }
 
-  // ---------------- DOCUMENT SCAN (pasted text) ----------------
-  async function handleDocumentScan() {
-    if (!docContent.trim()) return;
+  // =====================================================
+  // Document scan handler (pasted text -> /scan-document-encrypted)
+  // =====================================================
+  async function handleDocScanSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setDocScanError(null);
+    setDocScanResult(null);
 
-    setDocScanning(true);
-    setDocError(null);
-    setDocResult(null);
+    const trimmed = docText.trim();
+    if (!trimmed) {
+      setDocScanError("Paste some text or secrets to scan.");
+      return;
+    }
 
+    setDocScanLoading(true);
     try {
-      const res = await fetch("http://localhost:4000/scan-document-encrypted", {
+      const res = await fetch(`${BACKEND_BASE}/scan-document-encrypted`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
-          content: docContent,
-          filename: docFilename || "(pasted document)",
+          content: trimmed,
+          filename: docFilename || "pasted-document.txt",
           mimeType: "text/plain",
           userType: "business",
-          userEmail: "desktop-admin@clickshield.local",
-          orgId: "desktop-org",
-          orgName: "Desktop Agent",
-          source: "desktop-agent",
+          userEmail: "desktop@clickshield.app",
+          source: "desktop",
         }),
       });
 
       if (!res.ok) {
         const text = await res.text();
-        throw new Error(`HTTP ${res.status}: ${text}`);
+        throw new Error(
+          `Backend returned ${res.status}: ${text || "Unknown error"}`
+        );
       }
 
-      const data = (await res.json()) as DocumentScanResult;
-      setDocResult(data);
+      const data = (await res.json()) as DocScanResult;
+      setDocScanResult(data);
     } catch (err: any) {
-      console.error("[ClickShield][Desktop] Document scan failed:", err);
-      setDocError(err?.message || "Document scan failed");
+      setDocScanError(err?.message || "Failed to scan document.");
     } finally {
-      setDocScanning(false);
+      setDocScanLoading(false);
     }
   }
 
-  // ---------------- CLIPBOARD AUTO-SCAN ----------------
-  useEffect(() => {
-    let lastClipboard = "";
+  // =====================================================
+  // Render helpers
+  // =====================================================
 
-    const interval = setInterval(async () => {
-      try {
-        const text = await readText();
+  function renderRiskPill(riskLevel?: string) {
+    if (!riskLevel) return null;
+    const upper = riskLevel.toUpperCase();
 
-        if (!text) return;
+    let color = "bg-gray-700 text-gray-100";
+    if (upper === "SAFE") color = "bg-emerald-600 text-emerald-50";
+    else if (upper === "SUSPICIOUS") color = "bg-amber-600 text-amber-50";
+    else if (upper === "DANGEROUS") color = "bg-red-700 text-red-50";
+    else if (upper === "SENSITIVE") color = "bg-fuchsia-700 text-fuchsia-50";
 
-        // Avoid hammering backend if clipboard hasn't changed
-        if (text === lastClipboard) return;
+    return (
+      <span
+        className={`inline-flex items-center rounded-full px-3 py-1 text-xs font-semibold ${color}`}
+      >
+        {upper}
+      </span>
+    );
+  }
 
-        // Basic URL detection
-        const urlRegex = /(https?:\/\/[^\s]+)/i;
-        if (!urlRegex.test(text)) {
-          lastClipboard = text;
-          return;
-        }
+  function renderAiNarrative(ai?: UrlScanResult["ai"] | DocScanResult["ai"]) {
+    if (!ai || !ai.aiNarrative) return null;
+    return (
+      <div className="mt-2 rounded-lg bg-slate-900/70 border border-slate-700 px-3 py-2 text-xs text-slate-100">
+        <div className="flex items-center justify-between mb-1">
+          <span className="font-semibold text-[11px] uppercase tracking-wide text-sky-400">
+            AI Narrative
+          </span>
+          <span className="text-[10px] text-slate-400">
+            {ai.aiModel || "gpt-4.1-mini"}
+          </span>
+        </div>
+        <p className="text-sm leading-snug">{ai.aiNarrative}</p>
+      </div>
+    );
+  }
 
-        lastClipboard = text;
-        console.log("[ClickShield][Clipboard] URL detected:", text);
+  // =====================================================
+  // UI
+  // =====================================================
 
-        const res = await fetch("http://localhost:4000/scan-url", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            url: text,
-            userType: "consumer",
-            userEmail: "local-agent@desktop",
-            source: "desktop-agent",
-          }),
-        });
-
-        if (!res.ok) {
-          const t = await res.text();
-          console.error(
-            "[ClickShield][Clipboard] Scan failed:",
-            res.status,
-            t
-          );
-          return;
-        }
-
-        const data = (await res.json()) as ScanResult;
-        console.log("[ClickShield][Clipboard][AutoScan]", data);
-        setAutoScanResult(data);
-      } catch (err) {
-        console.error("[ClickShield][Clipboard] Monitor error:", err);
-      }
-    }, 400); // 400ms: fast but not insane
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // ---------------- RENDER ----------------
   return (
-    <div
-      className="app-root"
-      style={{
-        minHeight: "100vh",
-        padding: "24px",
-        background: "#020617",
-        color: "#e5e7eb",
-        fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
-      }}
-    >
-      <div style={{ maxWidth: 960, margin: "0 auto" }}>
-        <header style={{ marginBottom: 24 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 600, marginBottom: 4 }}>
-            ClickShield Desktop Agent
-          </h1>
-          <p style={{ fontSize: 14, color: "#9ca3af" }}>
-            Local security agent for URLs, clipboard, and document scanning.
-          </p>
-        </header>
-
-        {/* Health Card */}
-        <section
-          style={{
-            marginBottom: 24,
-            padding: 16,
-            borderRadius: 12,
-            background:
-              health && !healthError
-                ? "rgba(22, 163, 74, 0.12)"
-                : "rgba(220, 38, 38, 0.1)",
-            border: `1px solid ${
-              health && !healthError
-                ? "rgba(22, 163, 74, 0.6)"
-                : "rgba(220, 38, 38, 0.6)"
-            }`,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: 12,
-          }}
-        >
+    <div className="min-h-screen bg-slate-950 text-slate-100 flex justify-center px-4 py-6">
+      <div className="w-full max-w-5xl space-y-6">
+        {/* Header */}
+        <header className="flex items-center justify-between border-b border-slate-800 pb-4">
           <div>
-            <div
-              style={{
-                fontSize: 13,
-                textTransform: "uppercase",
-                letterSpacing: 1.2,
-              }}
-            >
-              Backend Health
-            </div>
-            {health && !healthError ? (
-              <div style={{ fontSize: 14 }}>
-                <strong>{health.status.toUpperCase()}</strong> •{" "}
-                <span style={{ color: "#9ca3af" }}>{health.service}</span>
-              </div>
-            ) : (
-              <div style={{ fontSize: 14 }}>
-                <strong>UNAVAILABLE</strong> •{" "}
-                <span style={{ color: "#f97373" }}>{healthError}</span>
-              </div>
-            )}
+            <h1 className="text-xl font-semibold tracking-tight">
+              ClickShield Desktop Agent
+            </h1>
+            <p className="text-sm text-slate-400">
+              Local Web3 & phishing guard – powered by your{" "}
+              <span className="font-mono text-sky-400">backend:4000</span>
+            </p>
           </div>
           <div
-            style={{
-              width: 10,
-              height: 10,
-              borderRadius: 999,
-              backgroundColor:
-                health && !healthError ? "#22c55e" : "#ef4444",
-              boxShadow: `0 0 12px ${
-                health && !healthError
-                  ? "rgba(34, 197, 94, 0.7)"
-                  : "rgba(239, 68, 68, 0.7)"
-              }`,
-            }}
-          ></div>
-        </section>
-
-        {/* Manual Quick URL Scan */}
-        <section
-          style={{
-            marginBottom: 24,
-            padding: 16,
-            borderRadius: 12,
-            background: "rgba(15, 23, 42, 0.9)",
-            border: "1px solid rgba(148, 163, 184, 0.4)",
-          }}
-        >
-          <h2 style={{ fontSize: 18, marginBottom: 8 }}>Quick URL Scan</h2>
-          <p
-            style={{
-              fontSize: 13,
-              color: "#9ca3af",
-              marginBottom: 12,
-            }}
+            className={`flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
+              health === "ok"
+                ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-200"
+                : health === "error"
+                ? "border-red-500/60 bg-red-500/10 text-red-200"
+                : "border-slate-600 bg-slate-800 text-slate-300"
+            }`}
           >
-            Paste or type a URL to scan it using ClickShield&apos;s rule
-            engine + AI narrative.
+            <span
+              className={`h-2 w-2 rounded-full ${
+                health === "ok"
+                  ? "bg-emerald-400"
+                  : health === "error"
+                  ? "bg-red-500"
+                  : "bg-slate-500"
+              }`}
+            />
+            <span className="uppercase tracking-wide font-semibold">
+              {health === "ok"
+                ? "Backend: OK"
+                : health === "error"
+                ? "Backend: OFFLINE"
+                : "Backend: CHECKING"}
+            </span>
+          </div>
+        </header>
+
+        {/* Top row: Quick URL Scan */}
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 shadow-lg shadow-black/40">
+          <h2 className="text-sm font-semibold tracking-tight mb-2">
+            Quick URL Scan
+          </h2>
+          <p className="text-xs text-slate-400 mb-3">
+            Paste a link before you click. ClickShield runs deterministic rules
+            first, then AI if available.
           </p>
 
-          <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <form onSubmit={handleUrlScanSubmit} className="space-y-3">
             <input
+              type="text"
+              className="w-full rounded-xl bg-slate-950/70 border border-slate-700 px-3 py-2 text-sm text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/80 focus:border-sky-400 font-mono"
+              placeholder="https://example.com"
               value={urlInput}
               onChange={(e) => setUrlInput(e.target.value)}
-              placeholder="https://example.com/suspicious-link"
-              style={{
-                flex: 1,
-                padding: "8px 10px",
-                borderRadius: 8,
-                border: "1px solid rgba(75, 85, 99, 0.8)",
-                background: "rgba(15, 23, 42, 0.9)",
-                color: "#e5e7eb",
-                fontSize: 13,
-              }}
             />
+            {urlScanError && (
+              <p className="text-xs text-red-400">{urlScanError}</p>
+            )}
             <button
-              onClick={handleManualScan}
-              disabled={isScanning || !urlInput.trim()}
-              style={{
-                padding: "8px 14px",
-                borderRadius: 8,
-                border: "none",
-                fontSize: 13,
-                fontWeight: 500,
-                cursor:
-                  isScanning || !urlInput.trim()
-                    ? "not-allowed"
-                    : "pointer",
-                opacity: isScanning || !urlInput.trim() ? 0.6 : 1,
-                background:
-                  "linear-gradient(135deg, rgba(56, 189, 248, 0.9), rgba(59, 130, 246, 0.9))",
-                color: "#020617",
-              }}
+              type="submit"
+              disabled={urlScanLoading}
+              className="inline-flex items-center justify-center rounded-xl bg-sky-600 px-4 py-2 text-xs font-semibold text-white hover:bg-sky-500 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
-              {isScanning ? "Scanning..." : "Scan URL"}
+              {urlScanLoading ? "Scanning…" : "Scan URL"}
             </button>
-          </div>
+          </form>
 
-          {scanError && (
-            <div
-              style={{
-                fontSize: 12,
-                color: "#f97373",
-                marginBottom: 8,
-              }}
-            >
-              {scanError}
-            </div>
-          )}
-
-          {scanResult && (
-            <div
-              style={{
-                marginTop: 8,
-                padding: 12,
-                borderRadius: 10,
-                background: "rgba(15, 23, 42, 0.9)",
-                border: "1px solid rgba(148, 163, 184, 0.5)",
-                fontSize: 13,
-              }}
-            >
-              <div style={{ marginBottom: 4 }}>
-                <span style={{ color: "#9ca3af" }}>URL: </span>
-                <span>{scanResult.url}</span>
-              </div>
-              <div style={{ marginBottom: 4 }}>
-                <strong>{scanResult.riskLevel}</strong> • Score:{" "}
-                {scanResult.riskScore} • {scanResult.threatType}
-              </div>
-              <div style={{ marginBottom: 4 }}>{scanResult.reason}</div>
-              <div
-                style={{
-                  marginBottom: 4,
-                  color: "#fbbf24",
-                }}
-              >
-                {scanResult.shortAdvice}
-              </div>
-              {scanResult.ai && (
-                <div
-                  style={{
-                    marginTop: 6,
-                    paddingTop: 6,
-                    borderTop: "1px solid #1f2937",
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: "#9ca3af",
-                      marginBottom: 2,
-                    }}
-                  >
-                    AI Narrative · {scanResult.ai.aiModel}
-                  </div>
-                  <div>{scanResult.ai.aiNarrative}</div>
+          {urlScanResult && (
+            <div className="mt-4 rounded-xl bg-slate-950/60 border border-slate-800 p-3 text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {renderRiskPill(urlScanResult.riskLevel)}
+                  <span className="text-[11px] text-slate-400">
+                    Score: {urlScanResult.riskScore} •{" "}
+                    {urlScanResult.threatType}
+                  </span>
                 </div>
-              )}
+              </div>
+              <p className="text-xs text-slate-200">
+                {urlScanResult.reason}
+              </p>
+              {renderAiNarrative(urlScanResult.ai)}
+              <p className="text-[11px] text-slate-400 mt-1">
+                {urlScanResult.shortAdvice}
+              </p>
             </div>
           )}
         </section>
 
-        {/* Document Scan (pasted) */}
-        <section
-          style={{
-            marginBottom: 24,
-            padding: 16,
-            borderRadius: 12,
-            background: "rgba(15, 23, 42, 0.9)",
-            border: "1px solid rgba(248, 250, 252, 0.06)",
-          }}
-        >
-          <h2 style={{ fontSize: 18, marginBottom: 8 }}>
-            Document Scan (Pasted Text)
+        {/* Bottom row: Pasted Document scan */}
+        <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 shadow-lg shadow-black/40">
+          <h2 className="text-sm font-semibold tracking-tight mb-2">
+            Pasted Document Scan
           </h2>
-          <p
-            style={{
-              fontSize: 13,
-              color: "#9ca3af",
-              marginBottom: 12,
-            }}
-          >
-            Paste any document snippet here (logs, config, seed phrase
-            export, API keys) and ClickShield will classify sensitivity
-            using deterministic rules + AI.
+          <p className="text-xs text-slate-400 mb-3">
+            Paste config files, environment variables, or wallet backup phrases.
+            ClickShield will detect API keys, wallet recovery data, and other
+            sensitive material. Raw text is only processed locally and encrypted
+            before any at-rest storage.
           </p>
 
-          <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
-            <input
-              value={docFilename}
-              onChange={(e) => setDocFilename(e.target.value)}
-              placeholder="Filename (optional, e.g. wallet-notes.txt)"
-              style={{
-                flex: 1,
-                padding: "8px 10px",
-                borderRadius: 8,
-                border: "1px solid rgba(75, 85, 99, 0.8)",
-                background: "rgba(15, 23, 42, 0.9)",
-                color: "#e5e7eb",
-                fontSize: 13,
-              }}
+          <form onSubmit={handleDocScanSubmit} className="space-y-3">
+            <div className="flex flex-col md:flex-row gap-2 items-center">
+              <label className="text-xs text-slate-300 w-full md:w-auto">
+                Filename hint
+              </label>
+              <input
+                type="text"
+                className="w-full md:flex-1 rounded-xl bg-slate-950/70 border border-slate-700 px-3 py-1.5 text-xs text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/80 focus:border-sky-400 font-mono"
+                value={docFilename}
+                onChange={(e) => setDocFilename(e.target.value)}
+              />
+            </div>
+
+            <textarea
+              className="w-full h-40 rounded-xl bg-slate-950/70 border border-slate-700 px-3 py-2 text-xs text-slate-100 outline-none focus:ring-2 focus:ring-sky-500/80 focus:border-sky-400 font-mono resize-vertical"
+              placeholder="Paste your document or secrets here…"
+              value={docText}
+              onChange={(e) => setDocText(e.target.value)}
             />
-          </div>
 
-          <textarea
-            value={docContent}
-            onChange={(e) => setDocContent(e.target.value)}
-            placeholder="Paste document content here (we never store plaintext; backend encrypts in-memory only flow)..."
-            rows={6}
-            style={{
-              width: "100%",
-              resize: "vertical",
-              padding: "8px 10px",
-              borderRadius: 8,
-              border: "1px solid rgba(75, 85, 99, 0.8)",
-              background: "rgba(15, 23, 42, 0.9)",
-              color: "#e5e7eb",
-              fontSize: 13,
-              marginBottom: 8,
-              fontFamily: "SF Mono, Menlo, Monaco, Consolas, monospace",
-            }}
-          />
+            {docScanError && (
+              <p className="text-xs text-red-400">{docScanError}</p>
+            )}
 
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
             <button
-              onClick={handleDocumentScan}
-              disabled={docScanning || !docContent.trim()}
-              style={{
-                padding: "8px 14px",
-                borderRadius: 8,
-                border: "none",
-                fontSize: 13,
-                fontWeight: 500,
-                cursor:
-                  docScanning || !docContent.trim()
-                    ? "not-allowed"
-                    : "pointer",
-                opacity: docScanning || !docContent.trim() ? 0.6 : 1,
-                background:
-                  "linear-gradient(135deg, rgba(244, 114, 182, 0.9), rgba(168, 85, 247, 0.9))",
-                color: "#020617",
-              }}
+              type="submit"
+              disabled={docScanLoading}
+              className="inline-flex items-center justify-center rounded-xl bg-fuchsia-600 px-4 py-2 text-xs font-semibold text-white hover:bg-fuchsia-500 disabled:opacity-60 disabled:cursor-not-allowed transition-colors"
             >
-              {docScanning ? "Scanning..." : "Scan Document"}
+              {docScanLoading ? "Scanning…" : "Scan document for secrets"}
             </button>
-            <div style={{ fontSize: 11, color: "#64748b" }}>
-              Local agent → backend `/scan-document-encrypted` (RULES + AI)
-            </div>
-          </div>
+          </form>
 
-          {docError && (
-            <div
-              style={{
-                fontSize: 12,
-                color: "#f97373",
-                marginTop: 8,
-              }}
-            >
-              {docError}
-            </div>
-          )}
-
-          {docResult && (
-            <div
-              style={{
-                marginTop: 12,
-                padding: 12,
-                borderRadius: 10,
-                background: "rgba(15, 23, 42, 0.9)",
-                border: "1px solid rgba(148, 163, 184, 0.5)",
-                fontSize: 13,
-              }}
-            >
-              <div style={{ marginBottom: 4 }}>
-                <span style={{ color: "#9ca3af" }}>Document: </span>
-                <span>{docResult.filename || "(document)"}</span>
-              </div>
-              <div style={{ marginBottom: 4 }}>
-                <strong>{docResult.riskLevel}</strong> • Score:{" "}
-                {docResult.riskScore} • {docResult.threatType}
-              </div>
-              <div style={{ marginBottom: 4 }}>{docResult.reason}</div>
-              {docResult.ai && (
-                <div
-                  style={{
-                    marginTop: 6,
-                    paddingTop: 6,
-                    borderTop: "1px solid #1f2937",
-                  }}
-                >
-                  <div
-                    style={{
-                      fontSize: 11,
-                      color: "#9ca3af",
-                      marginBottom: 2,
-                    }}
-                  >
-                    AI Narrative · {docResult.ai.aiModel}
-                  </div>
-                  <div>{docResult.ai.aiNarrative}</div>
+          {docScanResult && (
+            <div className="mt-4 rounded-xl bg-slate-950/60 border border-slate-800 p-3 text-xs space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  {renderRiskPill(docScanResult.riskLevel)}
+                  <span className="text-[11px] text-slate-400">
+                    Score: {docScanResult.riskScore} •{" "}
+                    {docScanResult.threatType}
+                  </span>
                 </div>
-              )}
-              <div
-                style={{
-                  marginTop: 6,
-                  fontSize: 11,
-                  color: "#64748b",
-                }}
-              >
-                Classified via RULE_ONLY or RULE_PLUS_AI. Plaintext is
-                not stored; backend uses encryption path for at-rest
-                handling.
               </div>
+              <p className="text-xs text-slate-200">
+                {docScanResult.reason}
+              </p>
+              {renderAiNarrative(docScanResult.ai || undefined)}
             </div>
           )}
         </section>
-
-        {/* Clipboard Auto-Scan Banner */}
-        {autoScanResult && (
-          <section
-            style={{
-              position: "fixed",
-              right: 16,
-              bottom: 16,
-              maxWidth: 360,
-              padding: 12,
-              borderRadius: 12,
-              background: "rgba(15, 23, 42, 0.98)",
-              border: "1px solid rgba(59, 130, 246, 0.8)",
-              boxShadow: "0 15px 40px rgba(15, 23, 42, 0.8)",
-              fontSize: 12,
-              zIndex: 50,
-            }}
-          >
-            <div
-              style={{
-                fontSize: 11,
-                color: "#93c5fd",
-                marginBottom: 4,
-              }}
-            >
-              Clipboard Auto-Scan · desktop-agent
-            </div>
-            <div
-              style={{
-                fontSize: 12,
-                marginBottom: 4,
-                wordBreak: "break-all",
-              }}
-            >
-              {autoScanResult.url}
-            </div>
-            <div style={{ marginBottom: 4 }}>
-              <strong>{autoScanResult.riskLevel}</strong> • Score:{" "}
-              {autoScanResult.riskScore} • {autoScanResult.threatType}
-            </div>
-            <div style={{ marginBottom: 4 }}>
-              {autoScanResult.reason}
-            </div>
-            {autoScanResult.ai && (
-              <div style={{ marginTop: 4 }}>
-                <span
-                  style={{
-                    fontSize: 11,
-                    color: "#9ca3af",
-                  }}
-                >
-                  AI · {autoScanResult.ai.aiModel}
-                </span>
-                <div>{autoScanResult.ai.aiNarrative}</div>
-              </div>
-            )}
-            <div
-              style={{
-                marginTop: 6,
-                color: "#fbbf24",
-              }}
-            >
-              {autoScanResult.shortAdvice}
-            </div>
-          </section>
-        )}
       </div>
     </div>
   );
-}
+};
 
 export default App;
