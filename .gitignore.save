@@ -1,0 +1,20 @@
+# Ignore environment variables
+.env
+.env.local
+.env.*.local
+
+# Ignore OS artifacts
+.DS_Store
+
+# Ignore node modules
+node_modules/
+
+# Ignore build outputs
+dist/
+build/
+
+# Ignore logs
+*.log
+logs/
+
+

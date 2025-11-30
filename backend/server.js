@@ -3,9 +3,20 @@
 const express = require('express');
 const cors = require('cors');
 const OpenAI = require('openai');
+const crypto = require('crypto');
+
+// >>> ENV SETUP (keep this exactly as-is)
+require('dotenv').config({ override: true });
+console.log(
+  '[ClickShield][AI] Loaded OPENAI_API_KEY prefix:',
+  process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.slice(0, 10) : 'none'
+);
+// <<< ENV SETUP
 
 const app = express();
+
 const PORT = process.env.PORT || 4000;
+
 
 // ===================== OpenAI / AI Setup =======================
 
@@ -29,6 +40,15 @@ if (process.env.OPENAI_API_KEY) {
 } else {
   console.log(
     '[ClickShield][AI] OPENAI_API_KEY not set. Running in RULE_ONLY mode.'
+  );
+}
+
+
+// Document encryption key (for encrypted doc scanning)
+const DOC_ENCRYPTION_KEY_HEX = process.env.DOC_ENCRYPTION_KEY || null;
+if (!DOC_ENCRYPTION_KEY_HEX) {
+  console.warn(
+    '[ClickShield][DOC] DOC_ENCRYPTION_KEY not set. Encrypted document scanning will run in RULE_ONLY mode.'
   );
 }
 
@@ -263,14 +283,277 @@ Return ONLY a short paragraph (2–3 sentences) suitable for showing in a securi
       aiNarrative: text,
       aiModel: response.model || 'gpt-4.1-mini',
     };
+ 
   } catch (err) {
+    const status = err.status || err.statusCode || null;
+
     console.error(
       '[ClickShield][AI] AI analysis failed:',
-      err.message || err
+      status ? `${status} ${err.message || err}` : err.message || err
     );
+
+    // AUTO-DISABLE AI for this process after a 401
+    if (status === 401) {
+      console.error(
+        '[ClickShield][AI] Disabling AI for this process (401). Running in RULE_ONLY mode.'
+      );
+      openai = null;
+    }
+
     return null;
   }
+
 }
+
+// >>> NEW CODE START: document security helpers
+
+function runDocumentRuleEngine(content) {
+  const text = (content || '').toString();
+  const lower = text.toLowerCase();
+
+  let docRiskLevel = 'SAFE';
+  let docThreatType = 'GENERIC';
+  let docScore = 10;
+  let docReason =
+    'No obvious wallet recovery data, private keys, or API secrets detected.';
+
+  const walletIndicators = [
+    'seed phrase',
+    'seed-phrase',
+    'recovery phrase',
+    'recovery-phrase',
+    'mnemonic',
+    'private key',
+    'private-key',
+    'secret recovery phrase',
+  ];
+
+  const apiIndicators = [
+    'api key',
+    'api_key',
+    'bearer ',
+    'authorization: bearer',
+    'sk-',
+  ];
+
+  let hits = [];
+
+  for (const k of walletIndicators) {
+    if (lower.includes(k)) hits.push(k);
+  }
+  for (const k of apiIndicators) {
+    if (lower.includes(k)) hits.push(k);
+  }
+
+  if (hits.length > 0) {
+    docRiskLevel = 'SENSITIVE';
+    docThreatType = 'SECRETS_OR_WALLET_DATA';
+    docScore = 85;
+    docReason =
+      'Document appears to contain wallet recovery phrases or API / secret tokens. Treat and store as highly sensitive.';
+  }
+
+  if (text.length < 40 && docRiskLevel === 'SAFE') {
+    docScore = 15;
+    docReason =
+      'Very short document with no known secret patterns detected. Appears low-risk but handle carefully if it was pasted from a secure source.';
+  }
+
+  return {
+    docRiskLevel,
+    docThreatType,
+    docScore,
+    docReason,
+  };
+}
+
+function encryptDocumentContent(plaintext) {
+  if (!DOC_ENCRYPTION_KEY_HEX || DOC_ENCRYPTION_KEY_HEX.length !== 64) {
+    return {
+      mode: 'PLAIN_NO_KEY',
+      ciphertext: null,
+      iv: null,
+      authTag: null,
+      note:
+        'DOC_ENCRYPTION_KEY is not set or invalid; document was only processed in-memory and not encrypted for storage.',
+    };
+  }
+
+  const key = Buffer.from(DOC_ENCRYPTION_KEY_HEX, 'hex');
+
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+
+  const ciphertext = Buffer.concat([
+    cipher.update(plaintext, 'utf8'),
+    cipher.final(),
+  ]);
+
+  const authTag = cipher.getAuthTag();
+
+  return {
+    mode: 'AES-256-GCM',
+    ciphertext: ciphertext.toString('base64'),
+    iv: iv.toString('base64'),
+    authTag: authTag.toString('base64'),
+  };
+}
+
+// >>> NEW CODE END: document security helpers
+
+// =====================================================
+// ===== ENCRYPTED DOCUMENT SCANNING ENDPOINT ==========
+// =====================================================
+
+app.post('/scan-document-encrypted', async (req, res) => {
+  try {
+    const {
+      content,       // raw text of the document (not stored in plaintext)
+      filename,
+      mimeType,
+      userId,
+      userEmail,
+      orgId,
+      orgName,
+      userType,
+      source,
+    } = req.body || {};
+
+    if (!content || typeof content !== 'string') {
+      return res
+        .status(400)
+        .json({ error: 'content (string) is required' });
+    }
+
+    const effectiveUserType =
+      userType === 'business' ? 'business' : 'consumer';
+
+    // 1. Run document rule engine
+    const ruleResult = runDocumentRuleEngine(content);
+
+    const now = new Date().toISOString();
+    const id =
+      Date.now().toString() + Math.random().toString(36).slice(2);
+
+    // 2. Encrypt document content for at-rest safety
+    const encryptionResult = encryptDocumentContent(content);
+
+    // 3. Optional AI narrative (reusing the same AI engine, but with doc context)
+    let aiResult = null;
+    if (openai) {
+      try {
+        const prompt = `
+You are the document security AI for ClickShield.
+
+You receive:
+- A short classification from a document rule engine
+- Basic metadata (filename, mimeType, user type: consumer or business)
+
+Your job:
+1. Explain in 2–3 sentences whether this document looks sensitive or risky.
+2. Call out if it appears to contain crypto wallet recovery data, private keys, or API secrets.
+3. Use calm, business-friendly language. No markdown, no bullet points.
+`;
+
+        const inputDescription = {
+          filename: filename || null,
+          mimeType: mimeType || null,
+          ruleResult,
+          userType: effectiveUserType,
+          source: source || 'document',
+        };
+
+        const response = await openai.responses.create({
+          model: 'gpt-4.1-mini',
+          input: [
+            { role: 'system', content: prompt },
+            {
+              role: 'user',
+              content: JSON.stringify(inputDescription),
+            },
+          ],
+        });
+
+        const output = response.output?.[0]?.content?.[0];
+        const text =
+          output && output.text ? output.text.trim() : null;
+
+        if (text) {
+          aiResult = {
+            aiNarrative: text,
+            aiModel: response.model || 'gpt-4.1-mini',
+          };
+        }
+      } catch (err) {
+        console.error(
+          '[ClickShield][DOC][AI] AI analysis failed:',
+          err.message || err
+        );
+      }
+    }
+
+    // 4. Build response (no plaintext document in response)
+    const responseBody = {
+      id,
+      filename: filename || null,
+      mimeType: mimeType || null,
+      riskLevel: ruleResult.docRiskLevel,
+      riskScore: ruleResult.docScore,
+      threatType: ruleResult.docThreatType,
+      reason: ruleResult.docReason,
+      checkedAt: now,
+      source: source || 'document',
+      engine: aiResult ? 'RULE_PLUS_AI' : 'RULE_ONLY',
+      context: {
+        userType: effectiveUserType,
+        orgId: orgId || null,
+        orgName: orgName || null,
+        userId: userId || null,
+        userEmail: userEmail || null,
+      },
+      encryption: encryptionResult,
+      ai: aiResult || null,
+    };
+
+    // 5. Log a summary entry into recentScans (for dashboard)
+    try {
+      recentScans.unshift({
+        id,
+        url: filename || '(document)',
+        riskLevel: responseBody.riskLevel,
+        riskScore: responseBody.riskScore,
+        threatType: responseBody.threatType,
+        userEmail: userEmail || 'unknown',
+        userType: effectiveUserType,
+        orgId: orgId || null,
+        orgName: orgName || null,
+        deviceId: 'doc-scan',
+        checkedAt: now,
+        source: responseBody.source,
+        engine: responseBody.engine,
+      });
+      if (recentScans.length > RECENT_SCANS_MAX) {
+        recentScans.length = RECENT_SCANS_MAX;
+      }
+    } catch (err) {
+      console.error(
+        '[ClickShield][DOC] Failed to update recentScans:',
+        err.message || err
+      );
+    }
+
+    res.json(responseBody);
+  } catch (err) {
+    console.error(
+      'Error in /scan-document-encrypted:',
+      err.message || err
+    );
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+
+
 
 // =====================================================
 // =============== SOURCE DERIVATION ===================
