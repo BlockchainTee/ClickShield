@@ -17,7 +17,6 @@ const app = express();
 
 const PORT = process.env.PORT || 4000;
 
-
 // ===================== OpenAI / AI Setup =======================
 
 let openai = null;
@@ -42,7 +41,6 @@ if (process.env.OPENAI_API_KEY) {
     '[ClickShield][AI] OPENAI_API_KEY not set. Running in RULE_ONLY mode.'
   );
 }
-
 
 // Document encryption key (for encrypted doc scanning)
 const DOC_ENCRYPTION_KEY_HEX = process.env.DOC_ENCRYPTION_KEY || null;
@@ -204,7 +202,6 @@ function runRuleEngine(rawUrl) {
 
   // Very short / weird URLs: note in the reason, but DO NOT flip to SUSPICIOUS
   if (url.length < 15 && riskLevel === 'SAFE') {
-    // keep SAFE, just slightly adjust score + explanation
     score = 15;
     reason =
       'Short URL with no known scam patterns detected. Appears low-risk but always verify the source.';
@@ -222,12 +219,7 @@ function runRuleEngine(rawUrl) {
 // =================== AI ANALYSIS =====================
 // =====================================================
 
-async function runAiAnalysis({
-  url,
-  ruleResult,
-  effectiveUserType,
-  source,
-}) {
+async function runAiAnalysis({ url, ruleResult, effectiveUserType, source }) {
   if (!openai) {
     return null;
   }
@@ -283,7 +275,6 @@ Return ONLY a short paragraph (2–3 sentences) suitable for showing in a securi
       aiNarrative: text,
       aiModel: response.model || 'gpt-4.1-mini',
     };
- 
   } catch (err) {
     const status = err.status || err.statusCode || null;
 
@@ -302,10 +293,9 @@ Return ONLY a short paragraph (2–3 sentences) suitable for showing in a securi
 
     return null;
   }
-
 }
 
-// >>> NEW CODE START: document security helpers
+// >>> Document security helpers
 
 function runDocumentRuleEngine(content) {
   const text = (content || '').toString();
@@ -315,8 +305,9 @@ function runDocumentRuleEngine(content) {
   let docThreatType = 'GENERIC';
   let docScore = 10;
   let docReason =
-    'No obvious wallet recovery data, private keys, or API secrets detected.';
+    'No obvious wallet recovery data, private keys, API secrets, or phishing patterns detected.';
 
+  // 1) Wallet / secrets detection
   const walletIndicators = [
     'seed phrase',
     'seed-phrase',
@@ -336,27 +327,56 @@ function runDocumentRuleEngine(content) {
     'sk-',
   ];
 
-  let hits = [];
+  const phishingIndicators = [
+    'invoice notice',
+    'payment is overdue',
+    'overdue payment',
+    'avoid legal action',
+    'legal action',
+    'account suspension',
+    'your account will be suspended',
+    'click the link below',
+    'click the link to',
+    'secure-payments',
+    'secure payment portal',
+    'verify your account',
+    'login to avoid',
+    'login to prevent',
+    'update your billing',
+  ];
+
+  const urlRegex = /https?:\/\/[^\s"')]+/gi;
+  const hasUrl = urlRegex.test(text);
+
+  let secretHits = [];
+  let phishingHits = [];
 
   for (const k of walletIndicators) {
-    if (lower.includes(k)) hits.push(k);
+    if (lower.includes(k)) secretHits.push(k);
   }
   for (const k of apiIndicators) {
-    if (lower.includes(k)) hits.push(k);
+    if (lower.includes(k)) secretHits.push(k);
+  }
+  for (const k of phishingIndicators) {
+    if (lower.includes(k)) phishingHits.push(k);
   }
 
-  if (hits.length > 0) {
+  if (secretHits.length > 0) {
     docRiskLevel = 'SENSITIVE';
     docThreatType = 'SECRETS_OR_WALLET_DATA';
-    docScore = 85;
+    docScore = 90;
     docReason =
       'Document appears to contain wallet recovery phrases or API / secret tokens. Treat and store as highly sensitive.';
-  }
-
-  if (text.length < 40 && docRiskLevel === 'SAFE') {
+  } else if (hasUrl && phishingHits.length > 0) {
+    docRiskLevel = 'DANGEROUS';
+    docThreatType = 'PHISHING_DOC';
+    docScore = 80;
+    docReason =
+      'Document looks like a phishing or scam message (invoice / payment / legal threat) containing a link. Treat with extreme caution.';
+  } else if (text.length < 40 && docRiskLevel === 'SAFE') {
     docScore = 15;
     docReason =
-      'Very short document with no known secret patterns detected. Appears low-risk but handle carefully if it was pasted from a secure source.';
+      'Very short document with no known secret or phishing patterns detected. Appears low-risk but handle carefully if it was pasted from a secure source.';
   }
 
   return {
@@ -399,8 +419,6 @@ function encryptDocumentContent(plaintext) {
   };
 }
 
-// >>> NEW CODE END: document security helpers
-
 // =====================================================
 // ===== ENCRYPTED DOCUMENT SCANNING ENDPOINT ==========
 // =====================================================
@@ -408,7 +426,7 @@ function encryptDocumentContent(plaintext) {
 app.post('/scan-document-encrypted', async (req, res) => {
   try {
     const {
-      content,       // raw text of the document (not stored in plaintext)
+      content,
       filename,
       mimeType,
       userId,
@@ -420,25 +438,19 @@ app.post('/scan-document-encrypted', async (req, res) => {
     } = req.body || {};
 
     if (!content || typeof content !== 'string') {
-      return res
-        .status(400)
-        .json({ error: 'content (string) is required' });
+      return res.status(400).json({ error: 'content (string) is required' });
     }
 
     const effectiveUserType =
       userType === 'business' ? 'business' : 'consumer';
 
-    // 1. Run document rule engine
     const ruleResult = runDocumentRuleEngine(content);
 
     const now = new Date().toISOString();
-    const id =
-      Date.now().toString() + Math.random().toString(36).slice(2);
+    const id = Date.now().toString() + Math.random().toString(36).slice(2);
 
-    // 2. Encrypt document content for at-rest safety
     const encryptionResult = encryptDocumentContent(content);
 
-    // 3. Optional AI narrative (reusing the same AI engine, but with doc context)
     let aiResult = null;
     if (openai) {
       try {
@@ -475,8 +487,7 @@ Your job:
         });
 
         const output = response.output?.[0]?.content?.[0];
-        const text =
-          output && output.text ? output.text.trim() : null;
+        const text = output && output.text ? output.text.trim() : null;
 
         if (text) {
           aiResult = {
@@ -492,7 +503,6 @@ Your job:
       }
     }
 
-    // 4. Build response (no plaintext document in response)
     const responseBody = {
       id,
       filename: filename || null,
@@ -515,7 +525,6 @@ Your job:
       ai: aiResult || null,
     };
 
-    // 5. Log a summary entry into recentScans (for dashboard)
     try {
       recentScans.unshift({
         id,
@@ -544,16 +553,10 @@ Your job:
 
     res.json(responseBody);
   } catch (err) {
-    console.error(
-      'Error in /scan-document-encrypted:',
-      err.message || err
-    );
+    console.error('Error in /scan-document-encrypted:', err.message || err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
-
-
-
 
 // =====================================================
 // =============== SOURCE DERIVATION ===================
@@ -562,10 +565,9 @@ Your job:
 function deriveSourceFromBody(body = {}) {
   try {
     const rawSource =
-      (body.source ||
-        body.userType ||
-        body.user_type ||
-        '').toString().toLowerCase();
+      (body.source || body.userType || body.user_type || '')
+        .toString()
+        .toLowerCase();
 
     if (rawSource === 'browser-extension' || rawSource === 'extension') {
       return 'extension';
@@ -597,23 +599,18 @@ app.post('/scan-url', async (req, res) => {
       req.body || {};
 
     if (!url || typeof url !== 'string') {
-      return res
-        .status(400)
-        .json({ error: 'url is required as a string' });
+      return res.status(400).json({ error: 'url is required as a string' });
     }
 
     const source = deriveSourceFromBody(req.body);
     const effectiveUserType =
       userType === 'business' ? 'business' : 'consumer';
 
-    // 1. Run rule engine (deterministic baseline)
     const ruleResult = runRuleEngine(url);
 
     const now = new Date().toISOString();
-    const id =
-      Date.now().toString() + Math.random().toString(36).slice(2);
+    const id = Date.now().toString() + Math.random().toString(36).slice(2);
 
-    // Base response (rule-only)
     const responseBody = {
       url,
       riskLevel: ruleResult.ruleRiskLevel,
@@ -625,7 +622,7 @@ app.post('/scan-url', async (req, res) => {
           ? 'Link appears low-risk, but always verify before connecting wallets or logging in.'
           : 'Treat this link as risky. Avoid connecting wallets or entering credentials unless you fully trust the source.',
       checkedAt: now,
-      source, // "mobile" | "extension" | "dashboard" | "api"
+      source,
       engine: 'RULE_ONLY',
       context: {
         userType: effectiveUserType,
@@ -637,7 +634,6 @@ app.post('/scan-url', async (req, res) => {
       },
     };
 
-    // 2. Optional AI layer (narrative on top of rules)
     let aiResult = null;
     try {
       aiResult = await runAiAnalysis({
@@ -658,7 +654,6 @@ app.post('/scan-url', async (req, res) => {
       responseBody.ai = aiResult;
     }
 
-    // 3. Update in-memory recentScans buffer
     try {
       recentScans.unshift({
         id,
@@ -710,22 +705,17 @@ app.post('/mobile-safe-browse', async (req, res) => {
     } = req.body || {};
 
     if (!url || typeof url !== 'string') {
-      return res
-        .status(400)
-        .json({ error: 'url is required as a string' });
+      return res.status(400).json({ error: 'url is required as a string' });
     }
 
     const source = 'mobile';
     const effectiveUserType = 'consumer';
 
-    // 1. Run rule engine (same as /scan-url)
     const ruleResult = runRuleEngine(url);
 
     const now = new Date().toISOString();
-    const id =
-      Date.now().toString() + Math.random().toString(36).slice(2);
+    const id = Date.now().toString() + Math.random().toString(36).slice(2);
 
-    // Base response
     const responseBody = {
       url,
       riskLevel: ruleResult.ruleRiskLevel,
@@ -737,7 +727,7 @@ app.post('/mobile-safe-browse', async (req, res) => {
           ? 'Link appears low-risk, but always verify before connecting wallets or logging in.'
           : 'Treat this link as risky. Avoid connecting wallets or entering credentials unless you fully trust the source.',
       checkedAt: now,
-      source, // "mobile"
+      source,
       engine: 'RULE_ONLY',
       context: {
         userType: effectiveUserType,
@@ -751,7 +741,6 @@ app.post('/mobile-safe-browse', async (req, res) => {
       },
     };
 
-    // 2. Optional AI narrative
     let aiResult = null;
     try {
       aiResult = await runAiAnalysis({
@@ -772,7 +761,6 @@ app.post('/mobile-safe-browse', async (req, res) => {
       responseBody.ai = aiResult;
     }
 
-    // 3. Log into recentScans buffer
     try {
       recentScans.unshift({
         id,
@@ -801,19 +789,226 @@ app.post('/mobile-safe-browse', async (req, res) => {
 
     res.json(responseBody);
   } catch (err) {
-    console.error(
-      'Error in /mobile-safe-browse:',
-      err.message || err
-    );
+    console.error('Error in /mobile-safe-browse:', err.message || err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
+// =====================================================
+// =========== ELITE ENTERPRISE ADMIN ROUTES ===========
+// =====================================================
 
-   
+// In-memory sample orgs so the Admin Suite works without a DB
+const ADMIN_SAMPLE_ORGS = [
+  {
+    orgId: 'demo-acme',
+    name: 'Acme Corp',
+    plan: 'Enterprise',
+    risk: 'medium',
+    status: 'active',
+    seats: 200,
+    primaryDomain: 'acmecorp.com',
+    activeUsers: 143,
+    lastSeen: new Date().toISOString(),
+    lastHighRiskEvent: null,
+  },
+  {
+    orgId: 'org-1',
+    name: 'Acme Financial Group',
+    plan: 'Enterprise',
+    risk: 'high',
+    status: 'active',
+    seats: 184,
+    primaryDomain: 'acme-fin.com',
+    activeUsers: 121,
+    lastSeen: new Date().toISOString(),
+    lastHighRiskEvent: null,
+  },
+];
 
-    
-    
+const ADMIN_SAMPLE_INTEGRATIONS = [
+  {
+    id: 'int-slack-demo-acme',
+    orgId: 'demo-acme',
+    provider: 'Slack',
+    status: 'connected',
+    target: '#clickshield-alerts',
+    lastEvent: 'Test phishing alert · 5m ago',
+  },
+  {
+    id: 'int-teams-demo-acme',
+    orgId: 'demo-acme',
+    provider: 'Teams',
+    status: 'connected',
+    target: 'SecOps War Room',
+    lastEvent: 'ClickShield test event · 10m ago',
+  },
+  {
+    id: 'int-notion-demo-acme',
+    orgId: 'demo-acme',
+    provider: 'Notion',
+    status: 'connected',
+    target: 'Runbooks / ClickShield',
+    lastEvent: 'Playbook linked for last incident',
+  },
+  {
+    id: 'int-jira-demo-acme',
+    orgId: 'demo-acme',
+    provider: 'Jira',
+    status: 'connected',
+    target: 'SEC-BOARD',
+    lastEvent: 'Incident SEC-231 opened from ClickShield',
+  },
+  {
+    id: 'int-email-demo-acme',
+    orgId: 'demo-acme',
+    provider: 'Email',
+    status: 'connected',
+    target: 'soc-oncall@acmecorp.com',
+    lastEvent: 'Daily digest delivered · 06:00 UTC',
+  },
+];
+
+// Per-org alerts & exports config (stub for now)
+const ADMIN_SAMPLE_ALERTS_EXPORTS = [
+  {
+    orgId: 'demo-acme',
+    alertChannels: [
+      'Slack · #clickshield-alerts',
+      'Teams · SecOps War Room',
+    ],
+    exportTargets: [
+      'Notion · Runbooks / ClickShield',
+      'Jira · SEC-BOARD',
+    ],
+    siem: {
+      enabled: false,
+      provider: null,
+      endpoint: null,
+    },
+    schedule: {
+      dailyDigest: true,
+      weeklyReport: true,
+    },
+  },
+];
+
+function findOrgAlertsExports(orgId) {
+  return (
+    ADMIN_SAMPLE_ALERTS_EXPORTS.find((cfg) => cfg.orgId === orgId) || null
+  );
+}
+
+function findOrgOverview(orgId) {
+  return ADMIN_SAMPLE_ORGS.find((org) => org.orgId === orgId) || null;
+}
+
+function findOrgIntegrations(orgId) {
+  return ADMIN_SAMPLE_INTEGRATIONS.filter((int) => int.orgId === orgId);
+}
+
+function normalizeProviderFromParam(providerParam) {
+  if (!providerParam) return null;
+  const p = providerParam.toLowerCase();
+  if (p === 'slack') return 'Slack';
+  if (p === 'teams') return 'Teams';
+  if (p === 'notion') return 'Notion';
+  if (p === 'jira') return 'Jira';
+  if (p === 'email') return 'Email';
+  return null;
+}
+
+// GET /admin/orgs/:orgId/overview
+app.get('/admin/orgs/:orgId/overview', (req, res) => {
+  const { orgId } = req.params;
+  const overview = findOrgOverview(orgId);
+
+  if (!overview) {
+    return res.status(404).json({
+      overview: {
+        orgId,
+        name: 'Unknown organization',
+        plan: 'Free',
+        risk: 'low',
+        status: 'active',
+        seats: 0,
+        primaryDomain: null,
+        activeUsers: 0,
+        lastSeen: null,
+        lastHighRiskEvent: null,
+      },
+    });
+  }
+
+  res.json({ overview });
+});
+
+// GET /admin/orgs/:orgId/integrations
+app.get('/admin/orgs/:orgId/integrations', (req, res) => {
+  const { orgId } = req.params;
+  const integrations = findOrgIntegrations(orgId);
+
+  res.json({
+    orgId,
+    integrations,
+  });
+});
+
+// GET /admin/orgs/:orgId/alerts-exports
+app.get('/admin/orgs/:orgId/alerts-exports', (req, res) => {
+  const { orgId } = req.params;
+  const cfg = findOrgAlertsExports(orgId);
+
+  if (!cfg) {
+    return res.json({
+      orgId,
+      alertChannels: [],
+      exportTargets: [],
+      siem: {
+        enabled: false,
+        provider: null,
+        endpoint: null,
+      },
+      schedule: {
+        dailyDigest: false,
+        weeklyReport: true,
+      },
+    });
+  }
+
+  res.json(cfg);
+});
+
+// POST /admin/orgs/:orgId/integrations/:provider/test-event
+app.post('/admin/orgs/:orgId/integrations/:provider/test-event', (req, res) => {
+  const { orgId, provider: providerParam } = req.params;
+  const provider = normalizeProviderFromParam(providerParam);
+
+  if (!provider || (provider !== 'Slack' && provider !== 'Teams')) {
+    return res.status(400).json({
+      ok: false,
+      provider: provider || 'Unknown',
+      orgId,
+      delivered: false,
+      message: 'Only Slack and Teams test events are supported right now.',
+    });
+  }
+
+  const body = req.body || {};
+  const actorEmail = body.actorEmail || 'admin@clickshield.local';
+
+  console.log(
+    `[Admin][TestEvent] Simulated ${provider} test event for org=${orgId}, actor=${actorEmail}`
+  );
+
+  return res.status(200).json({
+    ok: true,
+    provider,
+    orgId,
+    delivered: true,
+    message: `${provider} test event simulated. Wire a real webhook URL in the backend when you’re ready.`,
+  });
+});
 
 // =====================================================
 // ============ DASHBOARD DATA ENDPOINTS ===============
@@ -891,6 +1086,7 @@ app.get('/weekly-report', (req, res) => {
     topThreatTypes,
   });
 });
+
 // AI-powered dashboard digest for the last 7 days
 app.get('/dashboard-ai-digest', async (req, res) => {
   try {
@@ -926,7 +1122,6 @@ app.get('/dashboard-ai-digest', async (req, res) => {
       .sort((a, b) => b.count - a.count)
       .slice(0, 5);
 
-    // If there is no OpenAI client, return a rule-only digest string
     if (!openai) {
       const plainDigest =
         totalScans === 0
@@ -950,7 +1145,6 @@ app.get('/dashboard-ai-digest', async (req, res) => {
       });
     }
 
-    // AI-enhanced digest
     const summaryForModel = {
       weekStart,
       weekEnd,
@@ -987,7 +1181,7 @@ Do NOT use bullet points, lists, markdown, or headings.
 Return only the paragraph of text.
 `;
 
-let digestText = null;
+    let digestText = null;
     let modelUsed = 'gpt-4.1-mini';
 
     try {
@@ -1018,7 +1212,6 @@ let digestText = null;
       );
     }
 
-    // If AI failed, fall back to rule-only digest text
     if (!digestText) {
       digestText =
         totalScans === 0
@@ -1043,10 +1236,7 @@ let digestText = null;
       },
     });
   } catch (err) {
-    console.error(
-      'Error in /dashboard-ai-digest:',
-      err.message || err
-    );
+    console.error('Error in /dashboard-ai-digest:', err.message || err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
