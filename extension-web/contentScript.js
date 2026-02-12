@@ -46,51 +46,89 @@ function scanWithBackground(url) {
       }
 
       console.log('[ClickShield][CS] Raw scan result:', response.data);
-      handleScanResult(response.data);
+      handleScanResult(response.data && response.data.scan ? response.data.scan : response.data);
+
     }
   );
 }
-
 function normalizeScanResult(result = {}) {
-  // Support both camelCase and snake_case from backend
-  const rawRiskLevel = result.riskLevel || result.risk_level || 'UNKNOWN';
-  const rawRiskScore =
-    typeof result.riskScore === 'number'
-      ? result.riskScore
-      : typeof result.risk_score === 'number'
-      ? result.risk_score
-      : null;
-  const rawThreatType =
-    result.threatType || result.threat_type || 'UNKNOWN';
-
-  const riskLevel = String(rawRiskLevel).toUpperCase();
-  const riskScore = rawRiskScore;
-  const threatType = String(rawThreatType);
-
-  const reason =
-    result.reason ||
-    result.explanation ||
-    'No additional explanation available.';
-
-  const baseShortAdvice =
-    result.shortAdvice ||
-    result.advice ||
-    (riskLevel === 'SAFE'
-      ? 'Link appears low-risk, but always verify before connecting wallets or logging in.'
-      : 'Treat this link as risky. Avoid connecting wallets or entering credentials unless you fully trust the source.');
-
-  const url =
-    result.url || result.scannedUrl || window.location.href;
-
-  return {
-    riskLevel,
-    riskScore,
-    threatType,
-    reason,
-    shortAdvice: baseShortAdvice,
-    url,
-  };
-}
+    // Unwrap common backend shapes:
+    // - { ok: true, scan: {...} }
+    // - { data: { ok: true, scan: {...} } }
+    try {
+      if (result && typeof result === 'object') {
+        if (result.ok === true && result.scan && typeof result.scan === 'object') {
+          result = result.scan;
+        } else if (
+          result.data &&
+          typeof result.data === 'object' &&
+          result.data.ok === true &&
+          result.data.scan &&
+          typeof result.data.scan === 'object'
+        ) {
+          result = result.data.scan;
+        }
+      }
+    } catch {
+      // keep original
+    }
+  
+    // Support both camelCase and snake_case
+    const rawRiskLevel =
+      result.riskLevel ||
+      result.risk_level ||
+      result.ruleRiskLevel ||
+      result.rule_risk_level ||
+      'UNKNOWN';
+  
+    const rawRiskScore =
+      typeof result.riskScore === 'number'
+        ? result.riskScore
+        : typeof result.risk_score === 'number'
+        ? result.risk_score
+        : typeof result.ruleScore === 'number'
+        ? result.ruleScore
+        : typeof result.rule_score === 'number'
+        ? result.rule_score
+        : null;
+  
+    const rawThreatType =
+      result.threatType ||
+      result.threat_type ||
+      result.ruleThreatCategory ||
+      result.rule_threat_category ||
+      'UNKNOWN';
+  
+    const riskLevel = String(rawRiskLevel).toUpperCase();
+    const riskScore = rawRiskScore;
+    const threatType = String(rawThreatType);
+  
+    const reason =
+      result.reason ||
+      result.explanation ||
+      result.ruleReason ||
+      result.rule_reason ||
+      'No additional explanation available.';
+  
+    const baseShortAdvice =
+      result.shortAdvice ||
+      result.advice ||
+      (riskLevel === 'SAFE'
+        ? 'Link appears low-risk, but always verify before connecting wallets or logging in.'
+        : 'Treat this link as risky. Avoid connecting wallets or entering credentials unless you fully trust the source.');
+  
+    const url = result.url || result.scannedUrl || window.location.href;
+  
+    return {
+      riskLevel,
+      riskScore,
+      threatType,
+      reason,
+      shortAdvice: baseShortAdvice,
+      url,
+    };
+  }
+  
 
 function handleScanResult(rawResult) {
   const normalized = normalizeScanResult(rawResult);
@@ -475,7 +513,8 @@ function showCornerBadge(info) {
     border = '1px solid rgba(254,202,202,0.95)';
   } else {
     text = 'ClickShield: MONITORING';
-    subtext = 'Engine unavailable';
+    subtext = 'Scan pending / limited';
+
     bg =
       'linear-gradient(135deg, rgba(148,163,184,0.95), rgba(30,64,175,0.95))';
     border = '1px solid rgba(209,213,219,0.9)';
