@@ -1,0 +1,137 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js from .nvmrc
+        if: ${{ hashFiles('desktop/.nvmrc') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: desktop/.nvmrc
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Node.js LTS
+        if: ${{ hashFiles('desktop/.nvmrc') == '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build watchdog sidecar (macOS)
+        working-directory: desktop/src-tauri
+        run: cargo build --release --bin clickshield_watchdog
+
+      - name: Copy watchdog sidecar to Tauri binaries (macOS)
+        working-directory: desktop/src-tauri
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="$(rustc -vV | awk '/host:/ {print $2}')"
+          mkdir -p binaries
+          cp "target/release/clickshield_watchdog" "binaries/clickshield_watchdog-${TARGET}"
+          chmod +x "binaries/clickshield_watchdog-${TARGET}"
+          ls -la binaries | sed -n '1,120p'
+
+      - name: Build desktop app (macOS)
+        working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri:build -- --bundles app
+
+      - name: Upload macOS release artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          overwrite_files: true
+          files: |
+            desktop/src-tauri/target/release/bundle/**
+            desktop/src-tauri/target/release/bundle/latest.json
+            desktop/src-tauri/target/release/bundle/**/*.sig
+
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    needs: build-macos
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js from .nvmrc
+        if: ${{ hashFiles('desktop/.nvmrc') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: desktop/.nvmrc
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Node.js LTS
+        if: ${{ hashFiles('desktop/.nvmrc') == '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build watchdog sidecar (Windows)
+        working-directory: desktop/src-tauri
+        shell: pwsh
+        run: cargo build --release --bin clickshield_watchdog
+
+      - name: Copy watchdog sidecar to Tauri binaries (Windows)
+        working-directory: desktop/src-tauri
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $target = (rustc -vV | Select-String "host:" | ForEach-Object { $_.Line.Split()[-1] }).Trim()
+          New-Item -ItemType Directory -Force -Path "binaries" | Out-Null
+          Copy-Item "target\release\clickshield_watchdog.exe" "binaries\clickshield_watchdog-$target.exe" -Force
+          Get-ChildItem binaries | Format-Table -AutoSize
+
+      - name: Build desktop app (Windows)
+        working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri:build
+
+      - name: Upload Windows release artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          overwrite_files: true
+          files: |
+            desktop/src-tauri/target/release/bundle/**
+            desktop/src-tauri/target/release/bundle/latest.json
+            desktop/src-tauri/target/release/bundle/**/*.sig

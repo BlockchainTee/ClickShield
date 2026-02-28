@@ -20,21 +20,22 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     console.log('[ClickShield][BG] Scanning URL from content script:', url);
 
     fetch(`${API_BASE}/scan-url`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        url,
-        userType: 'consumer',
-        orgId: 'personal',
-        orgName: 'Personal',
-        userId: 'browser-extension-user',
-        userEmail: 'browser-extension@clickshield.app',
-        deviceId: `browser-${browserName}`,
-        source: 'browser-extension',
-      }),
-    })
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-clickshield-org-id': 'demo-acme',
+          'x-org-id': 'demo-acme',
+        },
+        body: JSON.stringify({
+          url,
+          userType: 'consumer',
+          userId: 'browser-extension-user',
+          userEmail: 'browser-extension@clickshield.app',
+          deviceId: `browser-${browserName}`,
+          source: 'browser-extension',
+        }),
+      })
+      
       .then(async (res) => {
         if (!res.ok) {
           const txt = await res.text();

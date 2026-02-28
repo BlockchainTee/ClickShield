@@ -1,0 +1,19 @@
+/* Force dark mode color scheme */
+:root {
+  color-scheme: dark;
+}
+
+/* Base body styles */
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #020617; /* slate-950 */
+  color: #e2e8f0;            /* slate-200 */
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Inter",
+    "SF Pro Text", sans-serif;
+}
+
+/* Make sure root container fills the screen */
+#root {
+  min-height: 100vh;
+}
