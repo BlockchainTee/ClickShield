@@ -1,0 +1,140 @@
+name: CI Release
+
+on:
+  push:
+    tags:
+      - "app-v*"
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release (${{ matrix.platform }} / ${{ matrix.target }})
+    runs-on: ${{ matrix.platform }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+            args: --target aarch64-apple-darwin --bundles app,dmg,updater
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+            args: --target x86_64-apple-darwin --bundles app,dmg,updater
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+            args: --target x86_64-pc-windows-msvc --bundles nsis,msi,updater
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Derive release version from tag
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"
+          VERSION=""
+
+          case "${TAG}" in
+            app-v*) VERSION="${TAG#app-v}" ;;
+            v*) VERSION="${TAG#v}" ;;
+            *)
+              echo "Unsupported tag format: ${TAG}"
+              exit 1
+              ;;
+          esac
+
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Tag version '${VERSION}' is not semver-like"
+            exit 1
+          fi
+
+          echo "RELEASE_TAG=${TAG}" >> "$GITHUB_ENV"
+          echo "RELEASE_VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Sync app versions to tag version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node -e "const fs=require('fs');const v=process.env.RELEASE_VERSION;const pj='package.json';const tj='src-tauri/tauri.conf.json';const p=JSON.parse(fs.readFileSync(pj,'utf8'));p.version=v;fs.writeFileSync(pj,JSON.stringify(p,null,2)+'\\n');const t=JSON.parse(fs.readFileSync(tj,'utf8'));t.version=v;fs.writeFileSync(tj,JSON.stringify(t,null,2)+'\\n');"
+
+      - name: Write App Store Connect API key
+        if: startsWith(matrix.platform, 'macos')
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p private_keys
+          echo "${{ secrets.APPLE_API_KEY_P8_B64 }}" | base64 --decode > private_keys/AuthKey.p8
+          chmod 600 private_keys/AuthKey.p8
+          echo "APPLE_API_KEY_PATH=private_keys/AuthKey.p8" >> "$GITHUB_ENV"
+
+      - name: Build watchdog sidecar
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f src-tauri/src/bin/clickshield_watchdog.rs ]; then
+            cargo build --manifest-path src-tauri/Cargo.toml --release --bin clickshield_watchdog --target "${{ matrix.target }}"
+
+            mkdir -p src-tauri/binaries
+            case "${{ matrix.target }}" in
+              *windows*)
+                cp "src-tauri/target/${{ matrix.target }}/release/clickshield_watchdog.exe" "src-tauri/binaries/clickshield_watchdog-${{ matrix.target }}.exe"
+                ;;
+              *)
+                cp "src-tauri/target/${{ matrix.target }}/release/clickshield_watchdog" "src-tauri/binaries/clickshield_watchdog-${{ matrix.target }}"
+                chmod +x "src-tauri/binaries/clickshield_watchdog-${{ matrix.target }}"
+                ;;
+            esac
+          else
+            echo "src-tauri/src/bin/clickshield_watchdog.rs not found; skipping watchdog sidecar build"
+          fi
+
+      - name: Build and publish release assets
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # Tauri updater signing
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+          # macOS signing/notarization (existing secrets)
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY_PATH: private_keys/AuthKey.p8
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+
+          # Windows code signing (existing secrets)
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERT_PFX_B64 }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        with:
+          projectPath: .
+          tagName: ${{ env.RELEASE_TAG }}
+          releaseName: ClickShield Desktop v${{ env.RELEASE_VERSION }}
+          releaseBody: |
+            Automated desktop release for tag ${{ env.RELEASE_TAG }}.
+          releaseDraft: true
+          prerelease: false
+          includeUpdaterJson: true
+          args: ${{ matrix.args }}
