@@ -36,13 +36,15 @@ jobs:
         with:
           node-version: lts/*
           cache: npm
+          cache-dependency-path: desktop/package-lock.json
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Install frontend dependencies
+      - name: Install desktop dependencies
+        working-directory: desktop
         run: npm ci
 
       - name: Derive release version from tag
@@ -71,6 +73,7 @@ jobs:
           echo "RELEASE_VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Sync app versions to tag version
+        working-directory: desktop
         shell: bash
         run: |
           set -euo pipefail
@@ -79,6 +82,7 @@ jobs:
 
       - name: Write App Store Connect API key
         if: startsWith(matrix.platform, 'macos')
+        working-directory: desktop
         shell: bash
         run: |
           set -euo pipefail
@@ -88,6 +92,7 @@ jobs:
           echo "APPLE_API_KEY_PATH=private_keys/AuthKey.p8" >> "$GITHUB_ENV"
 
       - name: Build watchdog sidecar
+        working-directory: desktop
         shell: bash
         run: |
           set -euo pipefail
@@ -129,7 +134,7 @@ jobs:
           WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERT_PFX_B64 }}
           WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         with:
-          projectPath: .
+          projectPath: desktop
           tagName: ${{ env.RELEASE_TAG }}
           releaseName: ClickShield Desktop v${{ env.RELEASE_VERSION }}
           releaseBody: |
