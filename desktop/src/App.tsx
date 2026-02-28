@@ -87,7 +87,10 @@ const STORAGE_RESCAN_TRAY_KEY = "clickshield.desktop.rescanTray.v2";
 const STORAGE_URL_CACHE_KEY = "clickshield.desktop.urlScanCache.v1";
 const URL_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
-const POLL_INTERVAL_MS = 2500; // ✅ always recover within 5 seconds (backend restore)
+const RETRY_BASE_MS = 600;
+const RETRY_GROWTH_FACTOR = 1.6;
+const RETRY_MAX_MS = 5000;
+const RETRY_JITTER_RATIO = 0.15;
 const FETCH_TIMEOUT_RECENT_MS = 3500;
 const FETCH_TIMEOUT_HEALTH_MS = 2000;
 
@@ -108,6 +111,16 @@ function safeJsonParse<T>(value: string | null): T | null {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function computeNextRetryDelayMs(attempt: number): number {
+  const exponentialDelay = Math.min(
+    RETRY_MAX_MS,
+    Math.round(RETRY_BASE_MS * RETRY_GROWTH_FACTOR ** Math.max(0, attempt))
+  );
+  const jitterRange = exponentialDelay * RETRY_JITTER_RATIO;
+  const jitteredDelay = exponentialDelay + (Math.random() * 2 - 1) * jitterRange;
+  return Math.max(1, Math.min(RETRY_MAX_MS, Math.round(jitteredDelay)));
 }
 
 function clampRiskScore(n: any) {
@@ -476,7 +489,8 @@ const App: React.FC = () => {
   // =====================================================
   async function restartDesktopAgent() {
     try {
-      const mod: any = await import("@tauri-apps/plugin-process");
+      const pluginProcessModule = "@tauri-apps/plugin-process";
+      const mod: any = await import(/* @vite-ignore */ pluginProcessModule);
       if (typeof mod?.relaunch === "function") {
         await mod.relaunch();
         return;
@@ -532,8 +546,10 @@ const App: React.FC = () => {
     rescanTrayRef.current = rescanTray;
   }, [rescanTray]);
 
-  // 5-second recovery: short interval polling when offline/unknown
-  const pollRef = useRef<number | null>(null);
+  // 5-second recovery: bounded backoff+jitter scheduler while offline/unknown
+  const retryTimerRef = useRef<number | null>(null);
+  const retryAttemptRef = useRef(0);
+  const [nextRetryDelayMs, setNextRetryDelayMs] = useState<number | null>(null);
 
   // ✅ prevent overlapping network calls (keeps UI responsive when backend is down)
   const healthInFlightRef = useRef(false);
@@ -599,20 +615,43 @@ const App: React.FC = () => {
     }
   }
 
+  function scheduleRetry(fn: () => void) {
+    if (retryTimerRef.current != null) return;
+
+    const delay = computeNextRetryDelayMs(retryAttemptRef.current);
+    retryAttemptRef.current += 1;
+    setNextRetryDelayMs(delay);
+
+    retryTimerRef.current = window.setTimeout(() => {
+      retryTimerRef.current = null;
+      fn();
+    }, delay);
+  }
+
+  function clearRetry() {
+    if (retryTimerRef.current != null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    setNextRetryDelayMs(null);
+  }
+
   function startPolling() {
-    if (pollRef.current != null) return;
-    pollRef.current = window.setInterval(() => {
+    scheduleRetry(() => {
       if (healthRef.current !== "ok") {
         checkHealth();
         fetchRecentScans({ preferCache: true });
       }
-    }, POLL_INTERVAL_MS);
+
+      if (healthRef.current !== "ok") {
+        startPolling();
+      }
+    });
   }
 
   function stopPolling() {
-    if (pollRef.current == null) return;
-    window.clearInterval(pollRef.current);
-    pollRef.current = null;
+    retryAttemptRef.current = 0;
+    clearRetry();
   }
 
   async function checkHealth() {
@@ -700,7 +739,7 @@ const App: React.FC = () => {
         rawMsg.toLowerCase().includes("networkerror") ||
         rawMsg.toLowerCase().includes("connection refused") ||
         rawMsg.toLowerCase().includes("aborted")
-          ? "Backend offline — showing cached history. Auto-retry every 2.5 seconds."
+          ? "Backend offline — showing cached history."
           : rawMsg || "Failed to load recent scans.";
 
       if (mountedRef.current) {
@@ -729,6 +768,8 @@ const App: React.FC = () => {
 
     const onOnline = () => {
       // ✅ instant recovery when network returns (still bounded by 5s rule)
+      retryAttemptRef.current = 0;
+      clearRetry();
       checkHealth();
       fetchRecentScans({ preferCache: true });
     };
@@ -1168,6 +1209,8 @@ const App: React.FC = () => {
   // =====================================================
   // UI computed values
   // =====================================================
+  const retryWindowSeconds = Math.max(1, Math.round((nextRetryDelayMs ?? RETRY_BASE_MS) / 1000));
+
   const backendBadge =
     health === "ok"
       ? "border-emerald-500/60 bg-emerald-500/10 text-emerald-200"
@@ -1343,11 +1386,15 @@ const App: React.FC = () => {
 
           {recentError && (
             <div className="mt-3 rounded-xl border border-red-700/50 bg-red-950/30 px-3 py-2 text-xs text-red-200">
-              <span>{recentError}</span>
+              <span>
+                {/showing cached history/i.test(recentError)
+                  ? `Backend offline — showing cached history. Auto-retry in ~${retryWindowSeconds}s.`
+                  : recentError}
+              </span>
               {!/showing cached history/i.test(recentError) && (
                 <span className="text-red-300/80">
                   {" "}
-                  Showing cached history. Auto-recovery will retry every 2.5 seconds while offline.
+                  {`Showing cached history. Auto-recovery will retry in ~${retryWindowSeconds}s while offline.`}
                 </span>
               )}
             </div>

@@ -1,0 +1,227 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-macos:
+    name: Build macOS
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js from .nvmrc
+        if: ${{ hashFiles('desktop/.nvmrc') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: desktop/.nvmrc
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Node.js LTS
+        if: ${{ hashFiles('desktop/.nvmrc') == '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Write App Store Connect API key
+        working-directory: desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p private_keys
+          echo "${{ secrets.APPLE_API_KEY_P8 }}" > "private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8"
+          chmod 600 "private_keys/AuthKey_${{ secrets.APPLE_API_KEY }}.p8"
+
+      - name: Build watchdog sidecar (macOS)
+        working-directory: desktop/src-tauri
+        run: cargo build --release --bin clickshield_watchdog
+
+      - name: Copy watchdog sidecar to Tauri binaries (macOS)
+        working-directory: desktop/src-tauri
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="$(rustc -vV | awk '/host:/ {print $2}')"
+          mkdir -p binaries
+          cp "target/release/clickshield_watchdog" "binaries/clickshield_watchdog-${TARGET}"
+          chmod +x "binaries/clickshield_watchdog-${TARGET}"
+          ls -la binaries | sed -n '1,120p'
+
+      - name: Build desktop app (macOS)
+        working-directory: desktop
+        env:
+          CI: "true"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          API_PRIVATE_KEYS_DIR: "private_keys"
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: npm run tauri:build -- --bundles app
+
+      - name: Validate macOS notarization (strict)
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(ls -1 desktop/src-tauri/target/release/bundle/macos/*.app | head -n 1 || true)"
+          if [ -z "${APP_PATH}" ]; then
+            echo "No .app found to validate"
+            exit 1
+          fi
+          echo "Validating notarization for: ${APP_PATH}"
+          xcrun stapler validate "${APP_PATH}"
+          spctl -a -vv --type execute "${APP_PATH}"
+
+      - name: Verify macOS signature (best effort)
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(ls -1 desktop/src-tauri/target/release/bundle/macos/*.app | head -n 1 || true)"
+          if [ -z "${APP_PATH}" ]; then
+            echo "No .app found to verify"
+            exit 0
+          fi
+          echo "Verifying: ${APP_PATH}"
+          codesign --verify --deep --strict "${APP_PATH}" || true
+          spctl -a -vv "${APP_PATH}" || true
+
+      - name: Upload macOS release artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/src-tauri/target/release/bundle/**
+
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    needs: build-macos
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js from .nvmrc
+        if: ${{ hashFiles('desktop/.nvmrc') != '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: desktop/.nvmrc
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Node.js LTS
+        if: ${{ hashFiles('desktop/.nvmrc') == '' }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Write Windows signing certificate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pfxPath = Join-Path $env:RUNNER_TEMP "clickshield-cert.pfx"
+          [IO.File]::WriteAllBytes($pfxPath, [Convert]::FromBase64String("${{ secrets.WINDOWS_CERT_PFX_B64 }}"))
+          "PFX_PATH=$pfxPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Build watchdog sidecar (Windows)
+        working-directory: desktop/src-tauri
+        shell: pwsh
+        run: cargo build --release --bin clickshield_watchdog
+
+      - name: Copy watchdog sidecar to Tauri binaries (Windows)
+        working-directory: desktop/src-tauri
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $target = (rustc -vV | Select-String "host:" | ForEach-Object { $_.Line.Split()[-1] }).Trim()
+          New-Item -ItemType Directory -Force -Path "binaries" | Out-Null
+          Copy-Item "target\release\clickshield_watchdog.exe" "binaries\clickshield_watchdog-$target.exe" -Force
+          Get-ChildItem binaries | Format-Table -AutoSize
+
+      - name: Build desktop app (Windows)
+        working-directory: desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri:build
+
+      - name: Sign Windows artifacts
+        shell: pwsh
+        env:
+          PFX_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+          TIMESTAMP_URL: ${{ secrets.WINDOWS_TIMESTAMP_URL }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrWhiteSpace($env:TIMESTAMP_URL)) { $env:TIMESTAMP_URL = "http://timestamp.digicert.com" }
+
+          $bundleDir = "desktop/src-tauri/target/release/bundle"
+          if (!(Test-Path $bundleDir)) { throw "Bundle directory not found: $bundleDir" }
+
+          # Collect sign targets (exe/msi). Add .dll if you ship it.
+          $targets = Get-ChildItem -Path $bundleDir -Recurse -File |
+            Where-Object { $_.Extension -in ".exe", ".msi" } |
+            Select-Object -ExpandProperty FullName
+
+          if ($targets.Count -eq 0) { throw "No .exe/.msi artifacts found to sign under $bundleDir" }
+
+          foreach ($f in $targets) {
+            Write-Host "Signing: $f"
+            & signtool sign `
+              /fd SHA256 `
+              /f "$env:PFX_PATH" `
+              /p "$env:PFX_PASSWORD" `
+              /tr "$env:TIMESTAMP_URL" `
+              /td SHA256 `
+              /v `
+              "$f"
+            if ($LASTEXITCODE -ne 0) { throw "signtool sign failed for $f" }
+          }
+
+      - name: Verify Windows signatures (strict)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $bundleDir = "desktop/src-tauri/target/release/bundle"
+          $targets = Get-ChildItem -Path $bundleDir -Recurse -File |
+            Where-Object { $_.Extension -in ".exe", ".msi" } |
+            Select-Object -ExpandProperty FullName
+          if ($targets.Count -eq 0) { throw "No .exe/.msi artifacts found to verify" }
+
+          foreach ($f in $targets) {
+            Write-Host "Verifying: $f"
+            & signtool verify /pa /v "$f"
+            if ($LASTEXITCODE -ne 0) { throw "signtool verify failed for $f" }
+          }
+
+      - name: Upload Windows release artifacts
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/src-tauri/target/release/bundle/**

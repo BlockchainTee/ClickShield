@@ -7,16 +7,14 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-
     "tauri": "npx tauri",
-    "tauri:dev": "npx tauri dev",
+    "watchdog:sidecar": "bash -lc 'cd src-tauri && TARGET=\"$(rustc -vV | awk \"/host:/ {print \\$2}\")\" && cargo build --release --bin clickshield_watchdog && mkdir -p binaries && cp target/release/clickshield_watchdog binaries/clickshield_watchdog-${TARGET} && chmod +x binaries/clickshield_watchdog-${TARGET} && ls -la binaries | sed -n \"1,120p\"'",
+    "tauri:dev": "npm run watchdog:sidecar && npx tauri dev",
     "tauri:build": "npx tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2.3.2",
-    "@tauri-apps/plugin-opener": "^2",
-    "@tauri-apps/plugin-process": "^2.3.1",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
