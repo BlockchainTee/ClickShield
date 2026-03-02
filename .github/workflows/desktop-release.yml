@@ -62,15 +62,48 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri:build -- --bundles app
 
+      - name: Generate latest.json (macOS)
+        working-directory: desktop/src-tauri
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          TARGET="$(rustc -vV | awk '/host:/ {print $2}')"
+          BUNDLE_DIR="target/release/bundle/macos"
+          SIG=$(cat "${BUNDLE_DIR}/tauri-appclickshield-desktop.app.tar.gz.sig")
+          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          # Map rustc target to Tauri updater platform key
+          case "${TARGET}" in
+            aarch64-apple-darwin) PLATFORM="darwin-aarch64" ;;
+            x86_64-apple-darwin)  PLATFORM="darwin-x86_64" ;;
+            *)                    PLATFORM="${TARGET}" ;;
+          esac
+          cat > "${BUNDLE_DIR}/latest.json" <<EOJSON
+{
+  "version": "${VERSION}",
+  "notes": "Release ${TAG}",
+  "pub_date": "${PUB_DATE}",
+  "platforms": {
+    "${PLATFORM}": {
+      "signature": "${SIG}",
+      "url": "https://github.com/BlockchainTee/ClickShield/releases/download/${TAG}/tauri-appclickshield-desktop.app.tar.gz"
+    }
+  }
+}
+EOJSON
+          echo "Generated latest.json:"
+          cat "${BUNDLE_DIR}/latest.json"
+
       - name: Upload macOS release artifacts
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           overwrite_files: true
           files: |
-            desktop/src-tauri/target/release/bundle/**
-            desktop/src-tauri/target/release/bundle/latest.json
-            desktop/src-tauri/target/release/bundle/**/*.sig
+            desktop/src-tauri/target/release/bundle/macos/tauri-appclickshield-desktop.app.tar.gz
+            desktop/src-tauri/target/release/bundle/macos/tauri-appclickshield-desktop.app.tar.gz.sig
+            desktop/src-tauri/target/release/bundle/macos/latest.json
 
   build-windows:
     name: Build Windows
@@ -126,12 +159,54 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npm run tauri:build
 
+      - name: Download existing latest.json
+        working-directory: desktop/src-tauri
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $url = "https://github.com/BlockchainTee/ClickShield/releases/download/${tag}/latest.json"
+          try {
+            Invoke-WebRequest -Uri $url -OutFile "latest-existing.json"
+            Write-Host "Downloaded existing latest.json"
+          } catch {
+            Write-Host "No existing latest.json found, will create fresh"
+            '{}' | Out-File -FilePath "latest-existing.json"
+          }
+
+      - name: Generate latest.json (Windows)
+        working-directory: desktop/src-tauri
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $tag = "${{ github.ref_name }}"
+          $version = $tag.TrimStart("v")
+          $nsisSig = Get-Content "target\release\bundle\nsis\tauri-appclickshield-desktop_${version}_x64-setup.nsis.zip.sig" -Raw
+          $pubDate = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
+          $url = "https://github.com/BlockchainTee/ClickShield/releases/download/${tag}/tauri-appclickshield-desktop_${version}_x64-setup.nsis.zip"
+          # Load existing latest.json (from macOS build) and add Windows platform
+          $existing = Get-Content "latest-existing.json" -Raw | ConvertFrom-Json
+          if (-not $existing.platforms) {
+            $existing = @{
+              version = $version
+              notes = "Release ${tag}"
+              pub_date = $pubDate
+              platforms = @{}
+            }
+          }
+          $existing.platforms | Add-Member -NotePropertyName "windows-x86_64" -NotePropertyValue @{
+            signature = $nsisSig.Trim()
+            url = $url
+          } -Force
+          $existing | ConvertTo-Json -Depth 10 | Out-File -FilePath "latest.json" -Encoding utf8
+          Write-Host "Generated latest.json:"
+          Get-Content "latest.json"
+
       - name: Upload Windows release artifacts
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
           overwrite_files: true
           files: |
-            desktop/src-tauri/target/release/bundle/**
-            desktop/src-tauri/target/release/bundle/latest.json
-            desktop/src-tauri/target/release/bundle/**/*.sig
+            desktop/src-tauri/target/release/bundle/nsis/*.nsis.zip
+            desktop/src-tauri/target/release/bundle/nsis/*.nsis.zip.sig
+            desktop/src-tauri/latest.json
