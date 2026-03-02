@@ -73,25 +73,14 @@ jobs:
           BUNDLE_DIR="target/release/bundle/macos"
           SIG=$(cat "${BUNDLE_DIR}/tauri-appclickshield-desktop.app.tar.gz.sig")
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          # Map rustc target to Tauri updater platform key
           case "${TARGET}" in
             aarch64-apple-darwin) PLATFORM="darwin-aarch64" ;;
             x86_64-apple-darwin)  PLATFORM="darwin-x86_64" ;;
             *)                    PLATFORM="${TARGET}" ;;
           esac
-          cat > "${BUNDLE_DIR}/latest.json" <<EOJSON
-{
-  "version": "${VERSION}",
-  "notes": "Release ${TAG}",
-  "pub_date": "${PUB_DATE}",
-  "platforms": {
-    "${PLATFORM}": {
-      "signature": "${SIG}",
-      "url": "https://github.com/BlockchainTee/ClickShield/releases/download/${TAG}/tauri-appclickshield-desktop.app.tar.gz"
-    }
-  }
-}
-EOJSON
+          printf '{"version":"%s","notes":"Release %s","pub_date":"%s","platforms":{"%s":{"signature":"%s","url":"https://github.com/BlockchainTee/ClickShield/releases/download/%s/tauri-appclickshield-desktop.app.tar.gz"}}}' \
+            "${VERSION}" "${TAG}" "${PUB_DATE}" "${PLATFORM}" "${SIG}" "${TAG}" \
+            > "${BUNDLE_DIR}/latest.json"
           echo "Generated latest.json:"
           cat "${BUNDLE_DIR}/latest.json"
 
