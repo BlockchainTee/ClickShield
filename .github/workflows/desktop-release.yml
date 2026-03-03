@@ -40,6 +40,15 @@ jobs:
         working-directory: desktop
         run: npm ci
 
+      - name: Create sidecar placeholder (macOS)
+        working-directory: desktop/src-tauri
+        shell: bash
+        run: |
+          set -euo pipefail
+          TARGET="$(rustc -vV | awk '/host:/ {print $2}')"
+          mkdir -p binaries
+          touch "binaries/clickshield_watchdog-${TARGET}"
+
       - name: Build watchdog sidecar (macOS)
         working-directory: desktop/src-tauri
         run: cargo build --release --bin clickshield_watchdog
@@ -58,9 +67,42 @@ jobs:
       - name: Build desktop app (macOS)
         working-directory: desktop
         env:
+          CI: "true"
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERT_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
         run: npm run tauri:build -- --bundles app
+
+      - name: Validate macOS notarization (strict)
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(ls -1 desktop/src-tauri/target/release/bundle/macos/*.app | head -n 1 || true)"
+          if [ -z "${APP_PATH}" ]; then
+            echo "No .app found to validate"
+            exit 1
+          fi
+          echo "Validating notarization for: ${APP_PATH}"
+          xcrun stapler validate "${APP_PATH}"
+          spctl -a -vv --type execute "${APP_PATH}"
+
+      - name: Verify macOS signature (best effort)
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_PATH="$(ls -1 desktop/src-tauri/target/release/bundle/macos/*.app | head -n 1 || true)"
+          if [ -z "${APP_PATH}" ]; then
+            echo "No .app found to verify"
+            exit 0
+          fi
+          echo "Verifying: ${APP_PATH}"
+          codesign --verify --deep --strict "${APP_PATH}" || true
+          spctl -a -vv "${APP_PATH}" || true
 
       - name: Generate latest.json (macOS)
         working-directory: desktop/src-tauri
@@ -125,6 +167,15 @@ jobs:
       - name: Install desktop dependencies
         working-directory: desktop
         run: npm ci
+
+      - name: Create sidecar placeholder (Windows)
+        working-directory: desktop/src-tauri
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $target = (rustc -vV | Select-String "host:" | ForEach-Object { $_.Line.Split()[-1] }).Trim()
+          New-Item -ItemType Directory -Force -Path "binaries" | Out-Null
+          New-Item -ItemType File -Force -Path "binaries/clickshield_watchdog-$target.exe" | Out-Null
 
       - name: Build watchdog sidecar (Windows)
         working-directory: desktop/src-tauri
