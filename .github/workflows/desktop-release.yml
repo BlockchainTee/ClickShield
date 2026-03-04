@@ -216,14 +216,14 @@ jobs:
           $ErrorActionPreference = "Stop"
           $tag = "${{ github.ref_name }}"
           $version = $tag.TrimStart("v")
-          # Find the .sig file dynamically (app version in filename may differ from tag)
-          $sigFile = Get-ChildItem "target\release\bundle\nsis\*-setup.nsis.zip.sig" | Select-Object -First 1
-          if (-not $sigFile) { throw "No NSIS .sig file found in target\release\bundle\nsis\" }
+          # Find the NSIS installer .sig file dynamically (Tauri v2 creates *-setup.exe.sig)
+          $sigFile = Get-ChildItem "target\release\bundle\nsis\*-setup.exe.sig" | Select-Object -First 1
+          if (-not $sigFile) { throw "No NSIS .exe.sig file found in target\release\bundle\nsis\" }
           Write-Host "Found sig file: $($sigFile.Name)"
           $nsisSig = Get-Content $sigFile.FullName -Raw
-          $nsisZip = $sigFile.Name -replace '\.sig$', ''
+          $nsisExe = $sigFile.Name -replace '\.sig$', ''
           $pubDate = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
-          $url = "https://github.com/BlockchainTee/ClickShield/releases/download/${tag}/${nsisZip}"
+          $url = "https://github.com/BlockchainTee/ClickShield/releases/download/${tag}/${nsisExe}"
           # Load existing latest.json (from macOS build) and add Windows platform
           $existing = Get-Content "latest-existing.json" -Raw | ConvertFrom-Json
           if (-not $existing.platforms) {
@@ -248,6 +248,6 @@ jobs:
           tag_name: ${{ github.ref_name }}
           overwrite_files: true
           files: |
-            desktop/src-tauri/target/release/bundle/nsis/*.nsis.zip
-            desktop/src-tauri/target/release/bundle/nsis/*.nsis.zip.sig
+            desktop/src-tauri/target/release/bundle/nsis/*-setup.exe
+            desktop/src-tauri/target/release/bundle/nsis/*-setup.exe.sig
             desktop/src-tauri/latest.json
