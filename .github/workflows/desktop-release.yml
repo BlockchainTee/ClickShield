@@ -193,7 +193,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri:build
+        run: npm run tauri:build -- --bundles nsis
 
       - name: Download existing latest.json
         working-directory: desktop/src-tauri
