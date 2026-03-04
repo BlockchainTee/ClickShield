@@ -46,8 +46,7 @@ jobs:
         run: |
           set -euo pipefail
           TARGET="$(rustc -vV | awk '/host:/ {print $2}')"
-          mkdir -p binaries
-          touch "binaries/clickshield_watchdog-${TARGET}"
+          touch "clickshield_watchdog-${TARGET}"
 
       - name: Build watchdog sidecar (macOS)
         working-directory: desktop/src-tauri
@@ -59,10 +58,9 @@ jobs:
         run: |
           set -euo pipefail
           TARGET="$(rustc -vV | awk '/host:/ {print $2}')"
-          mkdir -p binaries
-          cp "target/release/clickshield_watchdog" "binaries/clickshield_watchdog-${TARGET}"
-          chmod +x "binaries/clickshield_watchdog-${TARGET}"
-          ls -la binaries | sed -n '1,120p'
+          cp "target/release/clickshield_watchdog" "clickshield_watchdog-${TARGET}"
+          chmod +x "clickshield_watchdog-${TARGET}"
+          ls -la "clickshield_watchdog-${TARGET}"
 
       - name: Build desktop app (macOS)
         working-directory: desktop
@@ -174,8 +172,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $target = (rustc -vV | Select-String "host:" | ForEach-Object { $_.Line.Split()[-1] }).Trim()
-          New-Item -ItemType Directory -Force -Path "binaries" | Out-Null
-          New-Item -ItemType File -Force -Path "binaries/clickshield_watchdog-$target.exe" | Out-Null
+          New-Item -ItemType File -Force -Path "clickshield_watchdog-$target.exe" | Out-Null
 
       - name: Build watchdog sidecar (Windows)
         working-directory: desktop/src-tauri
@@ -188,9 +185,8 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $target = (rustc -vV | Select-String "host:" | ForEach-Object { $_.Line.Split()[-1] }).Trim()
-          New-Item -ItemType Directory -Force -Path "binaries" | Out-Null
-          Copy-Item "target\release\clickshield_watchdog.exe" "binaries\clickshield_watchdog-$target.exe" -Force
-          Get-ChildItem binaries | Format-Table -AutoSize
+          Copy-Item "target\release\clickshield_watchdog.exe" "clickshield_watchdog-$target.exe" -Force
+          Get-ChildItem . -Filter "clickshield_watchdog-*.exe" | Format-Table -AutoSize
 
       - name: Build desktop app (Windows)
         working-directory: desktop
