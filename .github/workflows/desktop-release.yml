@@ -82,7 +82,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APP_PATH="$(ls -1 desktop/src-tauri/target/release/bundle/macos/*.app | head -n 1 || true)"
+          APP_PATH="$(ls -1d desktop/src-tauri/target/release/bundle/macos/*.app | head -n 1 || true)"
           if [ -z "${APP_PATH}" ]; then
             echo "No .app found to validate"
             exit 1
@@ -95,7 +95,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          APP_PATH="$(ls -1 desktop/src-tauri/target/release/bundle/macos/*.app | head -n 1 || true)"
+          APP_PATH="$(ls -1d desktop/src-tauri/target/release/bundle/macos/*.app | head -n 1 || true)"
           if [ -z "${APP_PATH}" ]; then
             echo "No .app found to verify"
             exit 0
