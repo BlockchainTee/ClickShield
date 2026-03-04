@@ -216,9 +216,14 @@ jobs:
           $ErrorActionPreference = "Stop"
           $tag = "${{ github.ref_name }}"
           $version = $tag.TrimStart("v")
-          $nsisSig = Get-Content "target\release\bundle\nsis\tauri-appclickshield-desktop_${version}_x64-setup.nsis.zip.sig" -Raw
+          # Find the .sig file dynamically (app version in filename may differ from tag)
+          $sigFile = Get-ChildItem "target\release\bundle\nsis\*-setup.nsis.zip.sig" | Select-Object -First 1
+          if (-not $sigFile) { throw "No NSIS .sig file found in target\release\bundle\nsis\" }
+          Write-Host "Found sig file: $($sigFile.Name)"
+          $nsisSig = Get-Content $sigFile.FullName -Raw
+          $nsisZip = $sigFile.Name -replace '\.sig$', ''
           $pubDate = (Get-Date -Format "yyyy-MM-ddTHH:mm:ssZ")
-          $url = "https://github.com/BlockchainTee/ClickShield/releases/download/${tag}/tauri-appclickshield-desktop_${version}_x64-setup.nsis.zip"
+          $url = "https://github.com/BlockchainTee/ClickShield/releases/download/${tag}/${nsisZip}"
           # Load existing latest.json (from macOS build) and add Windows platform
           $existing = Get-Content "latest-existing.json" -Raw | ConvertFrom-Json
           if (-not $existing.platforms) {
