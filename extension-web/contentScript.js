@@ -2,6 +2,14 @@
 
 const href = window.location.href || '';
 
+// Auto-detect browser
+function detectBrowser() {
+  const ua = navigator.userAgent || '';
+  if (ua.includes('Brave')) return 'brave';
+  if (ua.includes('Edg')) return 'edge';
+  return 'chrome';
+}
+
 // Only run on http/https pages
 if (href.startsWith('http://') || href.startsWith('https://')) {
   console.log('[ClickShield][CS] Content script loaded on:', href);
@@ -18,19 +26,23 @@ function scanWithBackground(url) {
     {
       type: 'SCAN_URL',
       url,
-      browser: 'chrome',
+      browser: detectBrowser(),
     },
     (response) => {
+      const shieldMode = (response && response.shieldMode) || 'normal';
+
       if (chrome.runtime.lastError) {
         console.warn(
           '[ClickShield][CS] Message error:',
           chrome.runtime.lastError.message
         );
-        // If backend unreachable, still show neutral badge so user knows shield is present
-        showCornerBadge({
-          riskLevel: 'UNKNOWN',
-          threatType: 'ENGINE_ERROR',
-        });
+        // Only show neutral badge in paranoid mode
+        if (shieldMode === 'paranoid') {
+          showCornerBadge({
+            riskLevel: 'OFFLINE',
+            threatType: 'ENGINE_ERROR',
+          });
+        }
         return;
       }
       if (!response || !response.ok) {
@@ -38,16 +50,21 @@ function scanWithBackground(url) {
           '[ClickShield][CS] Scan failed or no response:',
           response && response.error
         );
-        showCornerBadge({
-          riskLevel: 'UNKNOWN',
-          threatType: 'ENGINE_ERROR',
-        });
+        if (shieldMode === 'paranoid') {
+          const isOffline = response && response.backendOffline;
+          showCornerBadge({
+            riskLevel: isOffline ? 'OFFLINE' : 'UNKNOWN',
+            threatType: 'ENGINE_ERROR',
+          });
+        }
         return;
       }
 
-      console.log('[ClickShield][CS] Raw scan result:', response.data);
-      handleScanResult(response.data && response.data.scan ? response.data.scan : response.data);
-
+      console.log('[ClickShield][CS] Raw scan result:', response.data, 'shieldMode:', shieldMode);
+      handleScanResult(
+        response.data && response.data.scan ? response.data.scan : response.data,
+        shieldMode
+      );
     }
   );
 }
@@ -72,7 +89,7 @@ function normalizeScanResult(result = {}) {
     } catch {
       // keep original
     }
-  
+
     // Support both camelCase and snake_case
     const rawRiskLevel =
       result.riskLevel ||
@@ -80,7 +97,7 @@ function normalizeScanResult(result = {}) {
       result.ruleRiskLevel ||
       result.rule_risk_level ||
       'UNKNOWN';
-  
+
     const rawRiskScore =
       typeof result.riskScore === 'number'
         ? result.riskScore
@@ -91,34 +108,34 @@ function normalizeScanResult(result = {}) {
         : typeof result.rule_score === 'number'
         ? result.rule_score
         : null;
-  
+
     const rawThreatType =
       result.threatType ||
       result.threat_type ||
       result.ruleThreatCategory ||
       result.rule_threat_category ||
       'UNKNOWN';
-  
+
     const riskLevel = String(rawRiskLevel).toUpperCase();
     const riskScore = rawRiskScore;
     const threatType = String(rawThreatType);
-  
+
     const reason =
       result.reason ||
       result.explanation ||
       result.ruleReason ||
       result.rule_reason ||
       'No additional explanation available.';
-  
+
     const baseShortAdvice =
       result.shortAdvice ||
       result.advice ||
       (riskLevel === 'SAFE'
         ? 'Link appears low-risk, but always verify before connecting wallets or logging in.'
         : 'Treat this link as risky. Avoid connecting wallets or entering credentials unless you fully trust the source.');
-  
+
     const url = result.url || result.scannedUrl || window.location.href;
-  
+
     return {
       riskLevel,
       riskScore,
@@ -128,9 +145,9 @@ function normalizeScanResult(result = {}) {
       url,
     };
   }
-  
 
-function handleScanResult(rawResult) {
+
+function handleScanResult(rawResult, shieldMode) {
   const normalized = normalizeScanResult(rawResult);
   const { riskLevel, riskScore, threatType, reason, shortAdvice, url } =
     normalized;
@@ -138,7 +155,7 @@ function handleScanResult(rawResult) {
   console.log('[ClickShield][CS] Normalized scan result:', normalized);
 
   if (riskLevel === 'DANGEROUS') {
-    // Full-screen shield, no corner badge needed
+    // Full-screen shield ALWAYS shows regardless of mode — security-critical
     showFullScreenShield({
       riskLevel,
       riskScore,
@@ -150,12 +167,18 @@ function handleScanResult(rawResult) {
     return;
   }
 
-  // For SAFE / SUSPICIOUS / UNKNOWN, show corner badge
-  showCornerBadge({
-    riskLevel,
-    riskScore,
-    threatType,
-  });
+  // Corner badge only in paranoid mode
+  if (shieldMode === 'paranoid') {
+    showCornerBadge({
+      riskLevel,
+      riskScore,
+      threatType,
+    });
+  } else {
+    // Normal mode: remove any existing badge
+    const existing = document.getElementById('clickshield-corner-badge');
+    if (existing) existing.remove();
+  }
 }
 
 function showFullScreenShield(info) {
@@ -194,7 +217,7 @@ function showFullScreenShield(info) {
 
 function getOverlayHtml(info) {
   const riskLabel = info.riskLevel || 'DANGEROUS';
-  const score = info.riskScore != null ? info.riskScore : '–';
+  const score = info.riskScore != null ? info.riskScore : '\u2013';
   const threatType = info.threatType || 'Unknown';
   const reason = info.reason || '';
   const shortAdvice = info.shortAdvice || '';
@@ -435,28 +458,28 @@ function getOverlayHtml(info) {
       <div class="cs-panel">
         <div class="cs-header-row">
           <div>
-            <div class="cs-product-tag">ClickShield · Web3 Protection</div>
+            <div class="cs-product-tag">ClickShield \u00b7 Web3 Protection</div>
             <h1 class="cs-title">Dangerous link blocked</h1>
             <p class="cs-subtitle">
               We detected high-risk crypto scam patterns on this page. Your wallet and assets may be at risk.
             </p>
           </div>
           <div class="cs-shield">
-            <div class="cs-shield-icon">⚠️</div>
+            <div class="cs-shield-icon">\u26a0\ufe0f</div>
           </div>
         </div>
 
         <div class="cs-body">
-          <div class="cs-url">${escapeHtml(url)}</div>
+          <div class="cs-url">\${escapeHtml(url)}</div>
 
           <div class="cs-risk-row">
-            <div class="cs-risk-badge">${escapeHtml(riskLabel)}</div>
-            <div class="cs-threat-pill">${escapeHtml(threatType)}</div>
-            <div class="cs-score-pill">Risk score: ${escapeHtml(String(score))}</div>
+            <div class="cs-risk-badge">\${escapeHtml(riskLabel)}</div>
+            <div class="cs-threat-pill">\${escapeHtml(threatType)}</div>
+            <div class="cs-score-pill">Risk score: \${escapeHtml(String(score))}</div>
           </div>
 
-          <div class="cs-reason">${escapeHtml(reason)}</div>
-          <div class="cs-advice">${escapeHtml(shortAdvice)}</div>
+          <div class="cs-reason">\${escapeHtml(reason)}</div>
+          <div class="cs-advice">\${escapeHtml(shortAdvice)}</div>
 
           <div class="cs-buttons">
             <button id="clickshield-leave-btn" class="cs-btn-primary">
@@ -511,6 +534,12 @@ function showCornerBadge(info) {
     bg =
       'linear-gradient(135deg, rgba(248,113,113,0.98), rgba(127,29,29,0.98))';
     border = '1px solid rgba(254,202,202,0.95)';
+  } else if (riskLevel === 'OFFLINE') {
+    text = 'ClickShield: OFFLINE';
+    subtext = 'Backend not running \u2014 start server';
+    bg =
+      'linear-gradient(135deg, rgba(239,68,68,0.9), rgba(127,29,29,0.9))';
+    border = '1px solid rgba(252,165,165,0.9)';
   } else {
     text = 'ClickShield: MONITORING';
     subtext = 'Scan pending / limited';

@@ -84,6 +84,7 @@ const STORAGE_KEY = "clickshield.desktop.recentScans.v2";
 const STORAGE_HIDDEN_KEY = "clickshield.desktop.hiddenIds.v2";
 const STORAGE_RESCAN_TRAY_KEY = "clickshield.desktop.rescanTray.v2";
 
+const STORAGE_SHIELD_MODE_KEY = "clickshield.desktop.shieldMode.v1";
 const STORAGE_URL_CACHE_KEY = "clickshield.desktop.urlScanCache.v1";
 const URL_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
@@ -546,6 +547,17 @@ const App: React.FC = () => {
     rescanTrayRef.current = rescanTray;
   }, [rescanTray]);
 
+  // Shield mode: 'normal' = extension badge hidden, 'paranoid' = badge visible
+  const [shieldMode, setShieldMode] = useState<"normal" | "paranoid">(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_SHIELD_MODE_KEY);
+      if (stored === "paranoid") return "paranoid";
+      return "normal";
+    } catch {
+      return "normal";
+    }
+  });
+
   // 5-second recovery: bounded backoff+jitter scheduler while offline/unknown
   const retryTimerRef = useRef<number | null>(null);
   const retryAttemptRef = useRef(0);
@@ -612,6 +624,22 @@ const App: React.FC = () => {
       return res;
     } finally {
       window.clearTimeout(t);
+    }
+  }
+
+  async function pushShieldModeToBackend(mode: "normal" | "paranoid") {
+    try {
+      await fetchJsonWithTimeout(
+        `${BACKEND_BASE}/shield-mode`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ shieldMode: mode }),
+        },
+        FETCH_TIMEOUT_HEALTH_MS
+      );
+    } catch {
+      // fail calm — backend might be offline; mode persisted locally
     }
   }
 
@@ -765,6 +793,7 @@ const App: React.FC = () => {
     // kick once, then poll if needed
     checkHealth();
     fetchRecentScans({ preferCache: true });
+    pushShieldModeToBackend(shieldMode);
 
     const onOnline = () => {
       // ✅ instant recovery when network returns (still bounded by 5s rule)
@@ -793,6 +822,17 @@ const App: React.FC = () => {
     persistAll(recentScans, hiddenIds, rescanTray);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recentScans, hiddenIds, rescanTray]);
+
+  // Persist shield mode changes to localStorage + backend
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_SHIELD_MODE_KEY, shieldMode);
+    } catch {
+      // fail calm
+    }
+    pushShieldModeToBackend(shieldMode);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [shieldMode]);
 
   // =====================================================
   // Rescan tray helpers
@@ -1243,6 +1283,30 @@ const App: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Shield Mode Toggle */}
+            <button
+              onClick={() => setShieldMode((prev) => (prev === "normal" ? "paranoid" : "normal"))}
+              className={`flex items-center gap-2 rounded-full border px-3 py-1.5 text-xs font-semibold transition-all duration-200 ${
+                shieldMode === "paranoid"
+                  ? "border-sky-500/60 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25"
+                  : "border-slate-700 bg-slate-800/60 text-slate-400 hover:bg-slate-700/60 hover:text-slate-200"
+              }`}
+              title={
+                shieldMode === "paranoid"
+                  ? "Paranoid: browser badge visible on every page"
+                  : "Normal: browser badge hidden (shield still active)"
+              }
+            >
+              <span
+                className={`inline-block h-2 w-2 rounded-full transition-colors duration-200 ${
+                  shieldMode === "paranoid" ? "bg-sky-400" : "bg-slate-500"
+                }`}
+              />
+              <span className="uppercase tracking-wide">
+                {shieldMode === "paranoid" ? "Paranoid" : "Normal"}
+              </span>
+            </button>
+
             <div className={`flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${backendBadge}`}>
               <span className={`h-2 w-2 rounded-full ${backendDot}`} />
               <span className="uppercase tracking-wide font-semibold">

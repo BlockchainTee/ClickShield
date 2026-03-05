@@ -1612,6 +1612,33 @@ app.use(enforceOrgIdFromAuth);
 app.use(rateLimitMiddleware);
 
 // =====================================================
+// ============== SHIELD MODE (NORMAL / PARANOID) ======
+// =====================================================
+
+// Shield mode: 'normal' (extension corner badge hidden) or 'paranoid' (badge shown).
+// Stored in-memory; desktop agent re-pushes on every boot.
+let shieldMode = 'normal';
+
+// GET /shield-mode — read current shield mode (no auth, local-only)
+app.get('/shield-mode', (req, res) => {
+  res.json({ ok: true, shieldMode });
+});
+
+// PUT /shield-mode — set shield mode (no auth, local-only desktop agent)
+app.put('/shield-mode', (req, res) => {
+  const mode = (req.body?.shieldMode || '').toString().trim().toLowerCase();
+  if (mode !== 'normal' && mode !== 'paranoid') {
+    return res.status(400).json({
+      ok: false,
+      error: 'shieldMode must be "normal" or "paranoid"',
+    });
+  }
+  shieldMode = mode;
+  logJson('info', 'shield_mode_changed', { shieldMode: mode });
+  res.json({ ok: true, shieldMode });
+});
+
+// =====================================================
 // ================ HEALTH / CURRENT USER ==============
 // =====================================================
 
@@ -2333,7 +2360,7 @@ app.post('/scan-url', requireOrgForWrite, async (req, res) => {
       scanId: scan.id,
     });
 
-    return res.json({ ok: true, scan });
+    return res.json({ ok: true, scan, shieldMode });
   } catch (err) {
     logJson('error', 'scan_error', {
       reqId: getReqId(req),
@@ -2438,7 +2465,7 @@ app.post('/scan-url/rescan', requireAuth, requireOrgForWrite, async (req, res) =
       // swallow
     }
 
-    return res.json({ ok: true, scan: newScan });
+    return res.json({ ok: true, scan: newScan, shieldMode });
   } catch (err) {
     logJson('error', 'scan_rescan_error', {
       reqId: getReqId(req),
