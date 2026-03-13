@@ -37,6 +37,10 @@ const SUSPICIOUS_TLDS: readonly string[] = [
   '.link'
 ]
 
+function extractDomainTokens(domain: string): string[] {
+  return domain.toLowerCase().split(/[.\-_]/g).filter(Boolean)
+}
+
 /**
  * Calculates deterministic phishing risk score for a domain.
  *
@@ -54,6 +58,7 @@ export function calculateDomainRiskScore(
   let score = 0
 
   const normalized = domain.toLowerCase()
+  const domainTokens = extractDomainTokens(normalized)
 
   // DOMAIN AGE SIGNALS
   if (domainAgeHours !== null && domainAgeHours < 24) {
@@ -65,19 +70,21 @@ export function calculateDomainRiskScore(
   }
 
   // CRYPTO BRAND KEYWORDS
-  if (CRYPTO_BRAND_KEYWORDS.some((k) => normalized.includes(k))) {
+  if (CRYPTO_BRAND_KEYWORDS.some((k) => domainTokens.includes(k))) {
     score += 35
     signals.push('CRYPTO_BRAND_KEYWORD')
   }
 
   // PHISHING KEYWORDS
-  if (PHISHING_KEYWORDS.some((k) => normalized.includes(k))) {
+  if (PHISHING_KEYWORDS.some((k) => domainTokens.includes(k))) {
     score += 25
     signals.push('PHISHING_KEYWORD')
   }
 
   // SUSPICIOUS TLD
-  if (SUSPICIOUS_TLDS.some((tld) => normalized.endsWith(tld))) {
+  const parts = normalized.split('.').filter(Boolean)
+  const tld = parts.length > 0 ? parts[parts.length - 1] : ''
+  if (tld && SUSPICIOUS_TLDS.includes(`.${tld}`)) {
     score += 15
     signals.push('SUSPICIOUS_TLD')
   }
