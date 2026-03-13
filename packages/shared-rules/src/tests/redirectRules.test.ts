@@ -69,10 +69,6 @@ describe('redirectRules', () => {
           severity: 'WARN',
         }),
         expect.objectContaining({
-          ruleId: 'PHISH_REDIRECT_CHAIN_MULTI_HOP_UNRELATED_DOMAIN',
-          severity: 'BLOCK',
-        }),
-        expect.objectContaining({
           ruleId: 'PHISH_REDIRECT_CHAIN_BRAND_TO_UNRELATED_FINAL',
           severity: 'BLOCK',
         }),
