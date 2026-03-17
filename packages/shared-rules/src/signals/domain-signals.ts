@@ -1,3 +1,4 @@
+import punycode from "punycode/";
 import {
   extractHostname,
   extractRegistrableDomain,
@@ -65,17 +66,119 @@ const CONFUSABLE_MAP: ReadonlyMap<string, string> = new Map([
   ["\u0421", "C"], // С → C
   ["\u0415", "E"], // Е → E
   ["\u041E", "O"], // О → O
+  ["\u0456", "i"], // і → i
+  ["\u0458", "j"], // ј → j
+  ["\u04CF", "l"], // ӏ → l
   // Greek
   ["\u03B1", "a"], // α → a
   ["\u03BF", "o"], // ο → o
   ["\u03B5", "e"], // ε → e
   ["\u03C1", "p"], // ρ → p
-  // Latin look-alikes
+  ["\u03C4", "t"], // τ → t
+  ["\u03C5", "u"], // υ → u
+  ["\u03C7", "x"], // χ → x
+  // Latin look-alikes / compatibility
   ["\u0131", "i"], // ı (dotless i) → i
   ["\u1D00", "A"], // ᴀ → A
   ["\u0250", "a"], // ɐ → a
   ["\u0261", "g"], // ɡ → g
+  ["\u00DF", "ss"], // ß → ss
+  ["\u0153", "oe"], // œ → oe
 ]);
+
+export interface DomainSignals {
+  hostname: string;
+  asciiHostname: string;
+  unicodeHostname: string;
+  skeletonHostname: string;
+  registrableDomain: string;
+  unicodeRegistrableDomain: string;
+  skeletonRegistrableDomain: string;
+  tld: string;
+  isPunycode: boolean;
+}
+
+function normalizeHostname(hostname: string): string {
+  return hostname.trim().toLowerCase().replace(/\.+$/, "");
+}
+
+function toAsciiHostname(hostname: string): string {
+  const normalized = normalizeHostname(hostname);
+  if (!normalized) return "";
+
+  try {
+    return punycode.toASCII(normalized);
+  } catch {
+    return normalized;
+  }
+}
+
+function toUnicodeHostname(hostname: string): string {
+  const normalized = normalizeHostname(hostname);
+  if (!normalized) return "";
+
+  try {
+    return punycode.toUnicode(normalized);
+  } catch {
+    return normalized;
+  }
+}
+
+function uniqueNonEmpty(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  for (const value of values) {
+    if (!value) continue;
+    seen.add(value);
+  }
+  return [...seen];
+}
+
+function protocolBaseLabel(protocolDomain: string): string {
+  return protocolDomain.split(".")[0] ?? protocolDomain;
+}
+
+function registrableBaseLabel(registrableDomain: string): string {
+  return registrableDomain.split(".")[0] ?? registrableDomain;
+}
+
+export function isPunycodeHostname(hostname: string): boolean {
+  const normalized = normalizeHostname(hostname);
+  if (!normalized) return false;
+  return normalized.split(".").some((label) => label.startsWith("xn--"));
+}
+
+export function getDomainSignals(rawUrl: string): DomainSignals {
+  const extractedHostname = normalizeHostname(extractHostname(rawUrl));
+  if (!extractedHostname) {
+    return {
+      hostname: "",
+      asciiHostname: "",
+      unicodeHostname: "",
+      skeletonHostname: "",
+      registrableDomain: "",
+      unicodeRegistrableDomain: "",
+      skeletonRegistrableDomain: "",
+      tld: "",
+      isPunycode: false,
+    };
+  }
+
+  const asciiHostname = toAsciiHostname(extractedHostname);
+  const unicodeHostname = toUnicodeHostname(asciiHostname);
+  const skeletonHostname = deconfuseHostname(unicodeHostname).toLowerCase();
+
+  return {
+    hostname: extractedHostname,
+    asciiHostname,
+    unicodeHostname,
+    skeletonHostname,
+    registrableDomain: extractRegistrableDomain(asciiHostname),
+    unicodeRegistrableDomain: extractRegistrableDomain(unicodeHostname),
+    skeletonRegistrableDomain: extractRegistrableDomain(skeletonHostname),
+    tld: extractTld(asciiHostname),
+    isPunycode: isPunycodeHostname(asciiHostname),
+  };
+}
 
 /**
  * Check if a domain was recently registered (considered "new" if under threshold).
@@ -105,26 +208,47 @@ export function isNewDomain(
 export function looksLikeProtocolImpersonation(
   rawUrl: string
 ): { target: string; similarityScore: number } | null {
-  const hostname = extractHostname(rawUrl);
-  if (!hostname) return null;
+  const signals = getDomainSignals(rawUrl);
+  if (!signals.registrableDomain) return null;
 
-  const registrable = extractRegistrableDomain(hostname);
+  if (KNOWN_PROTOCOL_DOMAINS.includes(signals.registrableDomain)) {
+    return null;
+  }
+
+  const registrableCandidates = uniqueNonEmpty([
+    signals.registrableDomain,
+    signals.unicodeRegistrableDomain,
+    signals.skeletonRegistrableDomain,
+  ]);
 
   let bestTarget = "";
   let bestScore = 0;
 
   for (const protocol of KNOWN_PROTOCOL_DOMAINS) {
-    if (registrable === protocol) return null;
-
-    const score = stringSimilarity(registrable, protocol);
-    if (score > bestScore) {
-      bestScore = score;
-      bestTarget = protocol;
+    for (const candidate of registrableCandidates) {
+      const score = stringSimilarity(candidate, protocol);
+      if (score > bestScore) {
+        bestScore = score;
+        bestTarget = protocol;
+      }
     }
   }
 
   if (bestScore >= 0.80 && bestTarget) {
     return { target: bestTarget, similarityScore: bestScore };
+  }
+
+  const baseLabelCandidates = uniqueNonEmpty(
+    registrableCandidates.map(registrableBaseLabel)
+  );
+
+  for (const protocol of KNOWN_PROTOCOL_DOMAINS) {
+    const protocolBase = protocolBaseLabel(protocol);
+    for (const candidate of baseLabelCandidates) {
+      if (candidate.includes(protocolBase) && candidate !== protocolBase) {
+        return { target: protocol, similarityScore: 0.80 };
+      }
+    }
   }
 
   return null;
@@ -171,16 +295,23 @@ export function isKnownMaliciousDomain(isKnownMalicious: boolean): boolean {
  * @returns The highest similarity score (0 to 1), or 0 on failure.
  */
 export function domainSimilarityScore(rawUrl: string): number {
-  const hostname = extractHostname(rawUrl);
-  if (!hostname) return 0;
+  const signals = getDomainSignals(rawUrl);
+  if (!signals.registrableDomain) return 0;
 
-  const registrable = extractRegistrableDomain(hostname);
+  const registrableCandidates = uniqueNonEmpty([
+    signals.registrableDomain,
+    signals.unicodeRegistrableDomain,
+    signals.skeletonRegistrableDomain,
+  ]);
+
   let best = 0;
 
   for (const protocol of KNOWN_PROTOCOL_DOMAINS) {
-    const score = stringSimilarity(registrable, protocol);
-    if (score > best) {
-      best = score;
+    for (const candidate of registrableCandidates) {
+      const score = stringSimilarity(candidate, protocol);
+      if (score > best) {
+        best = score;
+      }
     }
   }
 
@@ -194,10 +325,9 @@ export function domainSimilarityScore(rawUrl: string): number {
  * @returns True if the TLD is in the suspicious set.
  */
 export function hasSuspiciousTld(rawUrl: string): boolean {
-  const hostname = extractHostname(rawUrl);
-  if (!hostname) return false;
-  const tld = extractTld(hostname);
-  return SUSPICIOUS_TLDS.has(tld);
+  const signals = getDomainSignals(rawUrl);
+  if (!signals.tld) return false;
+  return SUSPICIOUS_TLDS.has(signals.tld);
 }
 
 /**
@@ -254,10 +384,10 @@ export function containsWalletConnectPattern(rawUrl: string): boolean {
  * @returns True if confusable characters are detected.
  */
 export function hasHomoglyphs(rawUrl: string): boolean {
-  const hostname = extractHostname(rawUrl);
-  if (!hostname) return false;
+  const signals = getDomainSignals(rawUrl);
+  if (!signals.unicodeHostname) return false;
 
-  for (const char of hostname) {
+  for (const char of signals.unicodeHostname) {
     if (CONFUSABLE_MAP.has(char)) return true;
   }
 
@@ -274,9 +404,89 @@ export function hasHomoglyphs(rawUrl: string): boolean {
  */
 export function deconfuseHostname(hostname: string): string {
   let result = "";
-  for (const char of hostname) {
+  for (const char of hostname.normalize("NFKC")) {
     const replacement = CONFUSABLE_MAP.get(char);
     result += replacement ?? char;
   }
   return result;
+}
+export const PROTECTED_BRAND_TOKENS = [
+  "uniswap",
+  "opensea",
+  "metamask",
+  "coinbase",
+  "binance",
+  "blur",
+  "aave",
+  "lido",
+  "trustwallet",
+  "phantom",
+  "rainbow",
+] as const;
+
+export type ProtectedBrandToken = (typeof PROTECTED_BRAND_TOKENS)[number];
+
+export interface SubdomainBrandImpersonationSignal {
+  hostname: string;
+  matchedBrand: ProtectedBrandToken;
+  subdomainLabel: string;
+  registrableDomain: string;
+}
+
+export function getSubdomainBrandImpersonationSignal(
+  hostname: string,
+  registrableDomain: string,
+): SubdomainBrandImpersonationSignal | null {
+  const normalizedHostname = hostname.trim().toLowerCase();
+  const normalizedRegistrableDomain = registrableDomain.trim().toLowerCase();
+
+  if (!normalizedHostname || !normalizedRegistrableDomain) {
+    return null;
+  }
+
+  if (normalizedHostname === normalizedRegistrableDomain) {
+    return null;
+  }
+
+  const hostnameLabels = normalizedHostname.split(".").filter(Boolean);
+  const registrableLabels = normalizedRegistrableDomain.split(".").filter(Boolean);
+
+  if (hostnameLabels.length <= registrableLabels.length) {
+    return null;
+  }
+
+  const suffix = hostnameLabels.slice(-registrableLabels.length).join(".");
+  if (suffix !== normalizedRegistrableDomain) {
+    return null;
+  }
+
+  const subdomainLabels = hostnameLabels.slice(0, hostnameLabels.length - registrableLabels.length);
+  if (subdomainLabels.length === 0) {
+    return null;
+  }
+
+  const registrableRootLabel = registrableLabels[0] ?? "";
+
+  for (const subdomainLabel of subdomainLabels) {
+    const normalizedLabel = subdomainLabel.toLowerCase();
+
+    for (const matchedBrand of PROTECTED_BRAND_TOKENS) {
+      if (!normalizedLabel.includes(matchedBrand)) {
+        continue;
+      }
+
+      if (registrableRootLabel === matchedBrand) {
+        continue;
+      }
+
+      return {
+        hostname: normalizedHostname,
+        matchedBrand,
+        subdomainLabel: normalizedLabel,
+        registrableDomain: normalizedRegistrableDomain,
+      };
+    }
+  }
+
+  return null;
 }
