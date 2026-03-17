@@ -13,6 +13,8 @@ import {
   containsMintKeyword,
   containsWalletConnectPattern,
   deconfuseHostname,
+  getDomainSignals,
+  getSubdomainBrandImpersonationSignal,
   hasHomoglyphs,
   hasSuspiciousTld,
   isIpHost,
@@ -280,17 +282,17 @@ const PUNYCODE_RULES: Rule<NavigationInput>[] = punycodeRules
     eventKind: "navigation",
     severity: "critical",
     outcome: "block",
-    priority: 50 + index,
+    priority: 6 + index,
     predicate(ctx) {
       const domain = extractHostname(ctx.rawUrl);
-      return rule.match({ domain }) !== null;
+      return rule.match({ domain, rawUrl: ctx.rawUrl }) !== null;
     },
     buildReasonCodes() {
       return [rule.id];
     },
     buildEvidence(ctx) {
       const domain = extractHostname(ctx.rawUrl);
-      return rule.match({ domain })?.evidence ?? {};
+      return rule.match({ domain, rawUrl: ctx.rawUrl })?.evidence ?? {};
     },
   }));
 
@@ -324,6 +326,46 @@ const PHISH_DOMAIN_RISK_SCORE: Rule<NavigationInput> = {
   },
 };
 
+const PHISH_SUBDOMAIN_BRAND_IMPERSONATION: Rule<NavigationInput> = {
+  id: "PHISH_SUBDOMAIN_BRAND_IMPERSONATION",
+  name: "Brand token found in subdomain on non-brand registrable domain",
+  eventKind: "navigation",
+  priority: 70,
+  severity: "high",
+  outcome: "block",
+  predicate(ctx) {
+    const signals = getDomainSignals(ctx.rawUrl);
+    const { hostname, registrableDomain } = signals;
+    const signal = getSubdomainBrandImpersonationSignal(
+      hostname,
+      registrableDomain,
+    );
+    return signal !== null;
+  },
+  buildReasonCodes() {
+    return ["PHISH_SUBDOMAIN_BRAND_IMPERSONATION"];
+  },
+  buildEvidence(ctx) {
+    const signals = getDomainSignals(ctx.rawUrl);
+    const { hostname, registrableDomain } = signals;
+    const signal = getSubdomainBrandImpersonationSignal(
+      hostname,
+      registrableDomain,
+    );
+
+    if (!signal) {
+      return {};
+    }
+
+    return {
+      hostname,
+      registrableDomain,
+      matchedBrand: signal.matchedBrand,
+      subdomainLabel: signal.subdomainLabel,
+    };
+  },
+};
+
 /** All phishing rules, exported for registry consumption. */
 export const PHISHING_RULES: readonly Rule<NavigationInput>[] = [
   PHISH_KNOWN_MALICIOUS_DOMAIN,
@@ -336,4 +378,5 @@ export const PHISHING_RULES: readonly Rule<NavigationInput>[] = [
   ...LOOKALIKE_RULES,
   ...PUNYCODE_RULES,
   PHISH_DOMAIN_RISK_SCORE,
+  PHISH_SUBDOMAIN_BRAND_IMPERSONATION,
 ];
