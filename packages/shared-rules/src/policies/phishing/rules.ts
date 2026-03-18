@@ -30,6 +30,7 @@ import { PHISHING_CODES } from "./codes.js";
 import { punycodeRules } from "./punycodeRules.js";
 import { PHISH_REDIRECT_CHAIN_ABUSE } from "./redirectChainRules.js";
 import { PHISH_UNICODE_CONFUSABLE } from "./unicodeConfusableRules.js";
+import { PHISH_DOMAIN_HIGH_ENTROPY } from "./domainEntropyRules.js";
 
 const PHISH_IMPERSONATION_NEW_DOMAIN: Rule<NavigationInput> = {
   id: "PHISH_IMPERSONATION_NEW_DOMAIN",
@@ -385,4 +386,5 @@ export const PHISHING_RULES: readonly Rule<NavigationInput>[] = [
   PHISH_SUBDOMAIN_BRAND_IMPERSONATION,
   PHISH_UNICODE_CONFUSABLE,
   PHISH_REDIRECT_CHAIN_ABUSE,
+  PHISH_DOMAIN_HIGH_ENTROPY,
 ];
