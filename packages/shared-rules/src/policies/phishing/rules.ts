@@ -27,6 +27,7 @@ import { evaluateDomainRiskRule } from "./domainRiskRule.js";
 import { lookalikeRules } from "./lookalikeRules.js";
 import { PHISHING_CODES } from "./codes.js";
 import { punycodeRules } from "./punycodeRules.js";
+import { PHISH_REDIRECT_CHAIN_ABUSE } from "./redirectChainRules.js";
 
 const PHISH_IMPERSONATION_NEW_DOMAIN: Rule<NavigationInput> = {
   id: "PHISH_IMPERSONATION_NEW_DOMAIN",
@@ -379,4 +380,5 @@ export const PHISHING_RULES: readonly Rule<NavigationInput>[] = [
   ...PUNYCODE_RULES,
   PHISH_DOMAIN_RISK_SCORE,
   PHISH_SUBDOMAIN_BRAND_IMPERSONATION,
+  PHISH_REDIRECT_CHAIN_ABUSE,
 ];
