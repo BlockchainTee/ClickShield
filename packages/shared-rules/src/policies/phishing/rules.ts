@@ -24,6 +24,7 @@ import {
   matchedLureKeywords,
 } from "../../signals/domain-signals.js";
 import { evaluateDomainRiskRule } from "./domainRiskRule.js";
+import { PHISH_BRAND_LURE } from "./brandLureRules.js";
 import { lookalikeRules } from "./lookalikeRules.js";
 import { PHISHING_CODES } from "./codes.js";
 import { punycodeRules } from "./punycodeRules.js";
@@ -380,6 +381,7 @@ export const PHISHING_RULES: readonly Rule<NavigationInput>[] = [
   ...LOOKALIKE_RULES,
   ...PUNYCODE_RULES,
   PHISH_DOMAIN_RISK_SCORE,
+  PHISH_BRAND_LURE,
   PHISH_SUBDOMAIN_BRAND_IMPERSONATION,
   PHISH_UNICODE_CONFUSABLE,
   PHISH_REDIRECT_CHAIN_ABUSE,
