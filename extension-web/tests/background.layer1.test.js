@@ -178,9 +178,36 @@ function bundleFromSections(input) {
     publisher: 'clickshield-intel',
     signingKeyId: 'clickshield-ed25519-v1',
     sections,
-    signature: 'test-signature',
+    signature: input.signature ?? 'test-signature',
     maliciousDomains: input.maliciousDomains,
     allowlists: input.allowlists,
+  };
+}
+
+function createInMemoryFeedStorage({ cache = null, lastKnownGood = null, metadata = null } = {}) {
+  const state = {
+    cache,
+    lastKnownGood,
+    metadata,
+  };
+
+  return {
+    async loadRawBundle(slot) {
+      return slot === 'cache' ? state.cache : state.lastKnownGood;
+    },
+    async saveRawBundle(slot, bundle) {
+      if (slot === 'cache') {
+        state.cache = bundle;
+        return;
+      }
+      state.lastKnownGood = bundle;
+    },
+    async loadMetadata() {
+      return state.metadata;
+    },
+    async saveMetadata(nextMetadata) {
+      state.metadata = nextMetadata;
+    },
   };
 }
 
@@ -211,7 +238,7 @@ test('allow verdict preserves normal browsing path', () => {
 });
 
 test('validated snapshot is loaded outside evaluation and drives navigation intel synchronously', async () => {
-  const loadResult = loadNavigationIntelSnapshot(
+  const loadResult = await loadNavigationIntelSnapshot(
     bundleFromSections({
       maliciousDomains: maliciousSection([
         maliciousItem({
@@ -274,7 +301,7 @@ test('validated snapshot is loaded outside evaluation and drives navigation inte
 });
 
 test('runtime activation path loads the live snapshot used by otherwise-allow navigation', async () => {
-  const activationResult = activateRuntimeNavigationIntelSnapshot({
+  const activationResult = await activateRuntimeNavigationIntelSnapshot({
     bundle: bundleFromSections({
       maliciousDomains: maliciousSection([]),
       allowlists: allowlistsSection([]),
@@ -319,8 +346,86 @@ test('runtime activation path loads the live snapshot used by otherwise-allow na
   assert.equal(shouldFailSafeWarnOnSignalFailure(localResult.verdict, intel), false);
 });
 
-test('allowlist exact-host resolution beats a broader malicious registrable-domain match at the adapter boundary', () => {
-  const loadResult = loadNavigationIntelSnapshot(
+test('startup uses bundled seed immediately while async persisted-state restore is still pending', async () => {
+  let releaseStorageReads;
+  const readsReleased = new Promise((resolve) => {
+    releaseStorageReads = resolve;
+  });
+  const delayedStorage = {
+    async loadRawBundle() {
+      await readsReleased;
+      return null;
+    },
+    async saveRawBundle() {},
+    async loadMetadata() {
+      await readsReleased;
+      return null;
+    },
+    async saveMetadata() {},
+  };
+
+  const activationPromise = activateRuntimeNavigationIntelSnapshot({
+    now: NOW,
+    storage: delayedStorage,
+    signatureVerifier: () => true,
+  });
+
+  const intel = resolveNavigationDomainIntel('https://safe-site.example/docs');
+  assert.equal(intel.domainLookup.disposition, 'no_match');
+  assert.equal(intel.domainLookup.sectionState, 'fresh');
+  assert.equal(intel.degradedProtection, false);
+  assert.equal(intel.bundleVersion, '2026-03-21T18:00:00Z.extension-bundled-navigation-intel');
+
+  releaseStorageReads();
+  const activationResult = await activationPromise;
+  assert.equal(activationResult.ok, true);
+});
+
+test('cache invalid and last-known-good valid restores last-known-good deterministically', async () => {
+  const invalidCache = bundleFromSections({
+    maliciousDomains: maliciousSection([]),
+    allowlists: allowlistsSection([]),
+    signature: 'invalid-signature',
+  });
+  const lastKnownGood = bundleFromSections({
+    maliciousDomains: maliciousSection([
+      maliciousItem({
+        domain: 'last-known-good.example',
+        type: 'exact_host',
+        identity: 'exact_host:last-known-good.example',
+      }),
+    ]),
+    allowlists: allowlistsSection([]),
+  });
+  const storage = createInMemoryFeedStorage({
+    cache: invalidCache,
+    lastKnownGood,
+  });
+
+  const activationResult = await activateRuntimeNavigationIntelSnapshot({
+    now: NOW,
+    storage,
+    signatureVerifier: (envelope) => envelope.signature === 'test-signature',
+  });
+
+  assert.equal(activationResult.ok, true);
+  assert.deepEqual(getNavigationIntelSnapshotState(), {
+    active: true,
+    bundleVersion: '2026-03-21T18:00:00Z.extension-test-bundle',
+    sectionStates: {
+      maliciousDomains: 'fresh',
+      allowlists: 'fresh',
+    },
+    issues: [],
+  });
+
+  const intel = resolveNavigationDomainIntel('https://last-known-good.example/connect');
+  assert.equal(intel.domainLookup.disposition, 'malicious');
+  assert.equal(intel.isKnownMaliciousDomain, true);
+});
+
+test('allowlist exact-host resolution beats a broader malicious registrable-domain match at the adapter boundary', async () => {
+  const loadResult = await loadNavigationIntelSnapshot(
     bundleFromSections({
       maliciousDomains: maliciousSection([
         maliciousItem({
@@ -391,8 +496,8 @@ test('missing snapshot drives degraded protection at the extension boundary', ()
   assert.equal(failSafe.degradedProtection, true);
 });
 
-test('invalid snapshot load is rejected and leaves the surface in degraded protection', () => {
-  const loadResult = loadNavigationIntelSnapshot(
+test('invalid snapshot load is rejected and leaves the surface in degraded protection', async () => {
+  const loadResult = await loadNavigationIntelSnapshot(
     bundleFromSections({
       maliciousDomains: maliciousSection([]),
       allowlists: allowlistsSection([]),
@@ -412,8 +517,8 @@ test('invalid snapshot load is rejected and leaves the surface in degraded prote
   assert.equal(intel.degradedProtection, true);
 });
 
-test('expired snapshot keeps lookup deterministic and unavailable', () => {
-  const loadResult = loadNavigationIntelSnapshot(
+test('expired snapshot keeps lookup deterministic and unavailable', async () => {
+  const loadResult = await loadNavigationIntelSnapshot(
     bundleFromSections({
       maliciousDomains: maliciousSection([], {
         staleAfter: '2026-03-20T18:00:00Z',
@@ -622,7 +727,7 @@ test('redirect tracker ignores non-main-frame events', () => {
 });
 
 test('domain-age lookup failure still drives fail-safe warning for otherwise-allow traffic', async () => {
-  loadNavigationIntelSnapshot(
+  await loadNavigationIntelSnapshot(
     bundleFromSections({
       maliciousDomains: maliciousSection([]),
       allowlists: allowlistsSection([]),

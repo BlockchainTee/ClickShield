@@ -36,6 +36,9 @@ describe("root public API", () => {
     expect("hasUnlimitedApprovals" in SharedRules).toBe(false);
     expect("isExecutableFile" in SharedRules).toBe(false);
     expect("normalizeEvmAddress" in SharedRules).toBe(false);
+    expect("DomainIntelFeedManager" in SharedRules).toBe(false);
+    expect("DomainIntelFeedStorage" in SharedRules).toBe(false);
+    expect("DomainIntelFeedStorageMetadata" in SharedRules).toBe(false);
   });
 
   it("handles malformed raw URLs deterministically through the public entrypoint", () => {

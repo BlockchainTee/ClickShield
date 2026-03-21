@@ -13,9 +13,13 @@ import {
   getVerdictTitle,
   riskBadgeLabel,
   extractRegistrableDomain,
-  compileDomainIntelSnapshot,
   resolveDomainIntel as resolveSnapshotDomainIntel,
 } from './lib/shared-rules.js';
+import { NavigationIntelFeedManager } from './navigationIntelManager.js';
+import {
+  createMemoryNavigationIntelStorage,
+  createNavigationIntelFeedStorage,
+} from './navigationIntelStorage.js';
 
 const API_BASE = 'http://localhost:4000';
 const SIGNAL_TIMEOUT_MS = 1_500;
@@ -221,17 +225,78 @@ const redirectTracker = new MainFrameRedirectTracker();
 
 // ── Layer 2 domain intel surface adapter ────────────────────────────────────
 
-let activeNavigationIntelSnapshot = null;
-let lastNavigationIntelActivationFailure = null;
+let navigationIntelStorage = createNavigationIntelFeedStorage();
+let navigationIntelManager = createNavigationIntelManager({
+  storage: navigationIntelStorage,
+});
 
-function domainSectionStates(snapshot) {
-  if (!snapshot) {
-    return MISSING_DOMAIN_INTEL_SECTION_STATES;
+function createNavigationIntelManager(deps = {}) {
+  return new NavigationIntelFeedManager({
+    seedBundle: deps.seedBundle ?? BUNDLED_NAVIGATION_INTEL_BUNDLE,
+    storage: deps.storage ?? navigationIntelStorage,
+    now: deps.now,
+    activateSeed: deps.activateSeed,
+    signatureVerifier:
+      typeof deps.signatureVerifier === 'function'
+        ? deps.signatureVerifier
+        : verifyBundledNavigationIntelEnvelope,
+  });
+}
+
+function configureNavigationIntelManager(deps = {}) {
+  const shouldReset =
+    deps.reset === true ||
+    Boolean(deps.storage) ||
+    Object.prototype.hasOwnProperty.call(deps, 'seedBundle') ||
+    Object.prototype.hasOwnProperty.call(deps, 'activateSeed');
+
+  if (!navigationIntelManager || shouldReset) {
+    if (deps.storage) {
+      navigationIntelStorage = deps.storage;
+    } else if (deps.reset === true) {
+      navigationIntelStorage = createNavigationIntelFeedStorage();
+    }
+
+    navigationIntelManager = createNavigationIntelManager({
+      storage: navigationIntelStorage,
+      seedBundle: deps.seedBundle,
+      signatureVerifier:
+        typeof deps.signatureVerifier === 'function'
+          ? deps.signatureVerifier
+          : undefined,
+      now: deps.now,
+      activateSeed: deps.activateSeed,
+    });
+  } else {
+    if (typeof deps.signatureVerifier === 'function') {
+      navigationIntelManager.signatureVerifier = deps.signatureVerifier;
+    }
+    if (Object.prototype.hasOwnProperty.call(deps, 'now')) {
+      navigationIntelManager.now = deps.now;
+    }
+  }
+
+  return navigationIntelManager;
+}
+
+function mapNavigationIntelResult(result) {
+  const state = result.state;
+
+  if (!result.ok) {
+    return {
+      ok: false,
+      issues: result.issues,
+      bundleVersion: state.bundleVersion,
+      sectionStates: state.sectionStates,
+      activeSnapshot: getNavigationIntelSnapshotState(),
+    };
   }
 
   return {
-    maliciousDomains: snapshot.sections.maliciousDomains.state,
-    allowlists: snapshot.sections.allowlists.state,
+    ok: true,
+    issues: result.issues,
+    bundleVersion: state.bundleVersion,
+    sectionStates: state.sectionStates,
   };
 }
 
@@ -276,78 +341,32 @@ function noMatchDomainLookup(sectionState, degradedProtection, allowlistFeedVers
 }
 
 export function clearNavigationIntelSnapshot() {
-  activeNavigationIntelSnapshot = null;
-  lastNavigationIntelActivationFailure = null;
+  navigationIntelStorage = createMemoryNavigationIntelStorage();
+  navigationIntelManager = createNavigationIntelManager({
+    storage: navigationIntelStorage,
+    activateSeed: false,
+  });
 }
 
 export function getNavigationIntelSnapshotState() {
-  if (!activeNavigationIntelSnapshot) {
-    const inactiveSectionState =
-      lastNavigationIntelActivationFailure?.sectionState ?? 'missing';
-    return {
-      active: false,
-      bundleVersion: null,
-      sectionStates: {
-        maliciousDomains: inactiveSectionState,
-        allowlists: MISSING_DOMAIN_INTEL_SECTION_STATES.allowlists,
-      },
-      issues: lastNavigationIntelActivationFailure?.issues ?? [],
-    };
-  }
+  const state = configureNavigationIntelManager().getState();
 
   return {
-    active: true,
-    bundleVersion: activeNavigationIntelSnapshot.bundleVersion,
-    sectionStates: domainSectionStates(activeNavigationIntelSnapshot),
-    issues: [],
+    active: state.active,
+    bundleVersion: state.bundleVersion,
+    sectionStates: state.sectionStates ?? MISSING_DOMAIN_INTEL_SECTION_STATES,
+    issues: state.issues,
   };
 }
 
-export function loadNavigationIntelSnapshot(bundle, deps = {}) {
-  const compileResult = compileDomainIntelSnapshot(bundle, {
+export async function loadNavigationIntelSnapshot(bundle, deps = {}) {
+  const manager = configureNavigationIntelManager({
+    storage: deps.storage,
+    signatureVerifier: deps.signatureVerifier,
     now: deps.now,
-    signatureVerifier:
-      typeof deps.signatureVerifier === 'function'
-        ? deps.signatureVerifier
-        : () => false,
   });
-
-  if (!compileResult.ok) {
-    lastNavigationIntelActivationFailure = {
-      sectionState: 'invalid',
-      issues: compileResult.issues,
-    };
-    return {
-      ok: false,
-      issues: compileResult.issues,
-      activeSnapshot: getNavigationIntelSnapshotState(),
-    };
-  }
-
-  const maliciousDomainState = compileResult.snapshot.sections.maliciousDomains.state;
-  if (maliciousDomainState === 'missing' || maliciousDomainState === 'invalid') {
-    lastNavigationIntelActivationFailure = {
-      sectionState: maliciousDomainState,
-      issues: compileResult.issues,
-    };
-    return {
-      ok: false,
-      issues: compileResult.issues,
-      bundleVersion: compileResult.snapshot.bundleVersion,
-      sectionStates: domainSectionStates(compileResult.snapshot),
-      activeSnapshot: getNavigationIntelSnapshotState(),
-    };
-  }
-
-  activeNavigationIntelSnapshot = compileResult.snapshot;
-  lastNavigationIntelActivationFailure = null;
-
-  return {
-    ok: true,
-    issues: compileResult.issues,
-    bundleVersion: compileResult.snapshot.bundleVersion,
-    sectionStates: domainSectionStates(compileResult.snapshot),
-  };
+  const result = await manager.activateBundle(bundle);
+  return mapNavigationIntelResult(result);
 }
 
 function verifyBundledNavigationIntelEnvelope(envelope) {
@@ -361,31 +380,34 @@ function verifyBundledNavigationIntelEnvelope(envelope) {
   );
 }
 
-export function activateRuntimeNavigationIntelSnapshot(deps = {}) {
-  const bundle = deps.bundle ?? BUNDLED_NAVIGATION_INTEL_BUNDLE;
-  const result = loadNavigationIntelSnapshot(bundle, {
+export async function activateRuntimeNavigationIntelSnapshot(deps = {}) {
+  const manager = configureNavigationIntelManager({
+    storage: deps.storage,
+    signatureVerifier: deps.signatureVerifier,
     now: deps.now,
-    signatureVerifier:
-      typeof deps.signatureVerifier === 'function'
-        ? deps.signatureVerifier
-        : verifyBundledNavigationIntelEnvelope,
   });
+  const result = deps.bundle
+    ? await manager.activateBundle(deps.bundle)
+    : await manager.initialize();
+  const mappedResult = mapNavigationIntelResult(result);
 
-  if (!result.ok) {
+  if (!mappedResult.ok) {
     console.warn(
       '[ClickShield][BG] Navigation intel activation failed:',
-      result.issues.map((issue) => `${issue.path}: ${issue.message}`).join('; ') || 'unknown error',
+      mappedResult.issues.map((issue) => `${issue.path}: ${issue.message}`).join('; ') ||
+        'unknown error',
     );
   } else {
-    console.log('[ClickShield][BG] Navigation intel activated:', result.bundleVersion);
+    console.log('[ClickShield][BG] Navigation intel activated:', mappedResult.bundleVersion);
   }
 
-  return result;
+  return mappedResult;
 }
 
 export function resolveNavigationDomainIntel(rawUrl) {
   const domain = safeHostname(rawUrl);
-  const snapshot = activeNavigationIntelSnapshot;
+  const manager = configureNavigationIntelManager();
+  const snapshot = manager.getActiveSnapshot();
   const sectionStates = getNavigationIntelSnapshotState().sectionStates;
   const feedVersion = usableMaliciousFeedVersion(snapshot);
   const domainAllowlistVersion = usableDomainAllowlistVersion(snapshot);
@@ -708,7 +730,7 @@ function buildRedirectContextForScan(tabId, currentUrl) {
 }
 
 function attachRuntimeListeners() {
-  activateRuntimeNavigationIntelSnapshot();
+  void activateRuntimeNavigationIntelSnapshot();
 
   // ── Redirect tracking via webRequest ──
   chrome.webRequest.onBeforeRequest.addListener(
@@ -738,14 +760,14 @@ function attachRuntimeListeners() {
   // Run health check + fetch shield mode on install and startup
   chrome.runtime.onInstalled.addListener(() => {
     console.log('ClickShield Web3 Protection installed.');
-    activateRuntimeNavigationIntelSnapshot();
+    void activateRuntimeNavigationIntelSnapshot();
     void checkBackendHealth();
     void fetchShieldMode();
   });
 
   chrome.runtime.onStartup.addListener(() => {
     console.log('ClickShield Web3 Protection started.');
-    activateRuntimeNavigationIntelSnapshot();
+    void activateRuntimeNavigationIntelSnapshot();
     void checkBackendHealth();
     void fetchShieldMode();
   });
