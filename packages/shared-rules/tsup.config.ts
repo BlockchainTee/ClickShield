@@ -8,6 +8,7 @@ export default defineConfig({
   clean: true,
   splitting: false,
   outDir: "dist",
+  noExternal: [/^punycode(\/.*)?$/, /^tldts(\/.*)?$/],
   outExtension({ format }) {
     return {
       js: format === "cjs" ? ".cjs" : ".js",
