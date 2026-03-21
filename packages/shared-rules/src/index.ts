@@ -55,3 +55,36 @@ export {
 // ── Policy Codes ──
 export { PHISHING_CODES } from "./policies/phishing/codes.js";
 export type { PhishingCode } from "./policies/phishing/codes.js";
+
+// ── Layer 2 Intel (Phase A) ──
+export {
+  compileDomainIntelSnapshot,
+} from "./intel/compile.js";
+export { resolveDomainIntel } from "./intel/resolve-domain.js";
+export { validateDomainIntelBundle } from "./intel/validate.js";
+export type {
+  CompileDomainIntelSnapshotOptions,
+  CompiledDomainAllowlistItem,
+  CompiledDomainAllowlistsSection,
+  CompiledDomainIntelSnapshot,
+  CompiledMaliciousDomainItem,
+  CompiledMaliciousDomainsSection,
+  DomainAllowlistsSection,
+  DomainIntelBundle,
+  DomainIntelCompileFailure,
+  DomainIntelCompileResult,
+  DomainIntelCompileSuccess,
+  DomainIntelSectionMetadata,
+  DomainIntelSectionName,
+  DomainIntelSectionValidationReport,
+  DomainIntelSignatureEnvelope,
+  DomainIntelValidationOptions,
+  DomainIntelValidationReport,
+  DomainAllowlistFeedItem,
+  DomainLookupDisposition,
+  DomainLookupResult,
+  IntelValidationIssue,
+  Layer2SectionState,
+  MaliciousDomainFeedItem,
+  MaliciousDomainsSection,
+} from "./intel/types.js";
