@@ -1,0 +1,9 @@
+{
+  "feedType": "maliciousDomains",
+  "feedVersion": "2026-03-21.0",
+  "itemCount": 0,
+  "sha256": "96f9f3d640a33a173673d7a6f12ae251492c0b0300a27dcc28309051d5d19ffc",
+  "staleAfter": "2026-03-22T18:00:00Z",
+  "expiresAt": "2026-03-24T18:00:00Z",
+  "items": []
+}

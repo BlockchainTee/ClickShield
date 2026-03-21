@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "1.0.0",
+  "bundleFamily": "navigation",
+  "bundleVersion": "2026-03-21T18:30:00Z.navigation-static-v1",
+  "generatedAt": "2026-03-21T18:30:00Z",
+  "publisher": "clickshield-intel",
+  "signingKeyId": "clickshield-static-v1",
+  "bundleUrl": "/intel/feeds/navigation/bundles/2026-03-21T18:30:00Z.navigation-static-v1/bundle.json",
+  "sections": {
+    "maliciousDomains": {
+      "feedVersion": "2026-03-21.0",
+      "itemCount": 0,
+      "sha256": "96f9f3d640a33a173673d7a6f12ae251492c0b0300a27dcc28309051d5d19ffc",
+      "staleAfter": "2026-03-22T18:00:00Z",
+      "expiresAt": "2026-03-24T18:00:00Z"
+    },
+    "allowlists": {
+      "feedVersion": "2026-03-21.0",
+      "itemCount": 0,
+      "sha256": "d63f22eec1411074d6664f5c82377bd42555b5370e50c9304790a78aac3e4a88",
+      "staleAfter": "2026-03-22T18:00:00Z",
+      "expiresAt": "2026-03-23T18:00:00Z"
+    }
+  },
+  "signature": "clickshield-static-v1|bundleFamily=navigation|schemaVersion=1.0.0|bundleVersion=2026-03-21T18:30:00Z.navigation-static-v1|generatedAt=2026-03-21T18:30:00Z|publisher=clickshield-intel|signingKeyId=clickshield-static-v1|bundleUrl=/intel/feeds/navigation/bundles/2026-03-21T18:30:00Z.navigation-static-v1/bundle.json|maliciousDomains=2026-03-21.0:96f9f3d640a33a173673d7a6f12ae251492c0b0300a27dcc28309051d5d19ffc|allowlists=2026-03-21.0:d63f22eec1411074d6664f5c82377bd42555b5370e50c9304790a78aac3e4a88"
+}

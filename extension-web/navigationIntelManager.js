@@ -5,6 +5,14 @@ const DEFAULT_MISSING_SECTION_STATES = Object.freeze({
   allowlists: 'missing',
 });
 
+function cloneJsonValue(value) {
+  if (value === null || typeof value === 'undefined') {
+    return null;
+  }
+
+  return JSON.parse(JSON.stringify(value));
+}
+
 function resolveNow(input) {
   if (typeof input === 'function') {
     return input();
@@ -85,6 +93,29 @@ function versionsFromSnapshot(snapshot) {
   };
 }
 
+function metadataSectionsFromSnapshot(snapshot) {
+  if (!snapshot) {
+    return null;
+  }
+
+  return {
+    maliciousDomains: {
+      feedVersion: snapshot.sections.maliciousDomains.feedVersion ?? null,
+      staleAfter: snapshot.sections.maliciousDomains.staleAfter ?? null,
+      expiresAt: snapshot.sections.maliciousDomains.expiresAt ?? null,
+      itemCount: snapshot.sections.maliciousDomains.itemCount,
+      state: snapshot.sections.maliciousDomains.state,
+    },
+    allowlists: {
+      feedVersion: snapshot.sections.allowlists.feedVersion ?? null,
+      staleAfter: snapshot.sections.allowlists.staleAfter ?? null,
+      expiresAt: snapshot.sections.allowlists.expiresAt ?? null,
+      itemCount: snapshot.sections.allowlists.itemCount,
+      state: snapshot.sections.allowlists.state,
+    },
+  };
+}
+
 function isActivatableDomainSnapshot(snapshot) {
   const maliciousState = snapshot.sections.maliciousDomains.state;
   return maliciousState !== 'missing' && maliciousState !== 'invalid';
@@ -160,6 +191,19 @@ export class NavigationIntelFeedManager {
     return this.activeSnapshot;
   }
 
+  getMetadata() {
+    return cloneJsonValue(this.storageMetadata);
+  }
+
+  async mergeMetadata(patch) {
+    this.storageMetadata = {
+      ...(this.storageMetadata ?? {}),
+      ...cloneJsonValue(patch),
+    };
+    await this.storage.saveMetadata(this.storageMetadata);
+    return this.getMetadata();
+  }
+
   getState() {
     const sectionStates = this.activeSnapshot
       ? sectionStatesFromSnapshot(this.activeSnapshot)
@@ -191,7 +235,7 @@ export class NavigationIntelFeedManager {
       attemptedSources.push('cache');
       const cachedResult = await this.activateBundleInternal(cachedBundle, 'cache', {
         persistCache: false,
-        persistLastKnownGood: true,
+        persistLastKnownGood: false,
       });
       if (cachedResult.ok) {
         return {
@@ -313,6 +357,10 @@ export class NavigationIntelFeedManager {
       lastActivationAt: resolveTimestampIso(this.now),
       lastActivationSource: source,
       lastActivatedBundleVersion: result.snapshot.bundleVersion,
+      aggregateVersion: versionsFromSnapshot(result.snapshot).aggregateVersion,
+      activeSchemaVersion: result.snapshot.schemaVersion,
+      activeGeneratedAt: result.snapshot.generatedAt,
+      activeSections: metadataSectionsFromSnapshot(result.snapshot),
       ...(options.persistCache
         ? {
             cacheUpdatedAt: resolveTimestampIso(this.now),

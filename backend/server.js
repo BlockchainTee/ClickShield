@@ -39,6 +39,8 @@ console.log(
 
 const app = express();
 const PORT = process.env.PORT || 4000;
+const NAVIGATION_FEEDS_ROOT = path.join(__dirname, 'feeds', 'navigation');
+const NAVIGATION_BUNDLES_ROOT = path.join(NAVIGATION_FEEDS_ROOT, 'bundles');
 // === CLICKSHIELD:SECTION:AI_SETUP ===
 // NOTE: Declare early so routes can safely reference it (prevents TDZ ReferenceError).
 let openai = null;
@@ -1574,6 +1576,29 @@ function normalizeProviderFromParam(providerParam) {
   return null;
 }
 
+function sendJsonFile(res, filePath, cacheControl) {
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  if (cacheControl) {
+    res.setHeader('Cache-Control', cacheControl);
+  }
+  res.sendFile(filePath);
+}
+
+function navigationBundleFilePath(bundleVersion) {
+  const decodedVersion = decodeURIComponent((bundleVersion || '').toString());
+  const resolvedPath = path.resolve(
+    NAVIGATION_BUNDLES_ROOT,
+    decodedVersion,
+    'bundle.json'
+  );
+
+  if (!resolvedPath.startsWith(`${NAVIGATION_BUNDLES_ROOT}${path.sep}`)) {
+    return null;
+  }
+
+  return resolvedPath;
+}
+
 // =====================================================
 // ===================== MIDDLEWARE ====================
 // =====================================================
@@ -1652,6 +1677,30 @@ app.get('/health', (req, res) => {
     dbAvailable,
     checkedAt: new Date().toISOString(),
   });
+});
+
+app.get('/intel/feeds/navigation/manifest.json', (req, res) => {
+  const manifestPath = path.join(NAVIGATION_FEEDS_ROOT, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) {
+    return res.status(404).json({
+      ok: false,
+      error: 'Navigation feed manifest not found',
+    });
+  }
+
+  return sendJsonFile(res, manifestPath, 'no-store');
+});
+
+app.get('/intel/feeds/navigation/bundles/:bundleVersion/bundle.json', (req, res) => {
+  const bundlePath = navigationBundleFilePath(req.params.bundleVersion);
+  if (!bundlePath || !fs.existsSync(bundlePath)) {
+    return res.status(404).json({
+      ok: false,
+      error: 'Navigation feed bundle not found',
+    });
+  }
+
+  return sendJsonFile(res, bundlePath, 'public, max-age=31536000, immutable');
 });
 
 // Deep health: DB + AI + queue
@@ -3851,5 +3900,4 @@ app.listen(PORT, () => {
     })`
   );
 });
-
 

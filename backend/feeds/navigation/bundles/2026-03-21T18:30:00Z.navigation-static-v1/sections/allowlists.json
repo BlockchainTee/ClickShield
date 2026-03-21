@@ -1,0 +1,9 @@
+{
+  "feedType": "allowlists",
+  "feedVersion": "2026-03-21.0",
+  "itemCount": 0,
+  "sha256": "d63f22eec1411074d6664f5c82377bd42555b5370e50c9304790a78aac3e4a88",
+  "staleAfter": "2026-03-22T18:00:00Z",
+  "expiresAt": "2026-03-23T18:00:00Z",
+  "items": []
+}

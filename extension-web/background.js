@@ -25,6 +25,11 @@ const API_BASE = 'http://localhost:4000';
 const SIGNAL_TIMEOUT_MS = 1_500;
 const DOMAIN_AGE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const REDIRECT_CHAIN_MAX_AGE_MS = 15_000;
+const NAVIGATION_INTEL_MANIFEST_PATH = '/intel/feeds/navigation/manifest.json';
+const NAVIGATION_INTEL_REFRESH_ALARM = 'navigationIntelRefresh';
+const NAVIGATION_INTEL_REFRESH_INTERVAL_MINUTES = 15;
+const NAVIGATION_INTEL_RECOVERY_INTERVAL_MINUTES = 5;
+const STATIC_NAVIGATION_SIGNING_KEY_ID = 'clickshield-static-v1';
 const MISSING_DOMAIN_INTEL_SECTION_STATES = Object.freeze({
   maliciousDomains: 'missing',
   allowlists: 'missing',
@@ -118,6 +123,255 @@ async function fetchJsonWithTimeout(url, timeoutMs = SIGNAL_TIMEOUT_MS, fetchImp
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+function resolveTimestampIso(input) {
+  if (input instanceof Date) {
+    return input.toISOString();
+  }
+
+  if (typeof input === 'number' || typeof input === 'string') {
+    return new Date(input).toISOString();
+  }
+
+  return new Date().toISOString();
+}
+
+function isRecord(value) {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readNonEmptyString(value) {
+  return typeof value === 'string' && value.trim() !== '' ? value : null;
+}
+
+function isFiniteNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function readSectionMetadata(value) {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const feedVersion = readNonEmptyString(value.feedVersion);
+  const sha256 = readNonEmptyString(value.sha256);
+  const staleAfter = readNonEmptyString(value.staleAfter);
+  const expiresAt = readNonEmptyString(value.expiresAt);
+  const itemCount = isFiniteNumber(value.itemCount) ? value.itemCount : null;
+
+  if (
+    feedVersion === null ||
+    sha256 === null ||
+    staleAfter === null ||
+    expiresAt === null ||
+    itemCount === null
+  ) {
+    return null;
+  }
+
+  return {
+    feedVersion,
+    itemCount,
+    sha256,
+    staleAfter,
+    expiresAt,
+  };
+}
+
+function buildSignedSectionComponent(name, metadata) {
+  if (!metadata) {
+    return `${name}=missing`;
+  }
+
+  return `${name}=${metadata.feedVersion}:${metadata.sha256}`;
+}
+
+function buildStaticNavigationBundleSignature(envelope) {
+  const maliciousDomains = readSectionMetadata(envelope?.sections?.maliciousDomains);
+  const allowlists = readSectionMetadata(envelope?.sections?.allowlists);
+
+  return [
+    STATIC_NAVIGATION_SIGNING_KEY_ID,
+    `schemaVersion=${envelope.schemaVersion}`,
+    `bundleVersion=${envelope.bundleVersion}`,
+    `generatedAt=${envelope.generatedAt}`,
+    `publisher=${envelope.publisher}`,
+    `signingKeyId=${envelope.signingKeyId}`,
+    buildSignedSectionComponent('maliciousDomains', maliciousDomains),
+    buildSignedSectionComponent('allowlists', allowlists),
+  ].join('|');
+}
+
+function buildStaticNavigationManifestSignature(manifest) {
+  const maliciousDomains = readSectionMetadata(manifest?.sections?.maliciousDomains);
+  const allowlists = readSectionMetadata(manifest?.sections?.allowlists);
+
+  return [
+    STATIC_NAVIGATION_SIGNING_KEY_ID,
+    `bundleFamily=${manifest.bundleFamily}`,
+    `schemaVersion=${manifest.schemaVersion}`,
+    `bundleVersion=${manifest.bundleVersion}`,
+    `generatedAt=${manifest.generatedAt}`,
+    `publisher=${manifest.publisher}`,
+    `signingKeyId=${manifest.signingKeyId}`,
+    `bundleUrl=${manifest.bundleUrl}`,
+    buildSignedSectionComponent('maliciousDomains', maliciousDomains),
+    buildSignedSectionComponent('allowlists', allowlists),
+  ].join('|');
+}
+
+function expectedNavigationBundleUrl(bundleVersion) {
+  return `/intel/feeds/navigation/bundles/${bundleVersion}/bundle.json`;
+}
+
+function validateNavigationFeedManifest(value) {
+  const issues = [];
+  if (!isRecord(value)) {
+    return {
+      ok: false,
+      issues: ['Manifest payload must be an object'],
+    };
+  }
+
+  const schemaVersion = readNonEmptyString(value.schemaVersion);
+  const bundleFamily = readNonEmptyString(value.bundleFamily);
+  const bundleVersion = readNonEmptyString(value.bundleVersion);
+  const generatedAt = readNonEmptyString(value.generatedAt);
+  const publisher = readNonEmptyString(value.publisher);
+  const signingKeyId = readNonEmptyString(value.signingKeyId);
+  const bundleUrl = readNonEmptyString(value.bundleUrl);
+  const signature = readNonEmptyString(value.signature);
+  const maliciousDomains = readSectionMetadata(value.sections?.maliciousDomains);
+  const allowlists = readSectionMetadata(value.sections?.allowlists);
+
+  if (schemaVersion === null) issues.push('schemaVersion');
+  if (bundleFamily !== 'navigation') issues.push('bundleFamily');
+  if (bundleVersion === null) issues.push('bundleVersion');
+  if (generatedAt === null) issues.push('generatedAt');
+  if (publisher === null) issues.push('publisher');
+  if (signingKeyId === null) issues.push('signingKeyId');
+  if (bundleUrl === null) issues.push('bundleUrl');
+  if (signature === null) issues.push('signature');
+  if (maliciousDomains === null) issues.push('sections.maliciousDomains');
+  if (allowlists === null) issues.push('sections.allowlists');
+
+  if (issues.length > 0) {
+    return {
+      ok: false,
+      issues: issues.map((field) => `Invalid manifest field: ${field}`),
+    };
+  }
+
+  if (bundleUrl !== expectedNavigationBundleUrl(bundleVersion)) {
+    return {
+      ok: false,
+      issues: ['Manifest bundleUrl does not match bundleVersion'],
+    };
+  }
+
+  const manifest = {
+    schemaVersion,
+    bundleFamily,
+    bundleVersion,
+    generatedAt,
+    publisher,
+    signingKeyId,
+    bundleUrl,
+    sections: {
+      maliciousDomains,
+      allowlists,
+    },
+    signature,
+  };
+
+  if (
+    signingKeyId !== STATIC_NAVIGATION_SIGNING_KEY_ID ||
+    signature !== buildStaticNavigationManifestSignature(manifest)
+  ) {
+    return {
+      ok: false,
+      issues: ['Manifest signature verification failed'],
+    };
+  }
+
+  return {
+    ok: true,
+    manifest,
+    issues: [],
+  };
+}
+
+function compareManifestSectionToBundleSection(sectionName, manifestSection, bundleSection) {
+  const issues = [];
+  if (bundleSection === null) {
+    return [`Bundle metadata missing for ${sectionName}`];
+  }
+
+  if (bundleSection.feedVersion !== manifestSection.feedVersion) {
+    issues.push(`${sectionName}.feedVersion`);
+  }
+  if (bundleSection.itemCount !== manifestSection.itemCount) {
+    issues.push(`${sectionName}.itemCount`);
+  }
+  if (bundleSection.sha256 !== manifestSection.sha256) {
+    issues.push(`${sectionName}.sha256`);
+  }
+  if (bundleSection.staleAfter !== manifestSection.staleAfter) {
+    issues.push(`${sectionName}.staleAfter`);
+  }
+  if (bundleSection.expiresAt !== manifestSection.expiresAt) {
+    issues.push(`${sectionName}.expiresAt`);
+  }
+
+  return issues;
+}
+
+function validateFetchedBundleAgainstManifest(manifest, bundle) {
+  if (!isRecord(bundle)) {
+    return ['Bundle payload must be an object'];
+  }
+
+  const issues = [];
+  if (bundle.schemaVersion !== manifest.schemaVersion) {
+    issues.push('schemaVersion');
+  }
+  if (bundle.bundleVersion !== manifest.bundleVersion) {
+    issues.push('bundleVersion');
+  }
+  if (bundle.generatedAt !== manifest.generatedAt) {
+    issues.push('generatedAt');
+  }
+  if (bundle.publisher !== manifest.publisher) {
+    issues.push('publisher');
+  }
+  if (bundle.signingKeyId !== manifest.signingKeyId) {
+    issues.push('signingKeyId');
+  }
+
+  const bundleMaliciousDomains = readSectionMetadata(bundle.sections?.maliciousDomains);
+  const bundleAllowlists = readSectionMetadata(bundle.sections?.allowlists);
+
+  issues.push(
+    ...compareManifestSectionToBundleSection(
+      'maliciousDomains',
+      manifest.sections.maliciousDomains,
+      bundleMaliciousDomains,
+    ),
+  );
+  issues.push(
+    ...compareManifestSectionToBundleSection(
+      'allowlists',
+      manifest.sections.allowlists,
+      bundleAllowlists,
+    ),
+  );
+
+  return issues;
+}
+
+function buildNavigationIntelRefreshUrl(pathname, apiBase = API_BASE) {
+  return new URL(pathname, apiBase).toString();
 }
 
 // ── Redirect-chain tracking (main frame only) ───────────────────────────────
@@ -239,14 +493,14 @@ function createNavigationIntelManager(deps = {}) {
     signatureVerifier:
       typeof deps.signatureVerifier === 'function'
         ? deps.signatureVerifier
-        : verifyBundledNavigationIntelEnvelope,
+        : verifyNavigationIntelEnvelope,
   });
 }
 
 function configureNavigationIntelManager(deps = {}) {
   const shouldReset =
     deps.reset === true ||
-    Boolean(deps.storage) ||
+    (Boolean(deps.storage) && deps.storage !== navigationIntelStorage) ||
     Object.prototype.hasOwnProperty.call(deps, 'seedBundle') ||
     Object.prototype.hasOwnProperty.call(deps, 'activateSeed');
 
@@ -380,6 +634,174 @@ function verifyBundledNavigationIntelEnvelope(envelope) {
   );
 }
 
+function verifyStaticNavigationIntelEnvelope(envelope) {
+  return (
+    envelope?.signingKeyId === STATIC_NAVIGATION_SIGNING_KEY_ID &&
+    envelope?.signature === buildStaticNavigationBundleSignature(envelope)
+  );
+}
+
+function verifyNavigationIntelEnvelope(envelope) {
+  return (
+    verifyBundledNavigationIntelEnvelope(envelope) ||
+    verifyStaticNavigationIntelEnvelope(envelope)
+  );
+}
+
+export function resolveNavigationIntelRefreshIntervalMinutes(
+  state = configureNavigationIntelManager().getState(),
+) {
+  const maliciousState = state?.sectionStates?.maliciousDomains;
+  if (!state?.active || maliciousState === 'expired') {
+    return NAVIGATION_INTEL_RECOVERY_INTERVAL_MINUTES;
+  }
+
+  return NAVIGATION_INTEL_REFRESH_INTERVAL_MINUTES;
+}
+
+function scheduleNavigationIntelRefreshAlarm(
+  alarmsApi,
+  state = configureNavigationIntelManager().getState(),
+) {
+  if (!alarmsApi || typeof alarmsApi.create !== 'function') {
+    return null;
+  }
+
+  const intervalMinutes = resolveNavigationIntelRefreshIntervalMinutes(state);
+  alarmsApi.create(NAVIGATION_INTEL_REFRESH_ALARM, {
+    periodInMinutes: intervalMinutes,
+  });
+  return intervalMinutes;
+}
+
+async function fetchNavigationFeedManifest(deps = {}) {
+  const manifestPayload = await fetchJsonWithTimeout(
+    buildNavigationIntelRefreshUrl(NAVIGATION_INTEL_MANIFEST_PATH, deps.apiBase),
+    deps.timeoutMs ?? SIGNAL_TIMEOUT_MS,
+    deps.fetchImpl ?? fetch,
+  );
+  const validation = validateNavigationFeedManifest(manifestPayload);
+  if (!validation.ok) {
+    throw new Error(validation.issues.join('; '));
+  }
+  return validation.manifest;
+}
+
+async function fetchNavigationFeedBundle(manifest, deps = {}) {
+  return fetchJsonWithTimeout(
+    buildNavigationIntelRefreshUrl(manifest.bundleUrl, deps.apiBase),
+    deps.timeoutMs ?? SIGNAL_TIMEOUT_MS,
+    deps.fetchImpl ?? fetch,
+  );
+}
+
+export async function refreshNavigationIntelFromBackend(deps = {}) {
+  const manager = configureNavigationIntelManager({
+    storage: deps.storage,
+    signatureVerifier: deps.signatureVerifier,
+    now: deps.now,
+  });
+
+  let manifest;
+  try {
+    manifest = await fetchNavigationFeedManifest(deps);
+  } catch (error) {
+    const state = manager.getState();
+    scheduleNavigationIntelRefreshAlarm(deps.alarmsApi, state);
+    return {
+      ok: false,
+      stage: 'manifest',
+      updated: false,
+      error: error?.message || 'Manifest fetch failed',
+      state,
+    };
+  }
+
+  await manager.mergeMetadata({
+    lastManifestCheckAt: resolveTimestampIso(deps.now),
+  });
+
+  const stateBeforeRefresh = manager.getState();
+  const shouldFetchBundle =
+    deps.force === true ||
+    !stateBeforeRefresh.active ||
+    stateBeforeRefresh.bundleVersion !== manifest.bundleVersion;
+
+  if (!shouldFetchBundle) {
+    scheduleNavigationIntelRefreshAlarm(deps.alarmsApi, stateBeforeRefresh);
+    return {
+      ok: true,
+      stage: 'manifest',
+      updated: false,
+      manifest,
+      state: stateBeforeRefresh,
+    };
+  }
+
+  let bundle;
+  try {
+    bundle = await fetchNavigationFeedBundle(manifest, deps);
+  } catch (error) {
+    const state = manager.getState();
+    scheduleNavigationIntelRefreshAlarm(deps.alarmsApi, state);
+    return {
+      ok: false,
+      stage: 'bundle',
+      updated: false,
+      manifest,
+      error: error?.message || 'Bundle fetch failed',
+      state,
+    };
+  }
+
+  const coherenceIssues = validateFetchedBundleAgainstManifest(manifest, bundle);
+  if (coherenceIssues.length > 0) {
+    const state = manager.getState();
+    scheduleNavigationIntelRefreshAlarm(deps.alarmsApi, state);
+    return {
+      ok: false,
+      stage: 'coherence',
+      updated: false,
+      manifest,
+      issues: coherenceIssues.map((field) => `Manifest/bundle mismatch: ${field}`),
+      state,
+    };
+  }
+
+  const activationResult = await manager.activateBundle(bundle);
+  const stateAfterActivation = manager.getState();
+
+  if (!activationResult.ok) {
+    scheduleNavigationIntelRefreshAlarm(deps.alarmsApi, stateAfterActivation);
+    return {
+      ok: false,
+      stage: 'activation',
+      updated: false,
+      manifest,
+      issues: activationResult.issues,
+      state: stateAfterActivation,
+    };
+  }
+
+  await manager.mergeMetadata({
+    lastManifestCheckAt: resolveTimestampIso(deps.now),
+    lastSuccessfulRefreshAt: resolveTimestampIso(deps.now),
+    lastSuccessfulRefreshBundleVersion: manifest.bundleVersion,
+  });
+
+  const refreshedState = manager.getState();
+  scheduleNavigationIntelRefreshAlarm(deps.alarmsApi, refreshedState);
+
+  return {
+    ok: true,
+    stage: 'activation',
+    updated: true,
+    manifest,
+    bundleVersion: refreshedState.bundleVersion,
+    state: refreshedState,
+  };
+}
+
 export async function activateRuntimeNavigationIntelSnapshot(deps = {}) {
   const manager = configureNavigationIntelManager({
     storage: deps.storage,
@@ -402,6 +824,26 @@ export async function activateRuntimeNavigationIntelSnapshot(deps = {}) {
   }
 
   return mappedResult;
+}
+
+export async function bootstrapRuntimeNavigationIntel(deps = {}) {
+  const activation = await activateRuntimeNavigationIntelSnapshot(deps);
+  const state = configureNavigationIntelManager({
+    storage: deps.storage,
+    signatureVerifier: deps.signatureVerifier,
+    now: deps.now,
+  }).getState();
+
+  const refresh = await refreshNavigationIntelFromBackend({
+    ...deps,
+    force: deps.force === true || state.source === 'seed' || !state.active,
+  });
+
+  return {
+    activation,
+    refresh,
+    state: configureNavigationIntelManager().getState(),
+  };
 }
 
 export function resolveNavigationDomainIntel(rawUrl) {
@@ -730,7 +1172,9 @@ function buildRedirectContextForScan(tabId, currentUrl) {
 }
 
 function attachRuntimeListeners() {
-  void activateRuntimeNavigationIntelSnapshot();
+  void bootstrapRuntimeNavigationIntel({
+    alarmsApi: chrome.alarms,
+  });
 
   // ── Redirect tracking via webRequest ──
   chrome.webRequest.onBeforeRequest.addListener(
@@ -760,14 +1204,18 @@ function attachRuntimeListeners() {
   // Run health check + fetch shield mode on install and startup
   chrome.runtime.onInstalled.addListener(() => {
     console.log('ClickShield Web3 Protection installed.');
-    void activateRuntimeNavigationIntelSnapshot();
+    void bootstrapRuntimeNavigationIntel({
+      alarmsApi: chrome.alarms,
+    });
     void checkBackendHealth();
     void fetchShieldMode();
   });
 
   chrome.runtime.onStartup.addListener(() => {
     console.log('ClickShield Web3 Protection started.');
-    void activateRuntimeNavigationIntelSnapshot();
+    void bootstrapRuntimeNavigationIntel({
+      alarmsApi: chrome.alarms,
+    });
     void checkBackendHealth();
     void fetchShieldMode();
   });
@@ -777,6 +1225,13 @@ function attachRuntimeListeners() {
   chrome.alarms.onAlarm.addListener((alarm) => {
     if (alarm.name === 'healthCheck') {
       void checkBackendHealth();
+      return;
+    }
+
+    if (alarm.name === NAVIGATION_INTEL_REFRESH_ALARM) {
+      void refreshNavigationIntelFromBackend({
+        alarmsApi: chrome.alarms,
+      });
     }
   });
 
