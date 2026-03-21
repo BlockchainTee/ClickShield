@@ -1,4 +1,4 @@
-import { NavigationInput } from "../engine/types";
+import type { NavigationInput } from "../engine/types.js";
 
 /**
  * Represents a normalized redirect hop.
@@ -28,15 +28,18 @@ function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
 
+interface RedirectChainInput extends NavigationInput {
+  readonly redirectChain?: readonly string[];
+  readonly url?: string;
+}
+
 function readRedirectChain(input: NavigationInput): readonly string[] | null {
-  const record = input as Record<string, unknown>;
-  const value = record.redirectChain;
+  const value = (input as RedirectChainInput).redirectChain;
   return isStringArray(value) ? value : null;
 }
 
 function readUrl(input: NavigationInput): string | null {
-  const record = input as Record<string, unknown>;
-  const value = record.url;
+  const value = (input as RedirectChainInput).url;
   return typeof value === "string" ? value : null;
 }
 

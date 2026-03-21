@@ -2,10 +2,12 @@
   "name": "clickshield-extension-web",
   "version": "0.2.0",
   "private": true,
+  "type": "module",
   "description": "ClickShield Web3 Protection browser extension for Chrome, Brave, and Edge",
   "scripts": {
     "dev": "echo '\\n=== ClickShield Extension Setup ===\\n1. Start the backend:  cd ../backend && npm run dev\\n2. Load extension:     Open chrome://extensions (or brave://extensions / edge://extensions)\\n3. Enable Developer Mode, click Load Unpacked, select this folder\\n4. Browse any URL to test scanning\\n' && cd ../backend && npm run dev",
     "backend": "cd ../backend && npm run dev",
-    "check": "curl -s http://localhost:4000/health | node -e \"process.stdin.on('data',d=>{try{const h=JSON.parse(d);console.log('Backend:',h.status==='ok'?'ONLINE':'DEGRADED')}catch{console.log('Backend: OFFLINE')}})\""
+    "check": "curl -s http://localhost:4000/health | node -e \"process.stdin.on('data',d=>{try{const h=JSON.parse(d);console.log('Backend:',h.status==='ok'?'ONLINE':'DEGRADED')}catch{console.log('Backend: OFFLINE')}})\"",
+    "test": "node --test ./tests/*.test.js"
   }
 }

@@ -258,29 +258,7 @@ const LOOKALIKE_RULES: Rule<NavigationInput>[] = lookalikeRules.map((definition,
   },
 }));
 
-interface PunycodeRuleDefinition {
-  id: string;
-  severity: "BLOCK";
-  match: (input: { domain?: string | null }) => {
-    ruleId: string;
-    severity: "BLOCK";
-    evidence: Record<string, unknown>;
-  } | null;
-}
-
-const PUNYCODE_RULES: Rule<NavigationInput>[] = punycodeRules
-  .filter((rule): rule is PunycodeRuleDefinition => {
-    return (
-      typeof rule === "object" &&
-      rule !== null &&
-      "id" in rule &&
-      "severity" in rule &&
-      "match" in rule &&
-      typeof rule.id === "string" &&
-      typeof rule.match === "function"
-    );
-  })
-  .map((rule, index) => ({
+const PUNYCODE_RULES: Rule<NavigationInput>[] = punycodeRules.map((rule, index) => ({
     id: rule.id,
     name: `Punycode phishing rule: ${rule.id}`,
     eventKind: "navigation",

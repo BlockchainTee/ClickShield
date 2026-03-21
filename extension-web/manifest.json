@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
   "name": "ClickShield Web3 Protection",
-  "version": "0.2.0",
-  "description": "ClickShield protects you from Web3 drainers, phishing pages, and suspicious links with a neon danger shield and always-on risk badge.",
+  "version": "0.3.0",
+  "description": "ClickShield blocks dangerous sites and displays security warnings before you interact with the page.",
   "permissions": [
     "scripting",
     "tabs",
     "activeTab",
-    "alarms"
+    "alarms",
+    "webNavigation",
+    "webRequest"
   ],
   "host_permissions": [
     "<all_urls>"
@@ -19,7 +21,8 @@
     "128": "icons/icon128.png"
   },
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "background.js",
+    "type": "module"
   },
   "content_scripts": [
     {

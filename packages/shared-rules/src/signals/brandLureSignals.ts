@@ -1,4 +1,4 @@
-import { toUnicode } from "punycode/";
+import punycode from "punycode/";
 import type { NavigationInput } from "../engine/types.js";
 
 const TARGET_BRANDS: readonly string[] = [
@@ -45,7 +45,7 @@ function normalizeHostname(hostname: string): string {
 function extractHostname(input: NavigationInput): string {
   try {
     const parsed = new URL(input.rawUrl);
-    return toUnicode(parsed.hostname);
+    return punycode.toUnicode(parsed.hostname);
   } catch {
     return "";
   }

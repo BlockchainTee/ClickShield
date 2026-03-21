@@ -1,4 +1,4 @@
-import { toUnicode } from "punycode/";
+import punycode from "punycode/";
 import type { NavigationInput } from "../engine/types.js";
 
 export interface UnicodeConfusableSignals {
@@ -111,7 +111,7 @@ function extractUnicodeHostname(input: NavigationInput): string {
 
   try {
     const parsed = new URL(input.rawUrl);
-    hostname = toUnicode(parsed.hostname);
+    hostname = punycode.toUnicode(parsed.hostname);
   } catch {
     return "";
   }

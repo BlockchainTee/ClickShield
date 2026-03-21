@@ -1,5 +1,5 @@
-import { NavigationInput } from "../engine/types";
-import { toUnicode } from "punycode/";
+import type { NavigationInput } from "../engine/types.js";
+import punycode from "punycode/";
 
 /**
  * Output of domain entropy signal extraction.
@@ -20,7 +20,7 @@ export interface DomainEntropySignals {
 function extractHostname(input: NavigationInput): string {
   try {
     const parsed = new URL(input.rawUrl);
-    return toUnicode(parsed.hostname).toLowerCase();
+    return punycode.toUnicode(parsed.hostname).toLowerCase();
   } catch {
     return "";
   }
