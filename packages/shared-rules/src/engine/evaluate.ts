@@ -1,12 +1,6 @@
 import type {
-  EngineInput,
   EngineResult,
   NavigationInput,
-  TransactionInput,
-  SignatureInput,
-  WalletScanInput,
-  DownloadInput,
-  ClipboardInput,
   Rule,
 } from "./types.js";
 import { sortRules } from "./priorities.js";
@@ -38,40 +32,15 @@ function evaluateTyped<T>(
 }
 
 /**
- * Main entry point: evaluate an engine input against all registered rules.
+ * Main entry point: evaluate a navigation input against the registered rules.
  *
- * Narrows the discriminated union by eventKind, selects the appropriate
- * typed rule set from the registry, runs all rules synchronously, and
- * assembles a deterministic verdict.
+ * The current public package surface is intentionally navigation-only.
+ * Evaluation is synchronous, deterministic, and side-effect free.
  *
- * @param input - A discriminated EngineInput (navigation, transaction, etc.).
+ * @param input - A navigation input built by the caller.
  * @returns EngineResult with verdict, matchedRules, reasonCodes, and evidence.
  */
-export function evaluate(input: EngineInput): EngineResult {
-  switch (input.eventKind) {
-    case "navigation": {
-      const rules = getRulesForEventKind("navigation") as Rule<NavigationInput>[];
-      return evaluateTyped(rules, input);
-    }
-    case "transaction": {
-      const rules = getRulesForEventKind("transaction") as Rule<TransactionInput>[];
-      return evaluateTyped(rules, input);
-    }
-    case "signature": {
-      const rules = getRulesForEventKind("signature") as Rule<SignatureInput>[];
-      return evaluateTyped(rules, input);
-    }
-    case "wallet_scan": {
-      const rules = getRulesForEventKind("wallet_scan") as Rule<WalletScanInput>[];
-      return evaluateTyped(rules, input);
-    }
-    case "download": {
-      const rules = getRulesForEventKind("download") as Rule<DownloadInput>[];
-      return evaluateTyped(rules, input);
-    }
-    case "clipboard": {
-      const rules = getRulesForEventKind("clipboard") as Rule<ClipboardInput>[];
-      return evaluateTyped(rules, input);
-    }
-  }
+export function evaluate(input: NavigationInput): EngineResult {
+  const rules = getRulesForEventKind("navigation");
+  return evaluateTyped(rules, input);
 }

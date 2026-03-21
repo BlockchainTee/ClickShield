@@ -201,6 +201,19 @@ describe("PHISH_REDIRECT_CHAIN", () => {
     expect(result.reasonCodes).not.toContain("SUSPICIOUS_REDIRECT_CHAIN");
   });
 
+  it("fires when redirect count hits the threshold exactly", () => {
+    const result = evaluate(
+      navInput("https://click-tracker.com/r/abc", {
+        redirectCount: 3,
+        finalDomain: "evil-phish.xyz",
+      })
+    );
+
+    expect(result.verdict.status).toBe("warn");
+    expect(result.reasonCodes).toContain("SUSPICIOUS_REDIRECT_CHAIN");
+    expect(result.evidence).toHaveProperty("redirectCount", 3);
+  });
+
   it("does not fire when final domain matches original", () => {
     const result = evaluate(
       navInput("https://app.example.com/auth", {

@@ -1,5 +1,5 @@
 import type { RiskLevel, RuleOutcome } from "./engine/types.js";
-import { PHISHING_CODES } from "./policies/phishing/codes.js";
+import { PHISHING_CODES, type PhishingCode } from "./policies/phishing/codes.js";
 
 /**
  * Human-readable UX fields for a verdict reason code.
@@ -21,7 +21,15 @@ export interface ReasonMessage {
  * Map of reason codes to human-readable UX text.
  * Shared across extension, desktop, and mobile clients.
  */
-const REASON_MESSAGES: Record<string, ReasonMessage> = {
+const DEFAULT_REASON_MESSAGE: ReasonMessage = {
+  blockedTitle: "This site has been blocked",
+  warningTitle: "Potential risk detected",
+  reason: "ClickShield detected a potential security risk with this site.",
+  goBackLabel: "Go Back",
+  proceedLabel: "Proceed Anyway",
+};
+
+const REASON_MESSAGES = {
   [PHISHING_CODES.PHISH_KNOWN_MALICIOUS_DOMAIN]: {
     blockedTitle: "This site has been blocked",
     warningTitle: "Known malicious site",
@@ -71,20 +79,14 @@ const REASON_MESSAGES: Record<string, ReasonMessage> = {
     goBackLabel: "Go Back",
     proceedLabel: "Continue to Site",
   },
-};
+} satisfies Partial<Record<PhishingCode, ReasonMessage>>;
 
 /**
  * Get the human-readable message for a reason code.
  * Falls back to a generic message if the code is unknown.
  */
 export function getReasonMessage(reasonCode: string): ReasonMessage {
-  return REASON_MESSAGES[reasonCode] ?? {
-    blockedTitle: "This site has been blocked",
-    warningTitle: "Potential risk detected",
-    reason: "ClickShield detected a potential security risk with this site.",
-    goBackLabel: "Go Back",
-    proceedLabel: "Proceed Anyway",
-  };
+  return REASON_MESSAGES[reasonCode as keyof typeof REASON_MESSAGES] ?? DEFAULT_REASON_MESSAGE;
 }
 
 /**
