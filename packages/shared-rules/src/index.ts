@@ -52,6 +52,57 @@ export {
   SUSPICIOUS_TLDS,
 } from "./signals/domain-signals.js";
 
+// ── Layer 3 Transaction Foundation (Phase A) ──
+export {
+  getTransactionSelectorDefinition,
+  listTransactionSelectors,
+  classifyTransactionSelector,
+  TRANSACTION_SELECTOR_REGISTRY,
+} from "./transaction/selectors.js";
+export type { TransactionSelectorDefinition } from "./transaction/selectors.js";
+export {
+  decodeTransactionCalldata,
+  normalizeTransactionRequest,
+  normalizeTypedDataRequest,
+} from "./transaction/decode.js";
+export { normalizeTypedData, classifyPermitKind } from "./transaction/typed-data.js";
+export { buildTransactionExplanation } from "./transaction/explain.js";
+export { buildTransactionSignals } from "./signals/transaction-signals.js";
+export type {
+  ApprovalDirection,
+  ApprovalAmountKind,
+  ApprovalScope,
+  ChainFamily,
+  DecodedTransactionAction,
+  Layer3RpcMethod,
+  Layer2SectionState as TransactionLayer2SectionState,
+  Layer3RpcMethod as TransactionLayer3RpcMethod,
+  NormalizedTransactionContext,
+  NormalizedTypedData,
+  PermitKind,
+  RawSignatureRequest,
+  RawTransactionRequest,
+  RawTypedDataPayload,
+  SignatureRpcMethod,
+  TransactionActionType,
+  TransactionBatchContext,
+  TransactionCounterpartyContext,
+  TransactionEventKind,
+  TransactionExplanation,
+  TransactionIntelContext,
+  TransactionIntelDisposition,
+  TransactionMeta,
+  TransactionParamValue,
+  TransactionProviderContext,
+  TransactionRpcMethod,
+  TransactionSignals,
+  TypedDataField,
+  TypedDataNormalizationState,
+  TypedDataTypes,
+  TypedDataValue,
+  WalletProviderMetadata,
+} from "./transaction/types.js";
+
 // ── Policy Codes ──
 export { PHISHING_CODES } from "./policies/phishing/codes.js";
 export type { PhishingCode } from "./policies/phishing/codes.js";

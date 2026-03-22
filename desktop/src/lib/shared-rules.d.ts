@@ -337,6 +337,203 @@ declare function hasHomoglyphs(rawUrl: string): boolean;
  */
 declare function deconfuseHostname(hostname: string): string;
 
+type ChainFamily = "evm";
+type TransactionEventKind = "transaction" | "signature";
+type TransactionRpcMethod = "eth_sendTransaction";
+type SignatureRpcMethod = "eth_signTypedData" | "eth_signTypedData_v4";
+type Layer3RpcMethod = TransactionRpcMethod | SignatureRpcMethod;
+type TransactionActionType = "approve" | "setApprovalForAll" | "increaseAllowance" | "permit" | "transfer" | "transferFrom" | "multicall" | "unknown";
+type ApprovalAmountKind = "exact" | "unlimited" | "not_applicable";
+type ApprovalScope = "single_token" | "collection_all" | "not_applicable";
+type ApprovalDirection = "grant" | "revoke" | "not_applicable";
+type PermitKind = "none" | "erc20_permit" | "permit2_single" | "permit2_batch" | "unknown_permit";
+type TypedDataNormalizationState = "normalized" | "missing_domain_fields" | "invalid_domain_fields";
+type TransactionIntelDisposition = "malicious" | "allowlisted" | "no_match" | "unavailable";
+type Layer2SectionState$1 = "fresh" | "stale" | "expired" | "missing" | "invalid";
+type TransactionParamValue = string | boolean | null;
+interface WalletProviderMetadata {
+    readonly providerType: string;
+    readonly walletName: string;
+    readonly walletVersion: string | null;
+    readonly platform: string;
+}
+interface TransactionCounterpartyContext {
+    readonly spenderTrusted: boolean | null;
+    readonly recipientIsNew: boolean | null;
+}
+interface TransactionIntelContext {
+    readonly contractDisposition: TransactionIntelDisposition;
+    readonly contractFeedVersion: string | null;
+    readonly allowlistFeedVersion: string | null;
+    readonly signatureDisposition: TransactionIntelDisposition;
+    readonly signatureFeedVersion: string | null;
+    readonly originDisposition: "allowlisted" | "no_match" | "unavailable";
+    readonly sectionStates: Readonly<Record<string, Layer2SectionState$1>>;
+}
+interface TransactionProviderContext {
+    readonly surface: string;
+    readonly walletProvider: string;
+    readonly walletName: string;
+    readonly platform: string;
+}
+interface TransactionMeta {
+    readonly selectorRecognized: boolean;
+    readonly typedDataNormalized: boolean;
+}
+interface DecodedTransactionAction {
+    readonly functionName: string | null;
+    readonly selector: string | null;
+    readonly actionType: TransactionActionType;
+    readonly params: Readonly<Record<string, TransactionParamValue>>;
+    readonly tokenAddress: string | null;
+    readonly spender: string | null;
+    readonly operator: string | null;
+    readonly recipient: string | null;
+    readonly owner: string | null;
+    readonly amount: string | null;
+    readonly amountKind: ApprovalAmountKind;
+    readonly approvalScope: ApprovalScope;
+    readonly approvalDirection: ApprovalDirection;
+}
+interface TransactionBatchContext {
+    readonly isMulticall: boolean;
+    readonly batchSelector: string | null;
+    readonly actions: readonly DecodedTransactionAction[];
+}
+type TypedDataValue = string | boolean | null | readonly TypedDataValue[] | {
+    readonly [key: string]: TypedDataValue;
+};
+interface TypedDataField {
+    readonly name: string;
+    readonly type: string;
+}
+type TypedDataTypes = Readonly<Record<string, readonly TypedDataField[]>>;
+interface NormalizedTypedData {
+    readonly isTypedData: boolean;
+    readonly primaryType: string | null;
+    readonly domainName: string | null;
+    readonly domainVersion: string | null;
+    readonly domainChainId: string | null;
+    readonly domainChainIdPresent: boolean;
+    readonly verifyingContract: string | null;
+    readonly verifyingContractPresent: boolean;
+    readonly message: {
+        readonly [key: string]: TypedDataValue;
+    };
+    readonly domain: {
+        readonly [key: string]: TypedDataValue;
+    };
+    readonly types: TypedDataTypes;
+    readonly canonicalJson: string;
+    readonly normalizationState: TypedDataNormalizationState;
+    readonly missingDomainFields: readonly string[];
+    readonly invalidDomainFields: readonly string[];
+    readonly permitKind: PermitKind;
+}
+interface RawTransactionRequest {
+    readonly eventKind: "transaction";
+    readonly rpcMethod: TransactionRpcMethod;
+    readonly chainFamily: ChainFamily;
+    readonly chainId: number;
+    readonly from: string;
+    readonly to: string;
+    readonly value: string | number | bigint | null | undefined;
+    readonly calldata: string;
+    readonly originDomain: string;
+    readonly walletProvider: string;
+    readonly walletMetadata: WalletProviderMetadata;
+    readonly surface?: string;
+    readonly counterparty?: Partial<TransactionCounterpartyContext>;
+}
+interface RawTypedDataPayload {
+    readonly domain?: Readonly<Record<string, unknown>> | null;
+    readonly types?: Readonly<Record<string, readonly TypedDataField[]>> | null;
+    readonly primaryType?: string | null;
+    readonly message?: Readonly<Record<string, unknown>> | null;
+}
+interface RawSignatureRequest {
+    readonly eventKind: "signature";
+    readonly rpcMethod: SignatureRpcMethod;
+    readonly chainFamily: ChainFamily;
+    readonly chainId: number;
+    readonly from: string;
+    readonly typedData: string | RawTypedDataPayload;
+    readonly originDomain: string;
+    readonly walletProvider: string;
+    readonly walletMetadata: WalletProviderMetadata;
+    readonly surface?: string;
+    readonly counterparty?: Partial<TransactionCounterpartyContext>;
+}
+interface NormalizedTransactionContext {
+    readonly eventKind: TransactionEventKind;
+    readonly rpcMethod: Layer3RpcMethod;
+    readonly chainFamily: ChainFamily;
+    readonly chainId: number;
+    readonly originDomain: string;
+    readonly from: string;
+    readonly to: string | null;
+    readonly valueWei: string;
+    readonly calldata: string;
+    readonly methodSelector: string | null;
+    readonly actionType: TransactionActionType;
+    readonly decoded: DecodedTransactionAction;
+    readonly batch: TransactionBatchContext;
+    readonly signature: NormalizedTypedData;
+    readonly intel: TransactionIntelContext;
+    readonly provider: TransactionProviderContext;
+    readonly counterparty: TransactionCounterpartyContext;
+    readonly meta: TransactionMeta;
+}
+interface TransactionExplanation {
+    readonly headline: string;
+    readonly summary: string;
+    readonly details: readonly string[];
+    readonly unknowns: readonly string[];
+    readonly technical: readonly string[];
+}
+interface TransactionSignals {
+    readonly actionType: TransactionActionType;
+    readonly isApprovalMethod: boolean;
+    readonly isUnlimitedApproval: boolean;
+    readonly isPermitSignature: boolean;
+    readonly isSetApprovalForAll: boolean;
+    readonly approvalDirection: ApprovalDirection;
+    readonly spenderTrusted: boolean | null;
+    readonly recipientIsNew: boolean | null;
+    readonly isMulticall: boolean;
+    readonly containsApprovalAndTransfer: boolean;
+    readonly containsApproval: boolean;
+    readonly containsTransfer: boolean;
+    readonly containsTransferFrom: boolean;
+    readonly batchActionCount: number;
+    readonly hasUnknownInnerCall: boolean;
+}
+
+interface TransactionSelectorDefinition {
+    readonly selector: string;
+    readonly functionName: "approve" | "setApprovalForAll" | "increaseAllowance" | "permit" | "transfer" | "transferFrom" | "multicall";
+    readonly actionType: TransactionActionType;
+    readonly variant: "standard" | "allowed_bool" | "bytes_array" | "deadline_bytes_array";
+}
+declare const TRANSACTION_SELECTOR_REGISTRY: Readonly<Record<string, TransactionSelectorDefinition>>;
+declare function getTransactionSelectorDefinition(selector: string): TransactionSelectorDefinition | null;
+declare function classifyTransactionSelector(selector: string): TransactionActionType;
+declare function listTransactionSelectors(): readonly TransactionSelectorDefinition[];
+
+declare function decodeTransactionCalldata(calldata: string, toAddress?: string | null): {
+    readonly decoded: DecodedTransactionAction;
+    readonly batch: TransactionBatchContext;
+};
+declare function normalizeTransactionRequest(input: RawTransactionRequest): NormalizedTransactionContext;
+declare function normalizeTypedDataRequest(input: RawSignatureRequest): NormalizedTransactionContext;
+
+declare function classifyPermitKind(primaryType: string | null): PermitKind;
+declare function normalizeTypedData(input: string | RawTypedDataPayload): NormalizedTypedData;
+
+declare function buildTransactionExplanation(context: NormalizedTransactionContext): TransactionExplanation;
+
+declare function buildTransactionSignals(context: NormalizedTransactionContext): TransactionSignals;
+
 /**
  * Reason codes for phishing detection rules.
  */
@@ -516,4 +713,4 @@ declare function resolveDomainIntel(snapshot: CompiledDomainIntelSnapshot, input
 
 declare function validateDomainIntelBundle(bundle: unknown, options: DomainIntelValidationOptions): DomainIntelValidationReport;
 
-export { type BuildContextOptions, type CompileDomainIntelSnapshotOptions, type CompiledDomainAllowlistItem, type CompiledDomainAllowlistsSection, type CompiledDomainIntelSnapshot, type CompiledMaliciousDomainItem, type CompiledMaliciousDomainsSection, type DomainAllowlistFeedItem, type DomainAllowlistsSection, type DomainContext, type DomainIntelBundle, type DomainIntelCompileFailure, type DomainIntelCompileResult, type DomainIntelCompileSuccess, type DomainIntelSectionMetadata, type DomainIntelSectionName, type DomainIntelSectionValidationReport, type DomainIntelSignatureEnvelope, type DomainIntelValidationOptions, type DomainIntelValidationReport, type DomainLookupDisposition, type DomainLookupResult, type EngineResult, type IntelValidationIssue, KNOWN_PROTOCOL_DOMAINS, type Layer2SectionState, type MaliciousDomainFeedItem, type MaliciousDomainsSection, type NavigationContext, type NavigationInput, PHISHING_CODES, type PhishingCode, RULE_SET_VERSION, type ReasonMessage, type RiskLevel, type RuleOutcome, SUSPICIOUS_TLDS, type Verdict, buildNavigationContext, compileDomainIntelSnapshot, containsAirdropKeyword, containsMintKeyword, containsWalletConnectPattern, contextToInput, deconfuseHostname, domainSimilarityScore, evaluate, extractHostname, extractRegistrableDomain, extractTld, getReasonMessage, getVerdictTitle, hasHomoglyphs, hasSuspiciousTld, isIpHost, isKnownMaliciousDomain, isNewDomain, isValidUrl, looksLikeProtocolImpersonation, matchedLureKeywords, normalizeUrl, resolveDomainIntel, riskBadgeLabel, validateDomainIntelBundle };
+export { type ApprovalAmountKind, type ApprovalDirection, type ApprovalScope, type BuildContextOptions, type ChainFamily, type CompileDomainIntelSnapshotOptions, type CompiledDomainAllowlistItem, type CompiledDomainAllowlistsSection, type CompiledDomainIntelSnapshot, type CompiledMaliciousDomainItem, type CompiledMaliciousDomainsSection, type DecodedTransactionAction, type DomainAllowlistFeedItem, type DomainAllowlistsSection, type DomainContext, type DomainIntelBundle, type DomainIntelCompileFailure, type DomainIntelCompileResult, type DomainIntelCompileSuccess, type DomainIntelSectionMetadata, type DomainIntelSectionName, type DomainIntelSectionValidationReport, type DomainIntelSignatureEnvelope, type DomainIntelValidationOptions, type DomainIntelValidationReport, type DomainLookupDisposition, type DomainLookupResult, type EngineResult, type IntelValidationIssue, KNOWN_PROTOCOL_DOMAINS, type Layer2SectionState, type Layer3RpcMethod, type MaliciousDomainFeedItem, type MaliciousDomainsSection, type NavigationContext, type NavigationInput, type NormalizedTransactionContext, type NormalizedTypedData, PHISHING_CODES, type PermitKind, type PhishingCode, RULE_SET_VERSION, type RawSignatureRequest, type RawTransactionRequest, type RawTypedDataPayload, type ReasonMessage, type RiskLevel, type RuleOutcome, SUSPICIOUS_TLDS, type SignatureRpcMethod, TRANSACTION_SELECTOR_REGISTRY, type TransactionActionType, type TransactionBatchContext, type TransactionCounterpartyContext, type TransactionEventKind, type TransactionExplanation, type TransactionIntelContext, type TransactionIntelDisposition, type Layer2SectionState$1 as TransactionLayer2SectionState, type Layer3RpcMethod as TransactionLayer3RpcMethod, type TransactionMeta, type TransactionParamValue, type TransactionProviderContext, type TransactionRpcMethod, type TransactionSelectorDefinition, type TransactionSignals, type TypedDataField, type TypedDataNormalizationState, type TypedDataTypes, type TypedDataValue, type Verdict, type WalletProviderMetadata, buildNavigationContext, buildTransactionExplanation, buildTransactionSignals, classifyPermitKind, classifyTransactionSelector, compileDomainIntelSnapshot, containsAirdropKeyword, containsMintKeyword, containsWalletConnectPattern, contextToInput, decodeTransactionCalldata, deconfuseHostname, domainSimilarityScore, evaluate, extractHostname, extractRegistrableDomain, extractTld, getReasonMessage, getTransactionSelectorDefinition, getVerdictTitle, hasHomoglyphs, hasSuspiciousTld, isIpHost, isKnownMaliciousDomain, isNewDomain, isValidUrl, listTransactionSelectors, looksLikeProtocolImpersonation, matchedLureKeywords, normalizeTransactionRequest, normalizeTypedData, normalizeTypedDataRequest, normalizeUrl, resolveDomainIntel, riskBadgeLabel, validateDomainIntelBundle };

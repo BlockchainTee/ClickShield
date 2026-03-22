@@ -3,9 +3,15 @@ import { describe, expect, it } from "vitest";
 import {
   RULE_SET_VERSION,
   buildNavigationContext,
+  buildTransactionExplanation,
+  buildTransactionSignals,
+  classifyTransactionSelector,
   contextToInput,
+  getTransactionSelectorDefinition,
   evaluate,
   getReasonMessage,
+  normalizeTransactionRequest,
+  normalizeTypedDataRequest,
 } from "../src/index.js";
 import * as SharedRules from "../src/index.js";
 
@@ -41,6 +47,18 @@ describe("root public API", () => {
     expect("DomainIntelFeedStorageMetadata" in SharedRules).toBe(false);
   });
 
+  it("exports Layer 3 Phase A transaction foundation helpers through the root import", () => {
+    expect(typeof getTransactionSelectorDefinition).toBe("function");
+    expect(typeof classifyTransactionSelector).toBe("function");
+    expect(typeof normalizeTransactionRequest).toBe("function");
+    expect(typeof normalizeTypedDataRequest).toBe("function");
+    expect(typeof buildTransactionExplanation).toBe("function");
+    expect(typeof buildTransactionSignals).toBe("function");
+
+    const selector = getTransactionSelectorDefinition("0x095ea7b3");
+    expect(selector?.functionName).toBe("approve");
+  });
+
   it("handles malformed raw URLs deterministically through the public entrypoint", () => {
     const ctx = buildNavigationContext({
       rawUrl: "not a valid url",
@@ -52,5 +70,62 @@ describe("root public API", () => {
     expect(result.verdict.status).toBe("block");
     expect(result.reasonCodes).toContain("PHISH_REDIRECT_CHAIN_ABUSE");
     expect(result.evidence).toEqual({});
+  });
+
+  it("normalizes transaction and signature requests through the public entrypoint", () => {
+    const tx = normalizeTransactionRequest({
+      eventKind: "transaction",
+      rpcMethod: "eth_sendTransaction",
+      chainFamily: "evm",
+      chainId: 1,
+      from: "0x1111111111111111111111111111111111111111",
+      to: "0x2222222222222222222222222222222222222222",
+      value: "0x0",
+      calldata:
+        "0x095ea7b3" +
+        "0000000000000000000000003333333333333333333333333333333333333333" +
+        "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      originDomain: "app.example.com",
+      walletProvider: "injected",
+      walletMetadata: {
+        providerType: "injected",
+        walletName: "Example Wallet",
+        walletVersion: null,
+        platform: "web",
+      },
+    });
+
+    const sig = normalizeTypedDataRequest({
+      eventKind: "signature",
+      rpcMethod: "eth_signTypedData_v4",
+      chainFamily: "evm",
+      chainId: 1,
+      from: "0x1111111111111111111111111111111111111111",
+      typedData: {
+        domain: {
+          name: "Permit",
+        },
+        types: {
+          EIP712Domain: [{ name: "name", type: "string" }],
+          Permit: [{ name: "spender", type: "address" }],
+        },
+        primaryType: "Permit",
+        message: {
+          spender: "0x3333333333333333333333333333333333333333",
+        },
+      },
+      originDomain: "app.example.com",
+      walletProvider: "injected",
+      walletMetadata: {
+        providerType: "injected",
+        walletName: "Example Wallet",
+        walletVersion: null,
+        platform: "web",
+      },
+    });
+
+    expect(tx.actionType).toBe("approve");
+    expect(sig.eventKind).toBe("signature");
+    expect(sig.signature.normalizationState).toBe("missing_domain_fields");
   });
 });
