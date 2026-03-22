@@ -156,6 +156,7 @@ export interface RawTransactionRequest {
   readonly walletProvider: string;
   readonly walletMetadata: WalletProviderMetadata;
   readonly surface?: string;
+  readonly intel?: Partial<TransactionIntelContext>;
   readonly counterparty?: Partial<TransactionCounterpartyContext>;
 }
 
@@ -177,6 +178,7 @@ export interface RawSignatureRequest {
   readonly walletProvider: string;
   readonly walletMetadata: WalletProviderMetadata;
   readonly surface?: string;
+  readonly intel?: Partial<TransactionIntelContext>;
   readonly counterparty?: Partial<TransactionCounterpartyContext>;
 }
 
@@ -218,11 +220,19 @@ export interface TransactionSignals {
   readonly approvalDirection: ApprovalDirection;
   readonly spenderTrusted: boolean | null;
   readonly recipientIsNew: boolean | null;
+  readonly isTransfer: boolean;
+  readonly isTransferFrom: boolean;
+  readonly isContractInteraction: boolean;
   readonly isMulticall: boolean;
   readonly containsApprovalAndTransfer: boolean;
   readonly containsApproval: boolean;
   readonly containsTransfer: boolean;
   readonly containsTransferFrom: boolean;
   readonly batchActionCount: number;
+  readonly hasNativeValue: boolean;
+  readonly touchesMaliciousContract: boolean;
+  readonly targetAllowlisted: boolean;
+  readonly signatureIntelMatch: boolean;
+  readonly verifyingContractKnown: boolean;
   readonly hasUnknownInnerCall: boolean;
 }

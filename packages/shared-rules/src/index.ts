@@ -1,5 +1,5 @@
 // ── Engine ──
-export { evaluate } from "./engine/evaluate.js";
+export { evaluate, evaluateTransaction } from "./engine/evaluate.js";
 export { RULE_SET_VERSION } from "./engine/verdict.js";
 export type {
   RiskLevel,
@@ -9,6 +9,13 @@ export type {
   NavigationInput,
   NavigationContext,
   DomainContext,
+  SignatureInput,
+  TransactionEvaluationResult,
+  TransactionInput,
+  TransactionIntelVersions,
+  TransactionOverrideLevel,
+  TransactionVerdict,
+  TransactionVerdictStatus,
 } from "./engine/types.js";
 
 // ── Context Builder ──

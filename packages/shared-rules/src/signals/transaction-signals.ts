@@ -102,6 +102,12 @@ export function buildTransactionSignals(
     approvalDirection: approvalDirectionForAction(context.decoded),
     spenderTrusted: context.counterparty.spenderTrusted,
     recipientIsNew: context.counterparty.recipientIsNew,
+    isTransfer: context.decoded.actionType === "transfer",
+    isTransferFrom: context.decoded.actionType === "transferFrom",
+    isContractInteraction:
+      context.eventKind === "transaction" &&
+      context.to !== null &&
+      context.decoded.actionType !== "transfer",
     isMulticall: context.batch.isMulticall,
     containsApprovalAndTransfer:
       context.batch.isMulticall &&
@@ -111,6 +117,14 @@ export function buildTransactionSignals(
     containsTransfer,
     containsTransferFrom,
     batchActionCount: context.batch.actions.length,
+    hasNativeValue: context.valueWei !== "0",
+    touchesMaliciousContract: context.intel.contractDisposition === "malicious",
+    targetAllowlisted: context.intel.contractDisposition === "allowlisted",
+    signatureIntelMatch: context.intel.signatureDisposition === "malicious",
+    verifyingContractKnown:
+      context.eventKind === "signature" &&
+      context.signature.verifyingContractPresent &&
+      context.signature.verifyingContract !== null,
     hasUnknownInnerCall: context.batch.actions.some(
       (action) => action.actionType === "unknown"
     ),

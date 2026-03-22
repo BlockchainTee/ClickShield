@@ -2,9 +2,16 @@ import type {
   EngineResult,
   NavigationInput,
   Rule,
+  SignatureInput,
+  TransactionEvaluationResult,
+  TransactionInput,
 } from "./types.js";
 import { sortRules } from "./priorities.js";
-import { assembleVerdict, collectMatches } from "./verdict.js";
+import {
+  assembleTransactionVerdict,
+  assembleVerdict,
+  collectMatches,
+} from "./verdict.js";
 import { getRulesForEventKind } from "../registry/index.js";
 
 /**
@@ -43,4 +50,29 @@ function evaluateTyped<T>(
 export function evaluate(input: NavigationInput): EngineResult {
   const rules = getRulesForEventKind("navigation");
   return evaluateTyped(rules, input);
+}
+
+/**
+ * Evaluate a normalized Layer 3 transaction or signature input.
+ *
+ * Rules are sorted deterministically, evaluated synchronously, and assembled
+ * into the Layer 3 verdict contract.
+ *
+ * @param input - A normalized transaction or signature context.
+ * @returns TransactionEvaluationResult with Layer 3 verdict metadata.
+ */
+export function evaluateTransaction(
+  input: TransactionInput | SignatureInput
+): TransactionEvaluationResult {
+  if (input.eventKind === "transaction") {
+    const rules = getRulesForEventKind("transaction");
+    const sorted = sortRules(rules);
+    const matches = collectMatches(sorted, input);
+    return assembleTransactionVerdict(input, matches);
+  }
+
+  const rules = getRulesForEventKind("signature");
+  const sorted = sortRules(rules);
+  const matches = collectMatches(sorted, input);
+  return assembleTransactionVerdict(input, matches);
 }

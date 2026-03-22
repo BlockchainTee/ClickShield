@@ -98,6 +98,24 @@ function defaultIntel(): TransactionIntelContext {
   };
 }
 
+function resolveIntel(
+  input: Partial<TransactionIntelContext> | undefined
+): TransactionIntelContext {
+  const defaults = defaultIntel();
+  return {
+    contractDisposition: input?.contractDisposition ?? defaults.contractDisposition,
+    contractFeedVersion: input?.contractFeedVersion ?? defaults.contractFeedVersion,
+    allowlistFeedVersion:
+      input?.allowlistFeedVersion ?? defaults.allowlistFeedVersion,
+    signatureDisposition:
+      input?.signatureDisposition ?? defaults.signatureDisposition,
+    signatureFeedVersion:
+      input?.signatureFeedVersion ?? defaults.signatureFeedVersion,
+    originDisposition: input?.originDisposition ?? defaults.originDisposition,
+    sectionStates: input?.sectionStates ?? defaults.sectionStates,
+  };
+}
+
 function buildProvider(
   surface: string | undefined,
   walletProvider: string,
@@ -451,7 +469,7 @@ export function normalizeTransactionRequest(
       invalidDomainFields: [],
       permitKind: "none",
     },
-    intel: defaultIntel(),
+    intel: resolveIntel(input.intel),
     provider: buildProvider(
       input.surface,
       input.walletProvider,
@@ -495,7 +513,7 @@ export function normalizeTypedDataRequest(
       actions: [],
     },
     signature,
-    intel: defaultIntel(),
+    intel: resolveIntel(input.intel),
     provider: buildProvider(
       input.surface,
       input.walletProvider,

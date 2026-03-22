@@ -1,4 +1,17 @@
-import type { Rule, RiskLevel, RuleOutcome, Verdict } from "./types.js";
+import type {
+  Rule,
+  RiskLevel,
+  RuleOutcome,
+  SignatureInput,
+  TransactionEvaluationResult,
+  TransactionInput,
+  TransactionOverrideLevel,
+  TransactionVerdict,
+  TransactionVerdictStatus,
+  Verdict,
+} from "./types.js";
+import { buildTransactionExplanation } from "../transaction/explain.js";
+import { buildTransactionSignals } from "../signals/transaction-signals.js";
 
 /** Current version of the rule set. */
 export const RULE_SET_VERSION = "0.1.0";
@@ -135,4 +148,64 @@ export function collectMatches<T>(
   }
 
   return matches;
+}
+
+function toTransactionStatus(status: RuleOutcome): TransactionVerdictStatus {
+  switch (status) {
+    case "allow":
+      return "ALLOW";
+    case "warn":
+      return "WARN";
+    case "block":
+      return "BLOCK";
+  }
+}
+
+function overrideLevelForStatus(
+  status: TransactionVerdictStatus
+): TransactionOverrideLevel {
+  switch (status) {
+    case "ALLOW":
+      return "none";
+    case "WARN":
+      return "confirm";
+    case "BLOCK":
+      return "high_friction_confirm";
+  }
+}
+
+export function assembleTransactionVerdict(
+  input: TransactionInput | SignatureInput,
+  matches: readonly MatchedRuleData[]
+): TransactionEvaluationResult {
+  const base = assembleVerdict(matches);
+  const status = toTransactionStatus(base.status);
+  const overrideLevel = overrideLevelForStatus(status);
+  const signals = buildTransactionSignals(input);
+  const explanation = buildTransactionExplanation(input);
+  const verdict: TransactionVerdict = {
+    status,
+    riskLevel: base.riskLevel,
+    reasonCodes: base.reasonCodes,
+    matchedRules: base.matchedRules,
+    primaryRuleId: base.matchedRules[0] ?? null,
+    evidence: base.evidence,
+    explanation,
+    ruleSetVersion: base.ruleSetVersion,
+    intelVersions: {
+      contractFeedVersion: input.intel.contractFeedVersion,
+      allowlistFeedVersion: input.intel.allowlistFeedVersion,
+      signatureFeedVersion: input.intel.signatureFeedVersion,
+    },
+    overrideAllowed: status !== "ALLOW",
+    overrideLevel,
+  };
+
+  return {
+    verdict,
+    matchedRules: verdict.matchedRules,
+    reasonCodes: verdict.reasonCodes,
+    evidence: verdict.evidence,
+    signals,
+  };
 }

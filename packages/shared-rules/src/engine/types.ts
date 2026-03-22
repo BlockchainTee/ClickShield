@@ -1,3 +1,9 @@
+import type {
+  NormalizedTransactionContext,
+  TransactionExplanation,
+  TransactionSignals,
+} from "../transaction/types.js";
+
 /**
  * Discriminator for event categories the engine handles.
  */
@@ -111,33 +117,15 @@ export interface NavigationInput {
   readonly finalDomain?: string;
 }
 
-/** Input for transaction signing events. */
-export interface TransactionInput {
+/** Input for normalized transaction requests. */
+export type TransactionInput = NormalizedTransactionContext & {
   readonly eventKind: "transaction";
-  /** Hex-encoded calldata (e.g., "0x095ea7b3..."). */
-  readonly calldata: string;
-  /** Target contract address. */
-  readonly toAddress: string;
-  /** Spender address (for approvals). Empty string if not applicable. */
-  readonly spenderAddress: string;
-  /** Value in wei (as string to avoid bigint in types). */
-  readonly value: string;
-  /** Chain ID. */
-  readonly chainId: number;
-}
+};
 
-/** Input for signature request events (EIP-712 typed data, personal_sign, etc.). */
-export interface SignatureInput {
+/** Input for normalized signature requests. */
+export type SignatureInput = NormalizedTransactionContext & {
   readonly eventKind: "signature";
-  /** Raw message to sign (hex or plaintext). */
-  readonly message: string;
-  /** EIP-712 typed data JSON string, or empty if not typed. */
-  readonly typedData: string;
-  /** Origin domain requesting the signature. */
-  readonly origin: string;
-  /** Chain ID. */
-  readonly chainId: number;
-}
+};
 
 /** Input for wallet review/scan events. */
 export interface WalletScanInput {
@@ -185,6 +173,41 @@ export type EngineInput =
   | WalletScanInput
   | DownloadInput
   | ClipboardInput;
+
+export type TransactionVerdictStatus = "ALLOW" | "WARN" | "BLOCK";
+
+export type TransactionOverrideLevel =
+  | "none"
+  | "confirm"
+  | "high_friction_confirm";
+
+export interface TransactionIntelVersions {
+  readonly contractFeedVersion: string | null;
+  readonly allowlistFeedVersion: string | null;
+  readonly signatureFeedVersion: string | null;
+}
+
+export interface TransactionVerdict {
+  readonly status: TransactionVerdictStatus;
+  readonly riskLevel: RiskLevel;
+  readonly reasonCodes: string[];
+  readonly matchedRules: string[];
+  readonly primaryRuleId: string | null;
+  readonly evidence: Record<string, unknown>;
+  readonly explanation: TransactionExplanation;
+  readonly ruleSetVersion: string;
+  readonly intelVersions: TransactionIntelVersions;
+  readonly overrideAllowed: boolean;
+  readonly overrideLevel: TransactionOverrideLevel;
+}
+
+export interface TransactionEvaluationResult {
+  readonly verdict: TransactionVerdict;
+  readonly matchedRules: string[];
+  readonly reasonCodes: string[];
+  readonly evidence: Record<string, unknown>;
+  readonly signals: TransactionSignals;
+}
 
 // ── NavigationContext — rich client-side context shape ──
 

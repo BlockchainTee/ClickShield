@@ -21,6 +21,549 @@ function sortRules(rules2) {
   return [...rules2].sort(compareRules);
 }
 
+// src/transaction/selectors.ts
+var APPROVE_SELECTOR = "0x095ea7b3";
+var SET_APPROVAL_FOR_ALL_SELECTOR = "0xa22cb465";
+var INCREASE_ALLOWANCE_SELECTOR = "0x39509351";
+var TRANSFER_SELECTOR = "0xa9059cbb";
+var TRANSFER_FROM_SELECTOR = "0x23b872dd";
+var ERC20_PERMIT_SELECTOR = "0xd505accf";
+var ALLOWED_BOOL_PERMIT_SELECTOR = "0x8fcbaf0c";
+var MULTICALL_BYTES_SELECTOR = "0xac9650d8";
+var MULTICALL_DEADLINE_BYTES_SELECTOR = "0x5ae401dc";
+var TRANSACTION_SELECTOR_REGISTRY = Object.freeze({
+  [APPROVE_SELECTOR]: {
+    selector: APPROVE_SELECTOR,
+    functionName: "approve",
+    actionType: "approve",
+    variant: "standard"
+  },
+  [SET_APPROVAL_FOR_ALL_SELECTOR]: {
+    selector: SET_APPROVAL_FOR_ALL_SELECTOR,
+    functionName: "setApprovalForAll",
+    actionType: "setApprovalForAll",
+    variant: "standard"
+  },
+  [INCREASE_ALLOWANCE_SELECTOR]: {
+    selector: INCREASE_ALLOWANCE_SELECTOR,
+    functionName: "increaseAllowance",
+    actionType: "increaseAllowance",
+    variant: "standard"
+  },
+  [TRANSFER_SELECTOR]: {
+    selector: TRANSFER_SELECTOR,
+    functionName: "transfer",
+    actionType: "transfer",
+    variant: "standard"
+  },
+  [TRANSFER_FROM_SELECTOR]: {
+    selector: TRANSFER_FROM_SELECTOR,
+    functionName: "transferFrom",
+    actionType: "transferFrom",
+    variant: "standard"
+  },
+  [ERC20_PERMIT_SELECTOR]: {
+    selector: ERC20_PERMIT_SELECTOR,
+    functionName: "permit",
+    actionType: "permit",
+    variant: "standard"
+  },
+  [ALLOWED_BOOL_PERMIT_SELECTOR]: {
+    selector: ALLOWED_BOOL_PERMIT_SELECTOR,
+    functionName: "permit",
+    actionType: "permit",
+    variant: "allowed_bool"
+  },
+  [MULTICALL_BYTES_SELECTOR]: {
+    selector: MULTICALL_BYTES_SELECTOR,
+    functionName: "multicall",
+    actionType: "multicall",
+    variant: "bytes_array"
+  },
+  [MULTICALL_DEADLINE_BYTES_SELECTOR]: {
+    selector: MULTICALL_DEADLINE_BYTES_SELECTOR,
+    functionName: "multicall",
+    actionType: "multicall",
+    variant: "deadline_bytes_array"
+  }
+});
+function getTransactionSelectorDefinition(selector) {
+  const normalized = selector.toLowerCase();
+  return TRANSACTION_SELECTOR_REGISTRY[normalized] ?? null;
+}
+function classifyTransactionSelector(selector) {
+  return getTransactionSelectorDefinition(selector)?.actionType ?? "unknown";
+}
+function listTransactionSelectors() {
+  return Object.values(TRANSACTION_SELECTOR_REGISTRY);
+}
+
+// src/normalize/transaction.ts
+var MAX_UINT256_HEX = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+var KNOWN_SELECTORS = {
+  [APPROVE_SELECTOR]: "approve",
+  [SET_APPROVAL_FOR_ALL_SELECTOR]: "setApprovalForAll",
+  [INCREASE_ALLOWANCE_SELECTOR]: "increaseAllowance",
+  [TRANSFER_SELECTOR]: "transfer",
+  [TRANSFER_FROM_SELECTOR]: "transferFrom",
+  [ERC20_PERMIT_SELECTOR]: "permit",
+  [MULTICALL_BYTES_SELECTOR]: "multicall",
+  [MULTICALL_DEADLINE_BYTES_SELECTOR]: "multicall"
+};
+function extractSelector(calldata) {
+  const clean = calldata.startsWith("0x") ? calldata : `0x${calldata}`;
+  return clean.slice(0, 10).toLowerCase();
+}
+function isUnlimitedApprovalAmount(amount) {
+  return amount.toLowerCase() === MAX_UINT256_HEX;
+}
+
+// src/normalize/address.ts
+function normalizeEvmAddress(address) {
+  const trimmed = address.trim().toLowerCase();
+  return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+}
+function isValidEvmAddress(address) {
+  return /^0x[0-9a-fA-F]{40}$/.test(address.trim());
+}
+
+// src/transaction/typed-data.ts
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isTypedDataField(value) {
+  if (!isRecord(value)) return false;
+  return typeof value.name === "string" && typeof value.type === "string";
+}
+function parseTypedDataPayload(input) {
+  if (typeof input === "string") {
+    const parsed = JSON.parse(input);
+    if (!isRecord(parsed)) {
+      throw new Error("Typed data payload must be an object.");
+    }
+    return parsed;
+  }
+  return input;
+}
+function normalizeTypes(value) {
+  if (!value || !isRecord(value)) {
+    return {};
+  }
+  const entries = [];
+  for (const key of Object.keys(value).sort()) {
+    const fields = value[key];
+    if (!Array.isArray(fields)) continue;
+    const normalizedFields = fields.filter(isTypedDataField).map((field) => ({
+      name: field.name,
+      type: field.type
+    }));
+    entries.push([key, normalizedFields]);
+  }
+  return Object.fromEntries(entries);
+}
+function normalizeString(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+function normalizeNumericString(value) {
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "bigint") {
+    return null;
+  }
+  const raw = typeof value === "string" ? value.trim() : `${value}`;
+  if (raw === "") return null;
+  try {
+    if (/^0x[0-9a-fA-F]+$/.test(raw)) {
+      return BigInt(raw).toString(10);
+    }
+    if (/^-?[0-9]+$/.test(raw)) {
+      return BigInt(raw).toString(10);
+    }
+  } catch {
+    return raw;
+  }
+  return raw;
+}
+function isCanonicalDecimalString(value) {
+  return value !== null && /^[0-9]+$/.test(value);
+}
+function normalizeBoolean(value) {
+  return value === true;
+}
+function stripArraySuffix(type) {
+  const match = type.match(/^(.*)\[[0-9]*\]$/);
+  return match ? match[1] : null;
+}
+function normalizeUnknownObject(value) {
+  const entries = [];
+  for (const key of Object.keys(value).sort()) {
+    entries.push([key, normalizeTypedDataValue(value[key], null, {})]);
+  }
+  return Object.fromEntries(entries);
+}
+function normalizeStructuredValue(value, structName, types) {
+  const fieldMap = /* @__PURE__ */ new Map();
+  for (const field of types[structName] ?? []) {
+    fieldMap.set(field.name, field.type);
+  }
+  const entries = [];
+  for (const key of Object.keys(value).sort()) {
+    entries.push([
+      key,
+      normalizeTypedDataValue(value[key], fieldMap.get(key) ?? null, types)
+    ]);
+  }
+  return Object.fromEntries(entries);
+}
+function normalizeTypedDataValue(value, solidityType, types) {
+  if (value === null || value === void 0) return null;
+  if (solidityType !== null) {
+    const arrayInnerType = stripArraySuffix(solidityType);
+    if (arrayInnerType !== null) {
+      if (!Array.isArray(value)) return [];
+      return value.map(
+        (item) => normalizeTypedDataValue(item, arrayInnerType, types)
+      );
+    }
+    if (solidityType === "address") {
+      const normalized = normalizeString(value);
+      return normalized === null ? null : normalizeEvmAddress(normalized);
+    }
+    if (solidityType.startsWith("uint") || solidityType.startsWith("int")) {
+      return normalizeNumericString(value);
+    }
+    if (solidityType === "bool") {
+      return normalizeBoolean(value);
+    }
+    if (solidityType === "string" || solidityType.startsWith("bytes")) {
+      return normalizeString(value);
+    }
+    if (types[solidityType] && isRecord(value)) {
+      return normalizeStructuredValue(value, solidityType, types);
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeTypedDataValue(item, null, types));
+  }
+  if (isRecord(value)) {
+    return normalizeUnknownObject(value);
+  }
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "bigint") {
+    return `${value}`;
+  }
+  return `${value}`;
+}
+function stableStringify(value) {
+  if (value === null) return "null";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  const record = value;
+  const parts = Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
+  return `{${parts.join(",")}}`;
+}
+function serializeTypesForCanonical(types) {
+  const entries = [];
+  for (const key of Object.keys(types).sort()) {
+    const fields = types[key] ?? [];
+    entries.push([
+      key,
+      fields.map((field) => ({
+        name: field.name,
+        type: field.type
+      }))
+    ]);
+  }
+  return Object.fromEntries(entries);
+}
+function classifyPermitKind(primaryType) {
+  if (primaryType === null) return "none";
+  const normalized = primaryType.trim().toLowerCase();
+  if (normalized === "") return "none";
+  if (normalized === "permit") return "erc20_permit";
+  if (normalized === "permitsingle") return "permit2_single";
+  if (normalized === "permitbatch") return "permit2_batch";
+  if (normalized.includes("permit")) return "unknown_permit";
+  return "none";
+}
+function normalizeTypedData(input) {
+  const payload = parseTypedDataPayload(input);
+  const types = normalizeTypes(payload.types ?? null);
+  const primaryType = normalizeString(payload.primaryType);
+  const domainInput = isRecord(payload.domain) ? payload.domain : {};
+  const messageInput = isRecord(payload.message) ? payload.message : {};
+  const domainType = types.EIP712Domain ? "EIP712Domain" : null;
+  const normalizedDomain = normalizeTypedDataValue(
+    domainInput,
+    domainType,
+    types
+  );
+  const normalizedMessage = normalizeTypedDataValue(
+    messageInput,
+    primaryType,
+    types
+  );
+  const domain = normalizedDomain !== null && !Array.isArray(normalizedDomain) && typeof normalizedDomain === "object" ? normalizedDomain : {};
+  const message = normalizedMessage !== null && !Array.isArray(normalizedMessage) && typeof normalizedMessage === "object" ? normalizedMessage : {};
+  const domainName = typeof domain.name === "string" ? domain.name : normalizeString(domainInput.name);
+  const domainVersion = typeof domain.version === "string" ? domain.version : normalizeString(domainInput.version);
+  const domainChainIdPresent = Object.prototype.hasOwnProperty.call(
+    domainInput,
+    "chainId"
+  );
+  const normalizedDomainChainId = domainChainIdPresent ? normalizeNumericString(domainInput.chainId) : null;
+  const verifyingContractPresent = Object.prototype.hasOwnProperty.call(
+    domainInput,
+    "verifyingContract"
+  );
+  const verifyingContractRaw = verifyingContractPresent ? normalizeString(domainInput.verifyingContract) : null;
+  const missingDomainFields = [];
+  const invalidDomainFields = [];
+  if (!domainChainIdPresent) {
+    missingDomainFields.push("domain.chainId");
+  }
+  if (!verifyingContractPresent) {
+    missingDomainFields.push("domain.verifyingContract");
+  }
+  const domainChainId = domainChainIdPresent && isCanonicalDecimalString(normalizedDomainChainId) ? normalizedDomainChainId : null;
+  const hasValidDomainChainId = domainChainId !== null;
+  if (domainChainIdPresent && !hasValidDomainChainId) {
+    invalidDomainFields.push("domain.chainId");
+  }
+  const verifyingContract = verifyingContractRaw !== null && isValidEvmAddress(verifyingContractRaw) ? normalizeEvmAddress(verifyingContractRaw) : null;
+  const hasValidVerifyingContract = verifyingContract !== null;
+  if (verifyingContractPresent && !hasValidVerifyingContract) {
+    invalidDomainFields.push("domain.verifyingContract");
+  }
+  const normalizationState = invalidDomainFields.length > 0 ? "invalid_domain_fields" : missingDomainFields.length > 0 ? "missing_domain_fields" : "normalized";
+  const canonicalRoot = {
+    domain,
+    message,
+    primaryType,
+    types: serializeTypesForCanonical(types)
+  };
+  return {
+    isTypedData: true,
+    primaryType,
+    domainName,
+    domainVersion,
+    domainChainId,
+    domainChainIdPresent: hasValidDomainChainId,
+    verifyingContract,
+    verifyingContractPresent: hasValidVerifyingContract,
+    message,
+    domain,
+    types,
+    canonicalJson: stableStringify(canonicalRoot),
+    normalizationState,
+    missingDomainFields,
+    invalidDomainFields,
+    permitKind: classifyPermitKind(primaryType)
+  };
+}
+
+// src/signals/transaction-signals.ts
+function isApprovalMethodAction(action) {
+  return action.actionType === "approve" || action.actionType === "increaseAllowance" || action.actionType === "setApprovalForAll";
+}
+function approvalDirectionForAction(action) {
+  return action.approvalDirection;
+}
+function isGrantApprovalAction(action) {
+  return isApprovalMethodAction(action) && approvalDirectionForAction(action) === "grant";
+}
+function hasTransferAction(action) {
+  return action.actionType === "transfer" || action.actionType === "transferFrom";
+}
+function buildTransactionSignals(context) {
+  const actions = context.batch.isMulticall ? context.batch.actions : [context.decoded];
+  const containsApproval = actions.some((action) => isGrantApprovalAction(action));
+  const containsTransfer = actions.some((action) => action.actionType === "transfer");
+  const containsTransferFrom = actions.some(
+    (action) => action.actionType === "transferFrom"
+  );
+  return {
+    actionType: context.actionType,
+    isApprovalMethod: isApprovalMethodAction(context.decoded),
+    isUnlimitedApproval: context.decoded.amount !== null ? isUnlimitedApprovalAmount(
+      BigInt(context.decoded.amount).toString(16).padStart(64, "0")
+    ) : false,
+    isPermitSignature: context.eventKind === "signature" && context.signature.permitKind !== "none",
+    isSetApprovalForAll: context.decoded.actionType === "setApprovalForAll",
+    approvalDirection: approvalDirectionForAction(context.decoded),
+    spenderTrusted: context.counterparty.spenderTrusted,
+    recipientIsNew: context.counterparty.recipientIsNew,
+    isTransfer: context.decoded.actionType === "transfer",
+    isTransferFrom: context.decoded.actionType === "transferFrom",
+    isContractInteraction: context.eventKind === "transaction" && context.to !== null && context.decoded.actionType !== "transfer",
+    isMulticall: context.batch.isMulticall,
+    containsApprovalAndTransfer: context.batch.isMulticall && containsApproval && actions.some((action) => hasTransferAction(action)),
+    containsApproval,
+    containsTransfer,
+    containsTransferFrom,
+    batchActionCount: context.batch.actions.length,
+    hasNativeValue: context.valueWei !== "0",
+    touchesMaliciousContract: context.intel.contractDisposition === "malicious",
+    targetAllowlisted: context.intel.contractDisposition === "allowlisted",
+    signatureIntelMatch: context.intel.signatureDisposition === "malicious",
+    verifyingContractKnown: context.eventKind === "signature" && context.signature.verifyingContractPresent && context.signature.verifyingContract !== null,
+    hasUnknownInnerCall: context.batch.actions.some(
+      (action) => action.actionType === "unknown"
+    )
+  };
+}
+
+// src/transaction/explain.ts
+function shortAddress(address) {
+  return address ?? "unknown contract";
+}
+function buildTechnicalFacts(context) {
+  const technical = [];
+  if (context.methodSelector !== null) {
+    technical.push(`Selector: ${context.methodSelector}`);
+  }
+  if (context.signature.primaryType !== null) {
+    technical.push(`Primary type: ${context.signature.primaryType}`);
+  }
+  if (context.to !== null) {
+    technical.push(`Target: ${context.to}`);
+  }
+  if (context.signature.verifyingContract !== null) {
+    technical.push(`Verifier: ${context.signature.verifyingContract}`);
+  }
+  return technical;
+}
+function buildUnknowns(context) {
+  const unknowns = [];
+  if (context.eventKind === "transaction" && context.actionType === "unknown") {
+    unknowns.push("ClickShield could not fully decode this contract call.");
+  }
+  if (context.eventKind === "signature" && context.signature.normalizationState === "missing_domain_fields") {
+    unknowns.push(
+      `Important signature domain fields were missing: ${context.signature.missingDomainFields.join(", ")}`
+    );
+  }
+  if (context.eventKind === "signature" && context.signature.normalizationState === "invalid_domain_fields") {
+    unknowns.push(
+      `Important signature domain fields were invalid: ${context.signature.invalidDomainFields.join(", ")}`
+    );
+  }
+  return unknowns;
+}
+function explainApprove(context, signals) {
+  const spender = shortAddress(context.decoded.spender);
+  const summary = signals.isUnlimitedApproval ? `Approve unlimited token spending by contract ${spender}` : `Approve token spending by contract ${spender}`;
+  return {
+    headline: signals.isUnlimitedApproval ? "Unlimited token approval" : "Token approval",
+    summary,
+    details: [
+      "This gives the contract permission to spend this token balance without another approval."
+    ],
+    unknowns: buildUnknowns(context),
+    technical: buildTechnicalFacts(context)
+  };
+}
+function explainSetApprovalForAll(context) {
+  const approved = context.decoded.params.approved === true;
+  return {
+    headline: approved ? "Full NFT collection access" : "NFT collection approval revoked",
+    summary: approved ? "Allow this contract to transfer all NFTs in this collection." : "Remove this contract's permission to transfer NFTs in this collection.",
+    details: [
+      `Operator: ${shortAddress(context.decoded.operator)}`,
+      approved ? "This grants collection-wide NFT transfer permission." : "This removes collection-wide NFT transfer permission."
+    ],
+    unknowns: buildUnknowns(context),
+    technical: buildTechnicalFacts(context)
+  };
+}
+function explainPermitSignature(context) {
+  return {
+    headline: "Token permission signature",
+    summary: `Sign a permission that lets contract ${shortAddress(
+      context.signature.verifyingContract
+    )} spend tokens without an on-chain approval transaction.`,
+    details: [
+      "This signature can authorize token spending without sending a separate approval transaction first."
+    ],
+    unknowns: buildUnknowns(context),
+    technical: buildTechnicalFacts(context)
+  };
+}
+function explainMulticall(context, signals) {
+  const summary = signals.containsApprovalAndTransfer ? "This batch both grants token permission and moves assets in one request." : `Execute a batch of ${context.batch.actions.length} contract actions in one request.`;
+  return {
+    headline: signals.containsApprovalAndTransfer ? "Batch transaction with approval and transfer" : "Batch contract transaction",
+    summary,
+    details: [`Batch action count: ${context.batch.actions.length}`],
+    unknowns: buildUnknowns(context),
+    technical: buildTechnicalFacts(context)
+  };
+}
+function explainUnknown(context) {
+  return {
+    headline: context.eventKind === "signature" ? "Unknown typed-data signature" : "Unknown contract interaction",
+    summary: context.eventKind === "signature" ? "ClickShield could not fully normalize this typed-data request." : "ClickShield could not fully decode this contract call.",
+    details: [
+      `Destination contract: ${shortAddress(context.to)}`,
+      `Chain: ${context.chainId}`,
+      `Origin: ${context.originDomain}`,
+      `Native value: ${context.valueWei}`,
+      `Malicious-contract intel match: ${context.intel.contractDisposition === "malicious" ? "yes" : "no"}`
+    ],
+    unknowns: buildUnknowns(context),
+    technical: buildTechnicalFacts(context)
+  };
+}
+function buildTransactionExplanation(context) {
+  const signals = buildTransactionSignals(context);
+  if (context.eventKind === "signature" && signals.isPermitSignature) {
+    return explainPermitSignature(context);
+  }
+  switch (context.actionType) {
+    case "approve":
+    case "increaseAllowance":
+      return explainApprove(context, signals);
+    case "setApprovalForAll":
+      return explainSetApprovalForAll(context);
+    case "multicall":
+      return explainMulticall(context, signals);
+    case "permit":
+      return {
+        headline: "Token permission transaction",
+        summary: `Submit an on-chain permit that grants token spending permission to contract ${shortAddress(
+          context.decoded.spender
+        )}.`,
+        details: [],
+        unknowns: buildUnknowns(context),
+        technical: buildTechnicalFacts(context)
+      };
+    case "transfer":
+      return {
+        headline: "Token transfer",
+        summary: `Transfer tokens to ${shortAddress(context.decoded.recipient)}.`,
+        details: [],
+        unknowns: buildUnknowns(context),
+        technical: buildTechnicalFacts(context)
+      };
+    case "transferFrom":
+      return {
+        headline: "Delegated token transfer",
+        summary: `Transfer tokens from ${shortAddress(
+          context.decoded.owner
+        )} to ${shortAddress(context.decoded.recipient)}.`,
+        details: [],
+        unknowns: buildUnknowns(context),
+        technical: buildTechnicalFacts(context)
+      };
+    default:
+      return explainUnknown(context);
+  }
+}
+
 // src/engine/verdict.ts
 var RULE_SET_VERSION = "0.1.0";
 var SEVERITY_WEIGHT2 = {
@@ -90,6 +633,57 @@ function collectMatches(rules2, input) {
     }
   }
   return matches;
+}
+function toTransactionStatus(status) {
+  switch (status) {
+    case "allow":
+      return "ALLOW";
+    case "warn":
+      return "WARN";
+    case "block":
+      return "BLOCK";
+  }
+}
+function overrideLevelForStatus(status) {
+  switch (status) {
+    case "ALLOW":
+      return "none";
+    case "WARN":
+      return "confirm";
+    case "BLOCK":
+      return "high_friction_confirm";
+  }
+}
+function assembleTransactionVerdict(input, matches) {
+  const base2 = assembleVerdict(matches);
+  const status = toTransactionStatus(base2.status);
+  const overrideLevel = overrideLevelForStatus(status);
+  const signals = buildTransactionSignals(input);
+  const explanation = buildTransactionExplanation(input);
+  const verdict = {
+    status,
+    riskLevel: base2.riskLevel,
+    reasonCodes: base2.reasonCodes,
+    matchedRules: base2.matchedRules,
+    primaryRuleId: base2.matchedRules[0] ?? null,
+    evidence: base2.evidence,
+    explanation,
+    ruleSetVersion: base2.ruleSetVersion,
+    intelVersions: {
+      contractFeedVersion: input.intel.contractFeedVersion,
+      allowlistFeedVersion: input.intel.allowlistFeedVersion,
+      signatureFeedVersion: input.intel.signatureFeedVersion
+    },
+    overrideAllowed: status !== "ALLOW",
+    overrideLevel
+  };
+  return {
+    verdict,
+    matchedRules: verdict.matchedRules,
+    reasonCodes: verdict.reasonCodes,
+    evidence: verdict.evidence,
+    signals
+  };
 }
 
 // src/normalize/domain.ts
@@ -2137,11 +2731,273 @@ var PHISHING_RULES = [
   PHISH_DOMAIN_HIGH_ENTROPY
 ];
 
+// src/policies/transaction/codes.ts
+var TRANSACTION_CODES = {
+  UNLIMITED_APPROVAL: "TX_UNLIMITED_APPROVAL",
+  UNKNOWN_SPENDER: "TX_UNKNOWN_SPENDER",
+  SET_APPROVAL_FOR_ALL: "TX_SET_APPROVAL_FOR_ALL",
+  PERMIT_SIGNATURE: "TX_PERMIT_SIGNATURE",
+  KNOWN_MALICIOUS_CONTRACT: "TX_KNOWN_MALICIOUS_CONTRACT",
+  SCAM_SIGNATURE_MATCH: "TX_SCAM_SIGNATURE_MATCH",
+  MULTICALL_APPROVAL_AND_TRANSFER: "TX_MULTICALL_APPROVAL_AND_TRANSFER",
+  UNKNOWN_CONTRACT_INTERACTION: "TX_UNKNOWN_CONTRACT_INTERACTION",
+  NEW_RECIPIENT: "TX_NEW_RECIPIENT"
+};
+
+// src/policies/transaction/rules.ts
+function isNonTrustedCounterparty(input) {
+  return input.counterparty.spenderTrusted !== true;
+}
+var BLOCK_MALICIOUS_TRANSACTION_CONTRACT = {
+  id: "TX_BLOCK_MALICIOUS_TRANSACTION_CONTRACT",
+  name: "Block malicious transaction target",
+  eventKind: "transaction",
+  severity: "critical",
+  outcome: "block",
+  priority: 10,
+  predicate: (ctx) => ctx.eventKind === "transaction" && ctx.intel.contractDisposition === "malicious",
+  buildReasonCodes: () => [TRANSACTION_CODES.KNOWN_MALICIOUS_CONTRACT],
+  buildEvidence: (ctx) => ({
+    maliciousContract: {
+      address: ctx.to,
+      disposition: ctx.intel.contractDisposition,
+      contractFeedVersion: ctx.intel.contractFeedVersion
+    }
+  })
+};
+var BLOCK_MALICIOUS_SIGNATURE_CONTRACT = {
+  id: "TX_BLOCK_MALICIOUS_SIGNATURE_CONTRACT",
+  name: "Block malicious verifying contract",
+  eventKind: "signature",
+  severity: "critical",
+  outcome: "block",
+  priority: 10,
+  predicate: (ctx) => ctx.eventKind === "signature" && ctx.intel.contractDisposition === "malicious",
+  buildReasonCodes: (ctx) => {
+    const codes = [TRANSACTION_CODES.KNOWN_MALICIOUS_CONTRACT];
+    if (ctx.signature.permitKind !== "none") {
+      codes.push(TRANSACTION_CODES.PERMIT_SIGNATURE);
+    }
+    return codes;
+  },
+  buildEvidence: (ctx) => ({
+    maliciousVerifier: {
+      address: ctx.signature.verifyingContract,
+      disposition: ctx.intel.contractDisposition,
+      contractFeedVersion: ctx.intel.contractFeedVersion
+    }
+  })
+};
+var BLOCK_SCAM_SIGNATURE_MATCH = {
+  id: "TX_BLOCK_SCAM_SIGNATURE_MATCH",
+  name: "Block known scam signature intel match",
+  eventKind: "signature",
+  severity: "critical",
+  outcome: "block",
+  priority: 5,
+  predicate: (ctx) => ctx.eventKind === "signature" && ctx.intel.signatureDisposition === "malicious",
+  buildReasonCodes: (ctx) => {
+    const codes = [TRANSACTION_CODES.SCAM_SIGNATURE_MATCH];
+    if (ctx.signature.permitKind !== "none") {
+      codes.push(TRANSACTION_CODES.PERMIT_SIGNATURE);
+    }
+    return codes;
+  },
+  buildEvidence: (ctx) => ({
+    scamSignature: {
+      primaryType: ctx.signature.primaryType,
+      signatureDisposition: ctx.intel.signatureDisposition,
+      signatureFeedVersion: ctx.intel.signatureFeedVersion,
+      verifyingContract: ctx.signature.verifyingContract
+    }
+  })
+};
+var WARN_UNLIMITED_APPROVAL_UNKNOWN_SPENDER = {
+  id: "TX_WARN_UNLIMITED_APPROVAL_UNKNOWN_SPENDER",
+  name: "Warn on unlimited approval to non-trusted spender",
+  eventKind: "transaction",
+  severity: "high",
+  outcome: "warn",
+  priority: 120,
+  predicate: (ctx) => {
+    const signals = buildTransactionSignals(ctx);
+    return ctx.eventKind === "transaction" && signals.isApprovalMethod && signals.isUnlimitedApproval && signals.approvalDirection === "grant" && isNonTrustedCounterparty(ctx) && !signals.targetAllowlisted;
+  },
+  buildReasonCodes: () => [
+    TRANSACTION_CODES.UNLIMITED_APPROVAL,
+    TRANSACTION_CODES.UNKNOWN_SPENDER
+  ],
+  buildEvidence: (ctx) => ({
+    approval: {
+      spender: ctx.decoded.spender,
+      amountKind: ctx.decoded.amountKind,
+      spenderTrusted: ctx.counterparty.spenderTrusted
+    }
+  })
+};
+var WARN_SET_APPROVAL_FOR_ALL_UNKNOWN_OPERATOR = {
+  id: "TX_WARN_SET_APPROVAL_FOR_ALL_UNKNOWN_OPERATOR",
+  name: "Warn on full NFT collection approval to non-trusted operator",
+  eventKind: "transaction",
+  severity: "high",
+  outcome: "warn",
+  priority: 130,
+  predicate: (ctx) => {
+    const signals = buildTransactionSignals(ctx);
+    return ctx.eventKind === "transaction" && signals.isSetApprovalForAll && signals.approvalDirection === "grant" && isNonTrustedCounterparty(ctx) && !signals.targetAllowlisted;
+  },
+  buildReasonCodes: () => [
+    TRANSACTION_CODES.SET_APPROVAL_FOR_ALL,
+    TRANSACTION_CODES.UNKNOWN_SPENDER
+  ],
+  buildEvidence: (ctx) => ({
+    approvalForAll: {
+      operator: ctx.decoded.operator,
+      spenderTrusted: ctx.counterparty.spenderTrusted
+    }
+  })
+};
+var WARN_INCREASE_ALLOWANCE_UNKNOWN_SPENDER = {
+  id: "TX_WARN_INCREASE_ALLOWANCE_UNKNOWN_SPENDER",
+  name: "Warn on increaseAllowance to a non-trusted spender",
+  eventKind: "transaction",
+  severity: "high",
+  outcome: "warn",
+  priority: 135,
+  predicate: (ctx) => {
+    const signals = buildTransactionSignals(ctx);
+    return ctx.eventKind === "transaction" && ctx.actionType === "increaseAllowance" && signals.approvalDirection === "grant" && !signals.isUnlimitedApproval && isNonTrustedCounterparty(ctx) && !signals.targetAllowlisted;
+  },
+  buildReasonCodes: () => [TRANSACTION_CODES.UNKNOWN_SPENDER],
+  buildEvidence: (ctx) => ({
+    increaseAllowance: {
+      spender: ctx.decoded.spender,
+      amount: ctx.decoded.amount,
+      amountKind: ctx.decoded.amountKind,
+      spenderTrusted: ctx.counterparty.spenderTrusted
+    }
+  })
+};
+var WARN_PERMIT_SIGNATURE_TO_UNTRUSTED_CONTRACT = {
+  id: "TX_WARN_PERMIT_SIGNATURE_TO_UNTRUSTED_CONTRACT",
+  name: "Warn on permit signature to untrusted verifier",
+  eventKind: "signature",
+  severity: "high",
+  outcome: "warn",
+  priority: 140,
+  predicate: (ctx) => {
+    const signals = buildTransactionSignals(ctx);
+    return ctx.eventKind === "signature" && signals.isPermitSignature && !signals.signatureIntelMatch && !signals.touchesMaliciousContract && !signals.targetAllowlisted;
+  },
+  buildReasonCodes: () => [TRANSACTION_CODES.PERMIT_SIGNATURE],
+  buildEvidence: (ctx) => ({
+    permitSignature: {
+      permitKind: ctx.signature.permitKind,
+      verifyingContract: ctx.signature.verifyingContract,
+      verifyingContractPresent: ctx.signature.verifyingContractPresent,
+      normalizationState: ctx.signature.normalizationState,
+      contractDisposition: ctx.intel.contractDisposition
+    }
+  })
+};
+var WARN_MULTICALL_APPROVAL_AND_TRANSFER = {
+  id: "TX_WARN_MULTICALL_APPROVAL_AND_TRANSFER",
+  name: "Warn on multicall that both grants approval and moves assets",
+  eventKind: "transaction",
+  severity: "high",
+  outcome: "warn",
+  priority: 150,
+  predicate: (ctx) => {
+    const signals = buildTransactionSignals(ctx);
+    return ctx.eventKind === "transaction" && signals.isMulticall && signals.containsApprovalAndTransfer;
+  },
+  buildReasonCodes: () => [
+    TRANSACTION_CODES.MULTICALL_APPROVAL_AND_TRANSFER
+  ],
+  buildEvidence: (ctx) => ({
+    multicall: {
+      batchSelector: ctx.batch.batchSelector,
+      actionCount: ctx.batch.actions.length,
+      actions: ctx.batch.actions.map((action) => action.actionType)
+    }
+  })
+};
+var WARN_TRANSFER_FROM_NEW_RECIPIENT = {
+  id: "TX_WARN_TRANSFER_FROM_NEW_RECIPIENT",
+  name: "Warn on delegated transfer to a new recipient through a contract",
+  eventKind: "transaction",
+  severity: "medium",
+  outcome: "warn",
+  priority: 220,
+  predicate: (ctx) => ctx.eventKind === "transaction" && ctx.actionType === "transferFrom" && ctx.counterparty.recipientIsNew === true && ctx.intel.contractDisposition !== "allowlisted" && ctx.intel.contractDisposition !== "malicious",
+  buildReasonCodes: () => [
+    TRANSACTION_CODES.UNKNOWN_CONTRACT_INTERACTION,
+    TRANSACTION_CODES.NEW_RECIPIENT
+  ],
+  buildEvidence: (ctx) => ({
+    delegatedTransfer: {
+      owner: ctx.decoded.owner,
+      recipient: ctx.decoded.recipient,
+      recipientIsNew: ctx.counterparty.recipientIsNew
+    }
+  })
+};
+var WARN_UNKNOWN_CONTRACT_INTERACTION_WITH_VALUE = {
+  id: "TX_WARN_UNKNOWN_CONTRACT_INTERACTION_WITH_VALUE",
+  name: "Warn on opaque contract interaction carrying native value",
+  eventKind: "transaction",
+  severity: "medium",
+  outcome: "warn",
+  priority: 240,
+  predicate: (ctx) => {
+    const signals = buildTransactionSignals(ctx);
+    return ctx.eventKind === "transaction" && ctx.actionType === "unknown" && signals.hasNativeValue && ctx.intel.contractDisposition !== "allowlisted" && ctx.intel.contractDisposition !== "malicious";
+  },
+  buildReasonCodes: (ctx) => {
+    const codes = [TRANSACTION_CODES.UNKNOWN_CONTRACT_INTERACTION];
+    if (ctx.counterparty.recipientIsNew === true) {
+      codes.push(TRANSACTION_CODES.NEW_RECIPIENT);
+    }
+    return codes;
+  },
+  buildEvidence: (ctx) => ({
+    unknownInteraction: {
+      target: ctx.to,
+      valueWei: ctx.valueWei,
+      recipientIsNew: ctx.counterparty.recipientIsNew
+    }
+  })
+};
+var TRANSACTION_RULES = [
+  BLOCK_SCAM_SIGNATURE_MATCH,
+  BLOCK_MALICIOUS_TRANSACTION_CONTRACT,
+  BLOCK_MALICIOUS_SIGNATURE_CONTRACT,
+  WARN_UNLIMITED_APPROVAL_UNKNOWN_SPENDER,
+  WARN_SET_APPROVAL_FOR_ALL_UNKNOWN_OPERATOR,
+  WARN_INCREASE_ALLOWANCE_UNKNOWN_SPENDER,
+  WARN_PERMIT_SIGNATURE_TO_UNTRUSTED_CONTRACT,
+  WARN_MULTICALL_APPROVAL_AND_TRANSFER,
+  WARN_TRANSFER_FROM_NEW_RECIPIENT,
+  WARN_UNKNOWN_CONTRACT_INTERACTION_WITH_VALUE
+];
+
 // src/registry/index.ts
 var NAVIGATION_RULES = PHISHING_RULES;
+var TX_RULES = TRANSACTION_RULES.filter(
+  (rule) => rule.eventKind === "transaction"
+);
+var SIG_RULES = TRANSACTION_RULES.filter(
+  (rule) => rule.eventKind === "signature"
+);
 function getRulesForEventKind(eventKind) {
   if (eventKind === "navigation") {
     return NAVIGATION_RULES;
+  }
+  if (eventKind === "transaction") {
+    return TX_RULES;
+  }
+  if (eventKind === "signature") {
+    return SIG_RULES;
   }
   return [];
 }
@@ -2161,6 +3017,18 @@ function evaluateTyped(rules2, input) {
 function evaluate(input) {
   const rules2 = getRulesForEventKind("navigation");
   return evaluateTyped(rules2, input);
+}
+function evaluateTransaction(input) {
+  if (input.eventKind === "transaction") {
+    const rules3 = getRulesForEventKind("transaction");
+    const sorted2 = sortRules(rules3);
+    const matches2 = collectMatches(sorted2, input);
+    return assembleTransactionVerdict(input, matches2);
+  }
+  const rules2 = getRulesForEventKind("signature");
+  const sorted = sortRules(rules2);
+  const matches = collectMatches(sorted, input);
+  return assembleTransactionVerdict(input, matches);
 }
 
 // src/normalize/url.ts
@@ -2341,351 +3209,6 @@ function riskBadgeLabel(riskLevel) {
   }
 }
 
-// src/transaction/selectors.ts
-var APPROVE_SELECTOR = "0x095ea7b3";
-var SET_APPROVAL_FOR_ALL_SELECTOR = "0xa22cb465";
-var INCREASE_ALLOWANCE_SELECTOR = "0x39509351";
-var TRANSFER_SELECTOR = "0xa9059cbb";
-var TRANSFER_FROM_SELECTOR = "0x23b872dd";
-var ERC20_PERMIT_SELECTOR = "0xd505accf";
-var ALLOWED_BOOL_PERMIT_SELECTOR = "0x8fcbaf0c";
-var MULTICALL_BYTES_SELECTOR = "0xac9650d8";
-var MULTICALL_DEADLINE_BYTES_SELECTOR = "0x5ae401dc";
-var TRANSACTION_SELECTOR_REGISTRY = Object.freeze({
-  [APPROVE_SELECTOR]: {
-    selector: APPROVE_SELECTOR,
-    functionName: "approve",
-    actionType: "approve",
-    variant: "standard"
-  },
-  [SET_APPROVAL_FOR_ALL_SELECTOR]: {
-    selector: SET_APPROVAL_FOR_ALL_SELECTOR,
-    functionName: "setApprovalForAll",
-    actionType: "setApprovalForAll",
-    variant: "standard"
-  },
-  [INCREASE_ALLOWANCE_SELECTOR]: {
-    selector: INCREASE_ALLOWANCE_SELECTOR,
-    functionName: "increaseAllowance",
-    actionType: "increaseAllowance",
-    variant: "standard"
-  },
-  [TRANSFER_SELECTOR]: {
-    selector: TRANSFER_SELECTOR,
-    functionName: "transfer",
-    actionType: "transfer",
-    variant: "standard"
-  },
-  [TRANSFER_FROM_SELECTOR]: {
-    selector: TRANSFER_FROM_SELECTOR,
-    functionName: "transferFrom",
-    actionType: "transferFrom",
-    variant: "standard"
-  },
-  [ERC20_PERMIT_SELECTOR]: {
-    selector: ERC20_PERMIT_SELECTOR,
-    functionName: "permit",
-    actionType: "permit",
-    variant: "standard"
-  },
-  [ALLOWED_BOOL_PERMIT_SELECTOR]: {
-    selector: ALLOWED_BOOL_PERMIT_SELECTOR,
-    functionName: "permit",
-    actionType: "permit",
-    variant: "allowed_bool"
-  },
-  [MULTICALL_BYTES_SELECTOR]: {
-    selector: MULTICALL_BYTES_SELECTOR,
-    functionName: "multicall",
-    actionType: "multicall",
-    variant: "bytes_array"
-  },
-  [MULTICALL_DEADLINE_BYTES_SELECTOR]: {
-    selector: MULTICALL_DEADLINE_BYTES_SELECTOR,
-    functionName: "multicall",
-    actionType: "multicall",
-    variant: "deadline_bytes_array"
-  }
-});
-function getTransactionSelectorDefinition(selector) {
-  const normalized = selector.toLowerCase();
-  return TRANSACTION_SELECTOR_REGISTRY[normalized] ?? null;
-}
-function classifyTransactionSelector(selector) {
-  return getTransactionSelectorDefinition(selector)?.actionType ?? "unknown";
-}
-function listTransactionSelectors() {
-  return Object.values(TRANSACTION_SELECTOR_REGISTRY);
-}
-
-// src/normalize/address.ts
-function normalizeEvmAddress(address) {
-  const trimmed = address.trim().toLowerCase();
-  return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
-}
-function isValidEvmAddress(address) {
-  return /^0x[0-9a-fA-F]{40}$/.test(address.trim());
-}
-
-// src/normalize/transaction.ts
-var MAX_UINT256_HEX = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
-var KNOWN_SELECTORS = {
-  [APPROVE_SELECTOR]: "approve",
-  [SET_APPROVAL_FOR_ALL_SELECTOR]: "setApprovalForAll",
-  [INCREASE_ALLOWANCE_SELECTOR]: "increaseAllowance",
-  [TRANSFER_SELECTOR]: "transfer",
-  [TRANSFER_FROM_SELECTOR]: "transferFrom",
-  [ERC20_PERMIT_SELECTOR]: "permit",
-  [MULTICALL_BYTES_SELECTOR]: "multicall",
-  [MULTICALL_DEADLINE_BYTES_SELECTOR]: "multicall"
-};
-function extractSelector(calldata) {
-  const clean = calldata.startsWith("0x") ? calldata : `0x${calldata}`;
-  return clean.slice(0, 10).toLowerCase();
-}
-function isUnlimitedApprovalAmount(amount) {
-  return amount.toLowerCase() === MAX_UINT256_HEX;
-}
-
-// src/transaction/typed-data.ts
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function isTypedDataField(value) {
-  if (!isRecord(value)) return false;
-  return typeof value.name === "string" && typeof value.type === "string";
-}
-function parseTypedDataPayload(input) {
-  if (typeof input === "string") {
-    const parsed = JSON.parse(input);
-    if (!isRecord(parsed)) {
-      throw new Error("Typed data payload must be an object.");
-    }
-    return parsed;
-  }
-  return input;
-}
-function normalizeTypes(value) {
-  if (!value || !isRecord(value)) {
-    return {};
-  }
-  const entries = [];
-  for (const key of Object.keys(value).sort()) {
-    const fields = value[key];
-    if (!Array.isArray(fields)) continue;
-    const normalizedFields = fields.filter(isTypedDataField).map((field) => ({
-      name: field.name,
-      type: field.type
-    }));
-    entries.push([key, normalizedFields]);
-  }
-  return Object.fromEntries(entries);
-}
-function normalizeString(value) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed === "" ? null : trimmed;
-}
-function normalizeNumericString(value) {
-  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "bigint") {
-    return null;
-  }
-  const raw = typeof value === "string" ? value.trim() : `${value}`;
-  if (raw === "") return null;
-  try {
-    if (/^0x[0-9a-fA-F]+$/.test(raw)) {
-      return BigInt(raw).toString(10);
-    }
-    if (/^-?[0-9]+$/.test(raw)) {
-      return BigInt(raw).toString(10);
-    }
-  } catch {
-    return raw;
-  }
-  return raw;
-}
-function isCanonicalDecimalString(value) {
-  return value !== null && /^[0-9]+$/.test(value);
-}
-function normalizeBoolean(value) {
-  return value === true;
-}
-function stripArraySuffix(type) {
-  const match = type.match(/^(.*)\[[0-9]*\]$/);
-  return match ? match[1] : null;
-}
-function normalizeUnknownObject(value) {
-  const entries = [];
-  for (const key of Object.keys(value).sort()) {
-    entries.push([key, normalizeTypedDataValue(value[key], null, {})]);
-  }
-  return Object.fromEntries(entries);
-}
-function normalizeStructuredValue(value, structName, types) {
-  const fieldMap = /* @__PURE__ */ new Map();
-  for (const field of types[structName] ?? []) {
-    fieldMap.set(field.name, field.type);
-  }
-  const entries = [];
-  for (const key of Object.keys(value).sort()) {
-    entries.push([
-      key,
-      normalizeTypedDataValue(value[key], fieldMap.get(key) ?? null, types)
-    ]);
-  }
-  return Object.fromEntries(entries);
-}
-function normalizeTypedDataValue(value, solidityType, types) {
-  if (value === null || value === void 0) return null;
-  if (solidityType !== null) {
-    const arrayInnerType = stripArraySuffix(solidityType);
-    if (arrayInnerType !== null) {
-      if (!Array.isArray(value)) return [];
-      return value.map(
-        (item) => normalizeTypedDataValue(item, arrayInnerType, types)
-      );
-    }
-    if (solidityType === "address") {
-      const normalized = normalizeString(value);
-      return normalized === null ? null : normalizeEvmAddress(normalized);
-    }
-    if (solidityType.startsWith("uint") || solidityType.startsWith("int")) {
-      return normalizeNumericString(value);
-    }
-    if (solidityType === "bool") {
-      return normalizeBoolean(value);
-    }
-    if (solidityType === "string" || solidityType.startsWith("bytes")) {
-      return normalizeString(value);
-    }
-    if (types[solidityType] && isRecord(value)) {
-      return normalizeStructuredValue(value, solidityType, types);
-    }
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => normalizeTypedDataValue(item, null, types));
-  }
-  if (isRecord(value)) {
-    return normalizeUnknownObject(value);
-  }
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "bigint") {
-    return `${value}`;
-  }
-  return `${value}`;
-}
-function stableStringify(value) {
-  if (value === null) return "null";
-  if (typeof value === "string") return JSON.stringify(value);
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
-  }
-  const record = value;
-  const parts = Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
-  return `{${parts.join(",")}}`;
-}
-function serializeTypesForCanonical(types) {
-  const entries = [];
-  for (const key of Object.keys(types).sort()) {
-    const fields = types[key] ?? [];
-    entries.push([
-      key,
-      fields.map((field) => ({
-        name: field.name,
-        type: field.type
-      }))
-    ]);
-  }
-  return Object.fromEntries(entries);
-}
-function classifyPermitKind(primaryType) {
-  if (primaryType === null) return "none";
-  const normalized = primaryType.trim().toLowerCase();
-  if (normalized === "") return "none";
-  if (normalized === "permit") return "erc20_permit";
-  if (normalized === "permitsingle") return "permit2_single";
-  if (normalized === "permitbatch") return "permit2_batch";
-  if (normalized.includes("permit")) return "unknown_permit";
-  return "none";
-}
-function normalizeTypedData(input) {
-  const payload = parseTypedDataPayload(input);
-  const types = normalizeTypes(payload.types ?? null);
-  const primaryType = normalizeString(payload.primaryType);
-  const domainInput = isRecord(payload.domain) ? payload.domain : {};
-  const messageInput = isRecord(payload.message) ? payload.message : {};
-  const domainType = types.EIP712Domain ? "EIP712Domain" : null;
-  const normalizedDomain = normalizeTypedDataValue(
-    domainInput,
-    domainType,
-    types
-  );
-  const normalizedMessage = normalizeTypedDataValue(
-    messageInput,
-    primaryType,
-    types
-  );
-  const domain = normalizedDomain !== null && !Array.isArray(normalizedDomain) && typeof normalizedDomain === "object" ? normalizedDomain : {};
-  const message = normalizedMessage !== null && !Array.isArray(normalizedMessage) && typeof normalizedMessage === "object" ? normalizedMessage : {};
-  const domainName = typeof domain.name === "string" ? domain.name : normalizeString(domainInput.name);
-  const domainVersion = typeof domain.version === "string" ? domain.version : normalizeString(domainInput.version);
-  const domainChainIdPresent = Object.prototype.hasOwnProperty.call(
-    domainInput,
-    "chainId"
-  );
-  const normalizedDomainChainId = domainChainIdPresent ? normalizeNumericString(domainInput.chainId) : null;
-  const verifyingContractPresent = Object.prototype.hasOwnProperty.call(
-    domainInput,
-    "verifyingContract"
-  );
-  const verifyingContractRaw = verifyingContractPresent ? normalizeString(domainInput.verifyingContract) : null;
-  const missingDomainFields = [];
-  const invalidDomainFields = [];
-  if (!domainChainIdPresent) {
-    missingDomainFields.push("domain.chainId");
-  }
-  if (!verifyingContractPresent) {
-    missingDomainFields.push("domain.verifyingContract");
-  }
-  const domainChainId = domainChainIdPresent && isCanonicalDecimalString(normalizedDomainChainId) ? normalizedDomainChainId : null;
-  const hasValidDomainChainId = domainChainId !== null;
-  if (domainChainIdPresent && !hasValidDomainChainId) {
-    invalidDomainFields.push("domain.chainId");
-  }
-  const verifyingContract = verifyingContractRaw !== null && isValidEvmAddress(verifyingContractRaw) ? normalizeEvmAddress(verifyingContractRaw) : null;
-  const hasValidVerifyingContract = verifyingContract !== null;
-  if (verifyingContractPresent && !hasValidVerifyingContract) {
-    invalidDomainFields.push("domain.verifyingContract");
-  }
-  const normalizationState = invalidDomainFields.length > 0 ? "invalid_domain_fields" : missingDomainFields.length > 0 ? "missing_domain_fields" : "normalized";
-  const canonicalRoot = {
-    domain,
-    message,
-    primaryType,
-    types: serializeTypesForCanonical(types)
-  };
-  return {
-    isTypedData: true,
-    primaryType,
-    domainName,
-    domainVersion,
-    domainChainId,
-    domainChainIdPresent: hasValidDomainChainId,
-    verifyingContract,
-    verifyingContractPresent: hasValidVerifyingContract,
-    message,
-    domain,
-    types,
-    canonicalJson: stableStringify(canonicalRoot),
-    normalizationState,
-    missingDomainFields,
-    invalidDomainFields,
-    permitKind: classifyPermitKind(primaryType)
-  };
-}
-
 // src/transaction/decode.ts
 function normalizeHex(calldata) {
   const trimmed = calldata.trim().toLowerCase();
@@ -2743,6 +3266,18 @@ function defaultIntel() {
     signatureFeedVersion: null,
     originDisposition: "unavailable",
     sectionStates: {}
+  };
+}
+function resolveIntel(input) {
+  const defaults = defaultIntel();
+  return {
+    contractDisposition: input?.contractDisposition ?? defaults.contractDisposition,
+    contractFeedVersion: input?.contractFeedVersion ?? defaults.contractFeedVersion,
+    allowlistFeedVersion: input?.allowlistFeedVersion ?? defaults.allowlistFeedVersion,
+    signatureDisposition: input?.signatureDisposition ?? defaults.signatureDisposition,
+    signatureFeedVersion: input?.signatureFeedVersion ?? defaults.signatureFeedVersion,
+    originDisposition: input?.originDisposition ?? defaults.originDisposition,
+    sectionStates: input?.sectionStates ?? defaults.sectionStates
   };
 }
 function buildProvider(surface, walletProvider, walletMetadata) {
@@ -3063,7 +3598,7 @@ function normalizeTransactionRequest(input) {
       invalidDomainFields: [],
       permitKind: "none"
     },
-    intel: defaultIntel(),
+    intel: resolveIntel(input.intel),
     provider: buildProvider(
       input.surface,
       input.walletProvider,
@@ -3103,7 +3638,7 @@ function normalizeTypedDataRequest(input) {
       actions: []
     },
     signature,
-    intel: defaultIntel(),
+    intel: resolveIntel(input.intel),
     provider: buildProvider(
       input.surface,
       input.walletProvider,
@@ -3115,196 +3650,6 @@ function normalizeTypedDataRequest(input) {
       typedDataNormalized: signature.normalizationState === "normalized"
     }
   };
-}
-
-// src/signals/transaction-signals.ts
-function isApprovalMethodAction(action) {
-  return action.actionType === "approve" || action.actionType === "increaseAllowance" || action.actionType === "setApprovalForAll";
-}
-function approvalDirectionForAction(action) {
-  return action.approvalDirection;
-}
-function isGrantApprovalAction(action) {
-  return isApprovalMethodAction(action) && approvalDirectionForAction(action) === "grant";
-}
-function hasTransferAction(action) {
-  return action.actionType === "transfer" || action.actionType === "transferFrom";
-}
-function buildTransactionSignals(context) {
-  const actions = context.batch.isMulticall ? context.batch.actions : [context.decoded];
-  const containsApproval = actions.some((action) => isGrantApprovalAction(action));
-  const containsTransfer = actions.some((action) => action.actionType === "transfer");
-  const containsTransferFrom = actions.some(
-    (action) => action.actionType === "transferFrom"
-  );
-  return {
-    actionType: context.actionType,
-    isApprovalMethod: isApprovalMethodAction(context.decoded),
-    isUnlimitedApproval: context.decoded.amount !== null ? isUnlimitedApprovalAmount(
-      BigInt(context.decoded.amount).toString(16).padStart(64, "0")
-    ) : false,
-    isPermitSignature: context.eventKind === "signature" && context.signature.permitKind !== "none",
-    isSetApprovalForAll: context.decoded.actionType === "setApprovalForAll",
-    approvalDirection: approvalDirectionForAction(context.decoded),
-    spenderTrusted: context.counterparty.spenderTrusted,
-    recipientIsNew: context.counterparty.recipientIsNew,
-    isMulticall: context.batch.isMulticall,
-    containsApprovalAndTransfer: context.batch.isMulticall && containsApproval && actions.some((action) => hasTransferAction(action)),
-    containsApproval,
-    containsTransfer,
-    containsTransferFrom,
-    batchActionCount: context.batch.actions.length,
-    hasUnknownInnerCall: context.batch.actions.some(
-      (action) => action.actionType === "unknown"
-    )
-  };
-}
-
-// src/transaction/explain.ts
-function shortAddress(address) {
-  return address ?? "unknown contract";
-}
-function buildTechnicalFacts(context) {
-  const technical = [];
-  if (context.methodSelector !== null) {
-    technical.push(`Selector: ${context.methodSelector}`);
-  }
-  if (context.signature.primaryType !== null) {
-    technical.push(`Primary type: ${context.signature.primaryType}`);
-  }
-  if (context.to !== null) {
-    technical.push(`Target: ${context.to}`);
-  }
-  if (context.signature.verifyingContract !== null) {
-    technical.push(`Verifier: ${context.signature.verifyingContract}`);
-  }
-  return technical;
-}
-function buildUnknowns(context) {
-  const unknowns = [];
-  if (context.eventKind === "transaction" && context.actionType === "unknown") {
-    unknowns.push("ClickShield could not fully decode this contract call.");
-  }
-  if (context.eventKind === "signature" && context.signature.normalizationState === "missing_domain_fields") {
-    unknowns.push(
-      `Important signature domain fields were missing: ${context.signature.missingDomainFields.join(", ")}`
-    );
-  }
-  if (context.eventKind === "signature" && context.signature.normalizationState === "invalid_domain_fields") {
-    unknowns.push(
-      `Important signature domain fields were invalid: ${context.signature.invalidDomainFields.join(", ")}`
-    );
-  }
-  return unknowns;
-}
-function explainApprove(context, signals) {
-  const spender = shortAddress(context.decoded.spender);
-  const summary = signals.isUnlimitedApproval ? `Approve unlimited token spending by contract ${spender}` : `Approve token spending by contract ${spender}`;
-  return {
-    headline: signals.isUnlimitedApproval ? "Unlimited token approval" : "Token approval",
-    summary,
-    details: [
-      "This gives the contract permission to spend this token balance without another approval."
-    ],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context)
-  };
-}
-function explainSetApprovalForAll(context) {
-  const approved = context.decoded.params.approved === true;
-  return {
-    headline: approved ? "Full NFT collection access" : "NFT collection approval revoked",
-    summary: approved ? "Allow this contract to transfer all NFTs in this collection." : "Remove this contract's permission to transfer NFTs in this collection.",
-    details: [
-      `Operator: ${shortAddress(context.decoded.operator)}`,
-      approved ? "This grants collection-wide NFT transfer permission." : "This removes collection-wide NFT transfer permission."
-    ],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context)
-  };
-}
-function explainPermitSignature(context) {
-  return {
-    headline: "Token permission signature",
-    summary: `Sign a permission that lets contract ${shortAddress(
-      context.signature.verifyingContract
-    )} spend tokens without an on-chain approval transaction.`,
-    details: [
-      "This signature can authorize token spending without sending a separate approval transaction first."
-    ],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context)
-  };
-}
-function explainMulticall(context, signals) {
-  const summary = signals.containsApprovalAndTransfer ? "This batch both grants token permission and moves assets in one request." : `Execute a batch of ${context.batch.actions.length} contract actions in one request.`;
-  return {
-    headline: signals.containsApprovalAndTransfer ? "Batch transaction with approval and transfer" : "Batch contract transaction",
-    summary,
-    details: [`Batch action count: ${context.batch.actions.length}`],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context)
-  };
-}
-function explainUnknown(context) {
-  return {
-    headline: context.eventKind === "signature" ? "Unknown typed-data signature" : "Unknown contract interaction",
-    summary: context.eventKind === "signature" ? "ClickShield could not fully normalize this typed-data request." : "ClickShield could not fully decode this contract call.",
-    details: [
-      `Destination contract: ${shortAddress(context.to)}`,
-      `Chain: ${context.chainId}`,
-      `Origin: ${context.originDomain}`,
-      `Native value: ${context.valueWei}`,
-      `Malicious-contract intel match: ${context.intel.contractDisposition === "malicious" ? "yes" : "no"}`
-    ],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context)
-  };
-}
-function buildTransactionExplanation(context) {
-  const signals = buildTransactionSignals(context);
-  if (context.eventKind === "signature" && signals.isPermitSignature) {
-    return explainPermitSignature(context);
-  }
-  switch (context.actionType) {
-    case "approve":
-    case "increaseAllowance":
-      return explainApprove(context, signals);
-    case "setApprovalForAll":
-      return explainSetApprovalForAll(context);
-    case "multicall":
-      return explainMulticall(context, signals);
-    case "permit":
-      return {
-        headline: "Token permission transaction",
-        summary: `Submit an on-chain permit that grants token spending permission to contract ${shortAddress(
-          context.decoded.spender
-        )}.`,
-        details: [],
-        unknowns: buildUnknowns(context),
-        technical: buildTechnicalFacts(context)
-      };
-    case "transfer":
-      return {
-        headline: "Token transfer",
-        summary: `Transfer tokens to ${shortAddress(context.decoded.recipient)}.`,
-        details: [],
-        unknowns: buildUnknowns(context),
-        technical: buildTechnicalFacts(context)
-      };
-    case "transferFrom":
-      return {
-        headline: "Delegated token transfer",
-        summary: `Transfer tokens from ${shortAddress(
-          context.decoded.owner
-        )} to ${shortAddress(context.decoded.recipient)}.`,
-        details: [],
-        unknowns: buildUnknowns(context),
-        technical: buildTechnicalFacts(context)
-      };
-    default:
-      return explainUnknown(context);
-  }
 }
 
 // src/intel/hash.ts
@@ -4966,6 +5311,7 @@ export {
   deconfuseHostname,
   domainSimilarityScore,
   evaluate,
+  evaluateTransaction,
   extractHostname,
   extractRegistrableDomain,
   extractTld,
