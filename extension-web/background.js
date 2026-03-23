@@ -15,6 +15,7 @@ import {
   extractRegistrableDomain,
   resolveDomainIntel as resolveSnapshotDomainIntel,
 } from './lib/shared-rules.js';
+import { evaluateLayer3RpcRequest } from './layer3.js';
 import { NavigationIntelFeedManager } from './navigationIntelManager.js';
 import {
   createMemoryNavigationIntelStorage,
@@ -1235,8 +1236,116 @@ function attachRuntimeListeners() {
     }
   });
 
+  function presentLayer3DecisionModal(tabId, decision) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(
+        tabId,
+        {
+          type: 'L3_PRESENT_RPC_MODAL',
+          decision,
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+
+          if (!response || response.ok !== true || !response.resolution) {
+            reject(new Error('ClickShield did not receive a valid modal resolution.'));
+            return;
+          }
+
+          resolve(response.resolution);
+        },
+      );
+    });
+  }
+
+  function deliverLayer3Release(tabId, requestId, resolution) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(
+        tabId,
+        {
+          source: 'clickshield-layer3-extension',
+          type: 'L3_RPC_RELEASE',
+          requestId,
+          ...resolution,
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+
+          resolve(response);
+        },
+      );
+    });
+  }
+
   // Listen for scan requests from content scripts
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message && message.type === 'L3_HANDLE_RPC') {
+      const tabId = sender.tab?.id;
+      if (typeof tabId !== 'number') {
+        sendResponse({
+          ok: false,
+          error: 'Layer 3 request release requires a sender tab.',
+        });
+        return false;
+      }
+
+      sendResponse({ ok: true });
+
+      void (async () => {
+        let resolution;
+
+        try {
+          const decision = evaluateLayer3RpcRequest(message.request);
+          if (decision.verdict.status === 'ALLOW') {
+            resolution = {
+              action: 'forward',
+              audit: decision.audit,
+            };
+          } else {
+            resolution = await presentLayer3DecisionModal(tabId, decision);
+          }
+        } catch (error) {
+          resolution = {
+            action: 'reject',
+            error: {
+              code: -32603,
+              message: error?.message || 'ClickShield could not evaluate this wallet request.',
+            },
+          };
+        }
+
+        try {
+          await deliverLayer3Release(tabId, message.request?.requestId, resolution);
+        } catch (error) {
+          console.warn('[ClickShield][BG] Could not deliver Layer 3 release:', error?.message || error);
+        }
+      })();
+
+      return false;
+    }
+
+    if (message && message.type === 'L3_EVALUATE_RPC') {
+      try {
+        const decision = evaluateLayer3RpcRequest(message.request);
+        sendResponse({
+          ok: true,
+          decision,
+        });
+      } catch (error) {
+        sendResponse({
+          ok: false,
+          error: error?.message || 'ClickShield could not evaluate this wallet request.',
+        });
+      }
+      return false;
+    }
+
     if (message && message.type === 'SCAN_URL') {
       const url = message.url;
       const browserName = message.browser || detectedBrowser;

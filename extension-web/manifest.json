@@ -30,6 +30,25 @@
         "<all_urls>"
       ],
       "js": [
+        "providerGuard.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "transactionInterceptor.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
         "contentScript.js"
       ],
       "run_at": "document_idle"
