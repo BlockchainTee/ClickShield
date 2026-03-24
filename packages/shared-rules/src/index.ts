@@ -146,3 +146,55 @@ export type {
   MaliciousDomainFeedItem,
   MaliciousDomainsSection,
 } from "./intel/types.js";
+
+// ── Layer 4 Wallet Framework (Phase 4A) ──
+export { buildWalletReportId } from "./wallet/report-id.js";
+export { evaluateEvmWalletScan } from "./wallet/evm/evaluate.js";
+export type { WalletReportIdInput } from "./wallet/report-id.js";
+export type {
+  EvmApprovalAmountKind,
+  EvmApprovalKind,
+  EvmApprovalRecordInput,
+  EvmContractExposureInput,
+  EvmContractExposureType,
+  EvmCounterpartyDisposition,
+  EvmTokenStandard,
+  EvmWalletHydratedSnapshot,
+  EvmWalletScanEvaluation,
+  EvmWalletScanEvaluationInput,
+  EvmWalletSignals,
+  NormalizedEvmApprovalState,
+  NormalizedEvmContractExposure,
+  NormalizedEvmSpenderRisk,
+  NormalizedEvmWalletSnapshot,
+} from "./wallet/evm/types.js";
+export type {
+  WalletCapabilityArea,
+  WalletCapabilityBoundary,
+  WalletCapabilityStatus,
+  WalletChain,
+  WalletCleanupAction,
+  WalletCleanupActionExecutionStatus,
+  WalletCleanupActionKind,
+  WalletCleanupActionResult,
+  WalletCleanupExecutionMode,
+  WalletCleanupExecutionResult,
+  WalletCleanupExecutionStatus,
+  WalletCleanupPlan,
+  WalletCleanupTarget,
+  WalletCleanupTargetKind,
+  WalletEvidenceRef,
+  WalletExposureCategory,
+  WalletFinding,
+  WalletFindingStatus,
+  WalletReport,
+  WalletRiskFactor,
+  WalletScanMode,
+  WalletScanRequest,
+  WalletScanResult,
+  WalletScanSnapshot,
+  WalletScoreBreakdown,
+  WalletScoreComponent,
+  WalletSnapshotSection,
+  WalletSummary,
+} from "./wallet/types.js";

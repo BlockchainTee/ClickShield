@@ -7,6 +7,7 @@ import {
   buildTransactionSignals,
   classifyTransactionSelector,
   contextToInput,
+  evaluateEvmWalletScan,
   evaluateTransaction,
   getTransactionSelectorDefinition,
   evaluate,
@@ -56,6 +57,7 @@ describe("root public API", () => {
     expect(typeof buildTransactionExplanation).toBe("function");
     expect(typeof buildTransactionSignals).toBe("function");
     expect(typeof evaluateTransaction).toBe("function");
+    expect(typeof evaluateEvmWalletScan).toBe("function");
 
     const selector = getTransactionSelectorDefinition("0x095ea7b3");
     expect(selector?.functionName).toBe("approve");
