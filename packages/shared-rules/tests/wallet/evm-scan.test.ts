@@ -294,7 +294,7 @@ describe("Layer 4 Phase 4B EVM scan foundation", () => {
     ]);
     expect(evaluation.score).toBe(68);
     expect(evaluation.riskLevel).toBe("critical");
-    expect(evaluation.result.cleanupPlan?.actions).toHaveLength(3);
+    expect(evaluation.result.cleanupPlan?.actions).toHaveLength(1);
   });
 
   it("produces consistent score and report output for identical input", () => {

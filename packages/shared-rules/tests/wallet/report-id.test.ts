@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import { buildWalletReportId } from "../../src/index.js";
 import type {
-  WalletCleanupAction,
+  EvmCleanupAction,
+  EvmWalletCleanupPlan,
   WalletCleanupActionResult,
   WalletCleanupExecutionResult,
-  WalletCleanupPlan,
   WalletEvidenceRef,
   WalletFinding,
   WalletReportIdInput,
@@ -94,12 +94,32 @@ function createReportIdInput(): WalletReportIdInput {
     },
   };
 
-  const cleanupAction: WalletCleanupAction = {
+  const cleanupAction: EvmCleanupAction = {
+    ...({
+      revocationMethod: "erc20_approve_zero",
+      approval: {
+        approvalId: "approval_1",
+        approvalKind: "erc20_allowance",
+        tokenAddress: "0x2222222222222222222222222222222222222222",
+        spenderAddress: "0x3333333333333333333333333333333333333333",
+        tokenId: null,
+        currentState: "1000",
+        intendedState: "0",
+      },
+      estimatedRiskReduction: "high",
+      explanation: "Revokes the active ERC-20 allowance and still requires a later re-scan.",
+    } satisfies Pick<
+      EvmCleanupAction,
+      "approval" | "estimatedRiskReduction" | "explanation" | "revocationMethod"
+    >),
     actionId: "action_1",
     walletChain: request.walletChain,
     kind: "revoke_authorization",
     executionMode: "guided",
-    supportStatus: "partial",
+    executionType: "wallet_signature",
+    status: "ready",
+    requiresSignature: true,
+    supportStatus: "supported",
     title: "Review and revoke approval",
     description: "Review approval details and revoke if unnecessary.",
     priority: "high",
@@ -113,13 +133,13 @@ function createReportIdInput(): WalletReportIdInput {
     },
     findingIds: [finding.findingId],
     riskFactorIds: [riskFactor.factorId],
-    supportDetail: "Guided revocation only in Phase 4A.",
+    supportDetail: "Prepared revoke payload requires explicit wallet signature outside this layer.",
     metadata: {
       channel: "guide",
     },
   };
 
-  const cleanupPlan: WalletCleanupPlan = {
+  const cleanupPlan: EvmWalletCleanupPlan = {
     planId: "plan_1",
     walletChain: request.walletChain,
     walletAddress: request.walletAddress,
@@ -127,6 +147,21 @@ function createReportIdInput(): WalletReportIdInput {
     createdAt: "2026-03-23T10:03:00.000Z",
     summary: "Review high-risk authorizations first.",
     actions: [cleanupAction],
+    batches: [
+      {
+        batchId: "batch_1",
+        walletChain: request.walletChain,
+        walletAddress: request.walletAddress,
+        networkId: request.networkId,
+        createdAt: "2026-03-23T10:03:00.000Z",
+        supportStatus: "partial",
+        executionKind: "multiple_transactions",
+        title: "Review grouped revokes",
+        summary: "Grouped review batch for deterministic revoke actions.",
+        actionIds: [cleanupAction.actionId],
+        actions: [cleanupAction],
+      },
+    ],
     projectedScore: 18,
     projectedRiskLevel: "low",
   };
@@ -269,6 +304,27 @@ function cloneReportIdInput(input: WalletReportIdInput): WalletReportIdInput {
                 riskFactorIds: [...action.riskFactorIds],
                 metadata: { ...action.metadata },
               })),
+              ...("batches" in input.result.cleanupPlan
+                ? {
+                    batches: input.result.cleanupPlan.batches.map((batch) => ({
+                      ...batch,
+                      actionIds: [...batch.actionIds],
+                      actions: batch.actions.map((action) => ({
+                        ...action,
+                        approval: {
+                          ...action.approval,
+                        },
+                        target: {
+                          ...action.target,
+                          metadata: { ...action.target.metadata },
+                        },
+                        findingIds: [...action.findingIds],
+                        riskFactorIds: [...action.riskFactorIds],
+                        metadata: { ...action.metadata },
+                      })),
+                    })),
+                  }
+                : {}),
             },
       capabilityBoundaries: input.result.capabilityBoundaries.map((boundary) => ({
         ...boundary,
@@ -397,6 +453,33 @@ describe("buildWalletReportId", () => {
       summary: {
         ...base.summary,
         score: 71,
+      },
+    };
+
+    expect(buildWalletReportId(changed)).not.toBe(buildWalletReportId(base));
+  });
+
+  it("changes the ID when declared Phase 4C cleanup plan fields change", () => {
+    const base = createReportIdInput();
+    const changed = cloneReportIdInput(base);
+    const cleanupPlan = changed.result.cleanupPlan;
+
+    if (cleanupPlan === null || !("batches" in cleanupPlan)) {
+      throw new Error("Expected Phase 4C cleanup plan with batches.");
+    }
+
+    changed.result = {
+      ...changed.result,
+      cleanupPlan: {
+        ...cleanupPlan,
+        batches: cleanupPlan.batches.map((batch, index) =>
+          index === 0
+            ? {
+                ...batch,
+                summary: "Changed batch summary for report ID regression coverage.",
+              }
+            : batch
+        ),
       },
     };
 

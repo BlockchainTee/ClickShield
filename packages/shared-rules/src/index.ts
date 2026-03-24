@@ -150,6 +150,16 @@ export type {
 // ── Layer 4 Wallet Framework (Phase 4A) ──
 export { buildWalletReportId } from "./wallet/report-id.js";
 export { evaluateEvmWalletScan } from "./wallet/evm/evaluate.js";
+export { getEvmCleanupEligibility } from "./wallet/evm/cleanup-eligibility.js";
+export { buildEvmCleanupPlan } from "./wallet/evm/cleanup.js";
+export {
+  prepareEvmCleanupExecutionRequest,
+  prepareEvmCleanupTransaction,
+} from "./wallet/evm/cleanup-prepare.js";
+export {
+  interpretEvmCleanupExecutionResult,
+  reconcileEvmCleanupPlanResults,
+} from "./wallet/evm/cleanup-execution.js";
 export type { WalletReportIdInput } from "./wallet/report-id.js";
 export type {
   EvmApprovalAmountKind,
@@ -169,15 +179,36 @@ export type {
   NormalizedEvmWalletSnapshot,
 } from "./wallet/evm/types.js";
 export type {
+  EvmCleanupAction,
+  EvmCleanupActionExecutionResult,
+  EvmCleanupBatchPlan,
+  EvmCleanupEligibility,
+  EvmCleanupExecutionRequest,
+  EvmCleanupExecutionStatus,
+  EvmCleanupPackaging,
+  EvmCleanupReconciliationItem,
+  EvmCleanupReconciliationSummary,
+  EvmCleanupRescanSnapshot,
+  EvmCleanupRescanStatus,
+  EvmCleanupRevocationMethod,
+  EvmCleanupSelectionKind,
+  EvmPreparedCleanupArgument,
+  EvmPreparedCleanupTransaction,
+  EvmRevocableApprovalTarget,
+  EvmWalletCleanupPlan,
+} from "./wallet/evm/cleanup-types.js";
+export type {
   WalletCapabilityArea,
   WalletCapabilityBoundary,
   WalletCapabilityStatus,
   WalletChain,
   WalletCleanupAction,
   WalletCleanupActionExecutionStatus,
+  WalletCleanupActionStatus,
   WalletCleanupActionKind,
   WalletCleanupActionResult,
   WalletCleanupExecutionMode,
+  WalletCleanupExecutionType,
   WalletCleanupExecutionResult,
   WalletCleanupExecutionStatus,
   WalletCleanupPlan,

@@ -1,5 +1,11 @@
 import { serializeCanonicalJson, sha256Hex } from "../intel/hash.js";
 import type {
+  EvmCleanupAction as EvmCleanupActionContract,
+  EvmCleanupBatchPlan,
+  EvmRevocableApprovalTarget,
+  EvmWalletCleanupPlan,
+} from "./evm/cleanup-types.js";
+import type {
   WalletCapabilityBoundary,
   WalletCleanupAction,
   WalletCleanupActionResult,
@@ -146,23 +152,84 @@ function canonicalizeCleanupTarget(target: WalletCleanupTarget): CanonicalJsonOb
   };
 }
 
+function isEvmCleanupAction(
+  action: WalletCleanupAction
+): action is EvmCleanupActionContract {
+  return (
+    action.walletChain === "evm" &&
+    "approval" in action &&
+    "estimatedRiskReduction" in action &&
+    "explanation" in action &&
+    "revocationMethod" in action
+  );
+}
+
+function isEvmWalletCleanupPlan(plan: WalletCleanupPlan): plan is EvmWalletCleanupPlan {
+  return plan.walletChain === "evm" && "batches" in plan;
+}
+
+function canonicalizeEvmApprovalTarget(
+  approval: EvmRevocableApprovalTarget
+): CanonicalJsonObject {
+  return {
+    approvalId: approval.approvalId,
+    approvalKind: approval.approvalKind,
+    currentState: approval.currentState,
+    intendedState: approval.intendedState,
+    spenderAddress: approval.spenderAddress,
+    tokenAddress: approval.tokenAddress,
+    tokenId: approval.tokenId,
+  };
+}
+
 function canonicalizeCleanupAction(
   action: WalletCleanupAction
 ): CanonicalJsonObject {
-  return {
+  const canonicalAction: CanonicalJsonObject = {
     actionId: action.actionId,
     description: action.description,
     executionMode: action.executionMode,
+    executionType: action.executionType,
     findingIds: copyStringList(action.findingIds),
     kind: action.kind,
     metadata: canonicalizeStringRecord(action.metadata),
     priority: action.priority,
+    requiresSignature: action.requiresSignature,
     riskFactorIds: copyStringList(action.riskFactorIds),
+    status: action.status,
     supportDetail: action.supportDetail,
     supportStatus: action.supportStatus,
     target: canonicalizeCleanupTarget(action.target),
     title: action.title,
     walletChain: action.walletChain,
+  };
+
+  if (!isEvmCleanupAction(action)) {
+    return canonicalAction;
+  }
+
+  return {
+    ...canonicalAction,
+    approval: canonicalizeEvmApprovalTarget(action.approval),
+    estimatedRiskReduction: action.estimatedRiskReduction,
+    explanation: action.explanation,
+    revocationMethod: action.revocationMethod,
+  };
+}
+
+function canonicalizeEvmCleanupBatch(batch: EvmCleanupBatchPlan): CanonicalJsonObject {
+  return {
+    actionIds: copyStringList(batch.actionIds),
+    actions: batch.actions.map(canonicalizeCleanupAction),
+    batchId: batch.batchId,
+    createdAt: batch.createdAt,
+    executionKind: batch.executionKind,
+    networkId: batch.networkId,
+    summary: batch.summary,
+    supportStatus: batch.supportStatus,
+    title: batch.title,
+    walletAddress: batch.walletAddress,
+    walletChain: batch.walletChain,
   };
 }
 
@@ -173,7 +240,7 @@ function canonicalizeCleanupPlan(
     return null;
   }
 
-  return {
+  const canonicalPlan: CanonicalJsonObject = {
     actions: plan.actions.map(canonicalizeCleanupAction),
     createdAt: plan.createdAt,
     networkId: plan.networkId,
@@ -183,6 +250,15 @@ function canonicalizeCleanupPlan(
     summary: plan.summary,
     walletAddress: plan.walletAddress,
     walletChain: plan.walletChain,
+  };
+
+  if (!isEvmWalletCleanupPlan(plan)) {
+    return canonicalPlan;
+  }
+
+  return {
+    ...canonicalPlan,
+    batches: plan.batches.map(canonicalizeEvmCleanupBatch),
   };
 }
 

@@ -768,4 +768,941 @@ declare function resolveDomainIntel(snapshot: CompiledDomainIntelSnapshot, input
 
 declare function validateDomainIntelBundle(bundle: unknown, options: DomainIntelValidationOptions): DomainIntelValidationReport;
 
-export { type ApprovalAmountKind, type ApprovalDirection, type ApprovalScope, type BuildContextOptions, type ChainFamily, type CompileDomainIntelSnapshotOptions, type CompiledDomainAllowlistItem, type CompiledDomainAllowlistsSection, type CompiledDomainIntelSnapshot, type CompiledMaliciousDomainItem, type CompiledMaliciousDomainsSection, type DecodedTransactionAction, type DomainAllowlistFeedItem, type DomainAllowlistsSection, type DomainContext, type DomainIntelBundle, type DomainIntelCompileFailure, type DomainIntelCompileResult, type DomainIntelCompileSuccess, type DomainIntelSectionMetadata, type DomainIntelSectionName, type DomainIntelSectionValidationReport, type DomainIntelSignatureEnvelope, type DomainIntelValidationOptions, type DomainIntelValidationReport, type DomainLookupDisposition, type DomainLookupResult, type EngineResult, type IntelValidationIssue, KNOWN_PROTOCOL_DOMAINS, type Layer2SectionState, type Layer3RpcMethod, type MaliciousDomainFeedItem, type MaliciousDomainsSection, type NavigationContext, type NavigationInput, type NormalizedTransactionContext, type NormalizedTypedData, PHISHING_CODES, type PermitKind, type PhishingCode, RULE_SET_VERSION, type RawSignatureRequest, type RawTransactionRequest, type RawTypedDataPayload, type ReasonMessage, type RiskLevel, type RuleOutcome, SUSPICIOUS_TLDS, type SignatureInput, type SignatureRpcMethod, TRANSACTION_SELECTOR_REGISTRY, type TransactionActionType, type TransactionBatchContext, type TransactionCounterpartyContext, type TransactionEvaluationResult, type TransactionEventKind, type TransactionExplanation, type TransactionInput, type TransactionIntelContext, type TransactionIntelDisposition, type TransactionIntelVersions, type Layer2SectionState$1 as TransactionLayer2SectionState, type Layer3RpcMethod as TransactionLayer3RpcMethod, type TransactionMeta, type TransactionOverrideLevel, type TransactionParamValue, type TransactionProviderContext, type TransactionRpcMethod, type TransactionSelectorDefinition, type TransactionSignals, type TransactionVerdict, type TransactionVerdictStatus, type TypedDataField, type TypedDataNormalizationState, type TypedDataTypes, type TypedDataValue, type Verdict, type WalletProviderMetadata, buildNavigationContext, buildTransactionExplanation, buildTransactionSignals, classifyPermitKind, classifyTransactionSelector, compileDomainIntelSnapshot, containsAirdropKeyword, containsMintKeyword, containsWalletConnectPattern, contextToInput, decodeTransactionCalldata, deconfuseHostname, domainSimilarityScore, evaluate, evaluateTransaction, extractHostname, extractRegistrableDomain, extractTld, getReasonMessage, getTransactionSelectorDefinition, getVerdictTitle, hasHomoglyphs, hasSuspiciousTld, isIpHost, isKnownMaliciousDomain, isNewDomain, isValidUrl, listTransactionSelectors, looksLikeProtocolImpersonation, matchedLureKeywords, normalizeTransactionRequest, normalizeTypedData, normalizeTypedDataRequest, normalizeUrl, resolveDomainIntel, riskBadgeLabel, validateDomainIntelBundle };
+/**
+ * Supported wallet chain families for Layer 4 reports.
+ */
+type WalletChain = "evm" | "solana" | "bitcoin";
+/**
+ * Shared scan depth requested for a wallet review.
+ */
+type WalletScanMode = "basic" | "full";
+/**
+ * Broad chain-agnostic exposure categories used across findings and factors.
+ */
+type WalletExposureCategory = "asset" | "authorization" | "counterparty" | "activity" | "recovery" | "operational" | "other";
+/**
+ * Coverage areas where the report can declare honest capability boundaries.
+ */
+type WalletCapabilityArea = "snapshot" | "finding" | "cleanup_plan" | "cleanup_execution";
+/**
+ * Shared support status used for capability and action availability reporting.
+ */
+type WalletCapabilityStatus = "supported" | "partial" | "not_supported";
+/**
+ * Lifecycle state for an individual wallet finding.
+ */
+type WalletFindingStatus = "open" | "mitigated" | "accepted";
+/**
+ * Broad cleanup action families that remain chain-agnostic.
+ */
+type WalletCleanupActionKind = "revoke_authorization" | "close_resource" | "move_assets" | "rotate_wallet" | "monitor_wallet" | "manual_review" | "other";
+/**
+ * Execution style for a cleanup action.
+ */
+type WalletCleanupExecutionMode = "automated" | "guided" | "manual";
+/**
+ * Readiness state for an individual cleanup action.
+ */
+type WalletCleanupActionStatus = "planned" | "ready" | "blocked" | "not_supported";
+/**
+ * Concrete execution mechanism expected for a cleanup action.
+ */
+type WalletCleanupExecutionType = "wallet_signature" | "manual_review";
+/**
+ * Shared cleanup target categories.
+ */
+type WalletCleanupTargetKind = "wallet" | "asset" | "authorization" | "counterparty" | "resource" | "activity" | "other";
+/**
+ * Aggregate execution status for a cleanup plan.
+ */
+type WalletCleanupExecutionStatus = "not_started" | "completed" | "partial" | "blocked" | "failed";
+/**
+ * Per-action execution state within a cleanup result.
+ */
+type WalletCleanupActionExecutionStatus = "pending" | "succeeded" | "failed" | "skipped" | "blocked";
+/**
+ * Caller-supplied request contract for a wallet scan.
+ */
+interface WalletScanRequest {
+    /** Stable caller correlation identifier for the scan request. */
+    readonly requestId: string;
+    /** Chain family being evaluated. */
+    readonly walletChain: WalletChain;
+    /** Chain-specific wallet identifier, represented as an opaque string. */
+    readonly walletAddress: string;
+    /** Chain-agnostic network identifier such as "1" or "mainnet". */
+    readonly networkId: string;
+    /** Requested scan depth. */
+    readonly scanMode: WalletScanMode;
+    /** ISO-8601 timestamp describing when the request was created. */
+    readonly requestedAt: string;
+    /** Deterministic string metadata supplied by the caller. */
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Snapshot section metadata for a fully hydrated wallet snapshot.
+ */
+interface WalletSnapshotSection {
+    /** Stable identifier for the snapshot section. */
+    readonly sectionId: string;
+    /** Opaque section type label for later chain-specific implementations. */
+    readonly sectionType: string;
+    /** Human-readable label for audit output. */
+    readonly label: string;
+    /** Number of records represented by this section. */
+    readonly itemCount: number;
+    /** Deterministic content hash for the section payload. */
+    readonly contentHash: string;
+    /** Deterministic metadata for the section. */
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Shared contract describing the wallet snapshot used for evaluation.
+ */
+interface WalletScanSnapshot {
+    /** Stable snapshot identifier. */
+    readonly snapshotId: string;
+    /** Request identifier the snapshot belongs to. */
+    readonly requestId: string;
+    /** Chain family the snapshot was captured for. */
+    readonly walletChain: WalletChain;
+    /** Wallet identifier represented in the snapshot. */
+    readonly walletAddress: string;
+    /** Network scope the snapshot applies to. */
+    readonly networkId: string;
+    /** ISO-8601 timestamp describing when capture completed. */
+    readonly capturedAt: string;
+    /** Fully hydrated snapshot sections included in the evaluation payload. */
+    readonly sections: readonly WalletSnapshotSection[];
+    /** Deterministic snapshot metadata. */
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Reference to evidence used by a finding or execution result.
+ */
+interface WalletEvidenceRef {
+    /** Stable evidence identifier. */
+    readonly evidenceId: string;
+    /** Source category for this evidence reference. */
+    readonly sourceType: "snapshot_section" | "derived";
+    /** Section or derived source identifier. */
+    readonly sourceId: string;
+    /** Human-readable audit label. */
+    readonly label: string;
+}
+/**
+ * Honest coverage statement describing what the report could or could not do.
+ */
+interface WalletCapabilityBoundary {
+    /** Stable capability boundary identifier. */
+    readonly boundaryId: string;
+    /** Coverage area being described. */
+    readonly area: WalletCapabilityArea;
+    /** Stable capability key such as "cleanup_execution". */
+    readonly capabilityKey: string;
+    /** Support level for the named capability. */
+    readonly status: WalletCapabilityStatus;
+    /** Human-readable explanation of the current boundary. */
+    readonly detail: string;
+}
+/**
+ * Shared contract for an individual wallet finding.
+ */
+interface WalletFinding {
+    /** Stable finding identifier. */
+    readonly findingId: string;
+    /** Chain family this finding belongs to. */
+    readonly walletChain: WalletChain;
+    /** Chain-agnostic exposure category. */
+    readonly category: WalletExposureCategory;
+    /** Severity assigned to the finding. */
+    readonly riskLevel: RiskLevel;
+    /** Finding lifecycle state. */
+    readonly status: WalletFindingStatus;
+    /** Short audit-friendly title. */
+    readonly title: string;
+    /** Human-readable summary of the issue. */
+    readonly summary: string;
+    /** ISO-8601 timestamp describing when the finding was produced. */
+    readonly detectedAt: string;
+    /** Related snapshot resources or opaque chain-specific identifiers. */
+    readonly resourceIds: readonly string[];
+    /** Linked risk factors. */
+    readonly riskFactorIds: readonly string[];
+    /** Linked cleanup actions. */
+    readonly cleanupActionIds: readonly string[];
+    /** Supporting evidence references. */
+    readonly evidence: readonly WalletEvidenceRef[];
+    /** Deterministic finding metadata. */
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Shared contract for a normalized wallet risk factor.
+ */
+interface WalletRiskFactor {
+    /** Stable risk factor identifier. */
+    readonly factorId: string;
+    /** Chain family this factor belongs to. */
+    readonly walletChain: WalletChain;
+    /** Chain-agnostic exposure category. */
+    readonly category: WalletExposureCategory;
+    /** Severity assigned to the factor. */
+    readonly riskLevel: RiskLevel;
+    /** Audit-friendly factor title. */
+    readonly title: string;
+    /** Human-readable explanation of the factor. */
+    readonly summary: string;
+    /** Findings that contributed to this factor. */
+    readonly findingIds: readonly string[];
+    /** Related snapshot resources or opaque chain-specific identifiers. */
+    readonly resourceIds: readonly string[];
+    /** Deterministic factor metadata. */
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Score component used to explain how a wallet score was assembled.
+ */
+interface WalletScoreComponent {
+    /** Stable score component identifier. */
+    readonly componentId: string;
+    /** Human-readable component label. */
+    readonly label: string;
+    /** Component points awarded within the 0-100 score model. */
+    readonly score: number;
+    /** Maximum component points within the 0-100 score model. */
+    readonly maxScore: number;
+    /** Severity implied by this score component. */
+    readonly riskLevel: RiskLevel;
+    /** Human-readable reason for the assigned points. */
+    readonly rationale: string;
+    /** Findings that contributed to this component. */
+    readonly findingIds: readonly string[];
+    /** Risk factors that contributed to this component. */
+    readonly riskFactorIds: readonly string[];
+}
+/**
+ * Deterministic score breakdown for a wallet report.
+ */
+interface WalletScoreBreakdown {
+    /** Final wallet score in the inclusive 0-100 range. */
+    readonly totalScore: number;
+    /** Aggregate severity corresponding to the score. */
+    readonly riskLevel: RiskLevel;
+    /** Human-readable explanation of the overall score. */
+    readonly rationale: string;
+    /** Components that explain the score. */
+    readonly components: readonly WalletScoreComponent[];
+}
+/**
+ * Chain-agnostic target reference for a cleanup action.
+ */
+interface WalletCleanupTarget {
+    /** Stable cleanup target identifier. */
+    readonly targetId: string;
+    /** Broad target kind for the action. */
+    readonly targetKind: WalletCleanupTargetKind;
+    /** Human-readable label for the target. */
+    readonly label: string;
+    /** Deterministic target metadata. */
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Shared contract for a cleanup or remediation action.
+ */
+interface WalletCleanupAction {
+    /** Stable cleanup action identifier. */
+    readonly actionId: string;
+    /** Chain family this action belongs to. */
+    readonly walletChain: WalletChain;
+    /** Broad cleanup action kind. */
+    readonly kind: WalletCleanupActionKind;
+    /** How the action is expected to be carried out. */
+    readonly executionMode: WalletCleanupExecutionMode;
+    /** Concrete execution mechanism required for this action. */
+    readonly executionType: WalletCleanupExecutionType;
+    /** Current readiness state for this action. */
+    readonly status: WalletCleanupActionStatus;
+    /** Whether the action requires an external wallet signature. */
+    readonly requiresSignature: boolean;
+    /** Honest support level for the action in the current phase. */
+    readonly supportStatus: WalletCapabilityStatus;
+    /** Audit-friendly action title. */
+    readonly title: string;
+    /** Human-readable action description. */
+    readonly description: string;
+    /** Priority for this action using the shared risk ladder. */
+    readonly priority: RiskLevel;
+    /** Target reference for the action. */
+    readonly target: WalletCleanupTarget;
+    /** Findings this action addresses. */
+    readonly findingIds: readonly string[];
+    /** Risk factors this action addresses. */
+    readonly riskFactorIds: readonly string[];
+    /** Explanation when support is partial or unavailable. */
+    readonly supportDetail: string | null;
+    /** Deterministic action metadata. */
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Ordered cleanup plan generated from a wallet scan result.
+ */
+interface WalletCleanupPlan {
+    /** Stable cleanup plan identifier. */
+    readonly planId: string;
+    /** Chain family the plan applies to. */
+    readonly walletChain: WalletChain;
+    /** Wallet identifier the plan applies to. */
+    readonly walletAddress: string;
+    /** Network scope the plan applies to. */
+    readonly networkId: string;
+    /** ISO-8601 timestamp describing when the plan was created. */
+    readonly createdAt: string;
+    /** Human-readable plan summary. */
+    readonly summary: string;
+    /** Ordered actions included in the plan. */
+    readonly actions: readonly WalletCleanupAction[];
+    /** Optional projected score after successful remediation, else null. */
+    readonly projectedScore: number | null;
+    /** Optional projected risk level after successful remediation, else null. */
+    readonly projectedRiskLevel: RiskLevel | null;
+}
+/**
+ * Per-action execution outcome captured for a cleanup plan.
+ */
+interface WalletCleanupActionResult {
+    /** Cleanup action identifier. */
+    readonly actionId: string;
+    /** Execution status for the action. */
+    readonly status: WalletCleanupActionExecutionStatus;
+    /** ISO-8601 timestamp describing when the attempt finished, else null. */
+    readonly executedAt: string | null;
+    /** Human-readable execution detail. */
+    readonly detail: string;
+    /** Evidence references collected during execution. */
+    readonly evidence: readonly WalletEvidenceRef[];
+}
+/**
+ * Shared contract describing the outcome of cleanup execution.
+ */
+interface WalletCleanupExecutionResult {
+    /** Cleanup plan identifier. */
+    readonly planId: string;
+    /** Chain family the execution result belongs to. */
+    readonly walletChain: WalletChain;
+    /** Wallet identifier the execution result belongs to. */
+    readonly walletAddress: string;
+    /** Network scope the execution result belongs to. */
+    readonly networkId: string;
+    /** Aggregate execution status for the plan. */
+    readonly status: WalletCleanupExecutionStatus;
+    /** ISO-8601 timestamp describing when execution started, else null. */
+    readonly startedAt: string | null;
+    /** ISO-8601 timestamp describing when execution completed, else null. */
+    readonly completedAt: string | null;
+    /** Per-action execution outcomes. */
+    readonly actionResults: readonly WalletCleanupActionResult[];
+}
+/**
+ * Aggregated result produced from evaluating a wallet snapshot.
+ */
+interface WalletScanResult {
+    /** Request identifier that produced this result. */
+    readonly requestId: string;
+    /** Snapshot identifier used for evaluation. */
+    readonly snapshotId: string;
+    /** Chain family that was evaluated. */
+    readonly walletChain: WalletChain;
+    /** Wallet identifier that was evaluated. */
+    readonly walletAddress: string;
+    /** Network scope that was evaluated. */
+    readonly networkId: string;
+    /** ISO-8601 timestamp describing when evaluation completed. */
+    readonly evaluatedAt: string;
+    /** Findings produced by the scan. */
+    readonly findings: readonly WalletFinding[];
+    /** Normalized risk factors produced by the scan. */
+    readonly riskFactors: readonly WalletRiskFactor[];
+    /** Deterministic score explanation. */
+    readonly scoreBreakdown: WalletScoreBreakdown;
+    /** Ordered cleanup plan, if the phase produced one. */
+    readonly cleanupPlan: WalletCleanupPlan | null;
+    /** Honest capability boundaries for the current report. */
+    readonly capabilityBoundaries: readonly WalletCapabilityBoundary[];
+}
+/**
+ * High-level summary for wallet reporting and UI-agnostic consumption.
+ */
+interface WalletSummary {
+    /** Chain family being summarized. */
+    readonly walletChain: WalletChain;
+    /** Wallet identifier being summarized. */
+    readonly walletAddress: string;
+    /** Network scope being summarized. */
+    readonly networkId: string;
+    /** Scan depth used for the report. */
+    readonly scanMode: WalletScanMode;
+    /** ISO-8601 timestamp describing when the summary was produced. */
+    readonly generatedAt: string;
+    /** Snapshot capture timestamp used in the report. */
+    readonly snapshotCapturedAt: string;
+    /** Final wallet score in the inclusive 0-100 range. */
+    readonly score: number;
+    /** Aggregate risk level for the wallet. */
+    readonly riskLevel: RiskLevel;
+    /** Total number of findings in the report. */
+    readonly findingCount: number;
+    /** Number of findings that remain open. */
+    readonly openFindingCount: number;
+    /** Number of cleanup actions available in the plan. */
+    readonly cleanupActionCount: number;
+    /** Number of findings with at least one linked cleanup action. */
+    readonly actionableFindingCount: number;
+}
+/**
+ * Final deterministic wallet report contract for Layer 4.
+ */
+interface WalletReport {
+    /** Deterministic report identifier. */
+    readonly reportId: string;
+    /** Version of the shared Layer 4 report contract. */
+    readonly reportVersion: string;
+    /** ISO-8601 timestamp describing when the report was assembled. */
+    readonly generatedAt: string;
+    /** Original wallet scan request. */
+    readonly request: WalletScanRequest;
+    /** Snapshot used for evaluation. */
+    readonly snapshot: WalletScanSnapshot;
+    /** Scan result derived from the snapshot. */
+    readonly result: WalletScanResult;
+    /** High-level summary derived from the result. */
+    readonly summary: WalletSummary;
+    /** Cleanup execution outcome, if any execution occurred. */
+    readonly cleanupExecution: WalletCleanupExecutionResult | null;
+}
+
+/**
+ * Canonical input shape for deterministic wallet report identifier generation.
+ */
+interface WalletReportIdInput {
+    /** Version of the shared report contract. */
+    readonly reportVersion: WalletReport["reportVersion"];
+    /** ISO-8601 timestamp describing when the report was assembled. */
+    readonly generatedAt: WalletReport["generatedAt"];
+    /** Original request included in the report. */
+    readonly request: WalletScanRequest;
+    /** Snapshot included in the report. */
+    readonly snapshot: WalletScanSnapshot;
+    /** Evaluation result included in the report. */
+    readonly result: WalletScanResult;
+    /** Summary included in the report. */
+    readonly summary: WalletSummary;
+    /** Cleanup execution outcome included in the report, if any. */
+    readonly cleanupExecution: WalletCleanupExecutionResult | null;
+}
+/**
+ * Builds a deterministic wallet report identifier from declared Layer 4 contract fields only.
+ */
+declare function buildWalletReportId(input: WalletReportIdInput): string;
+
+/**
+ * Supported EVM token standards evaluated by the Phase 4B scanner.
+ */
+type EvmTokenStandard = "erc20" | "erc721" | "erc1155";
+/**
+ * Stable approval shapes recognized by the Phase 4B scanner.
+ */
+type EvmApprovalKind = "erc20_allowance" | "erc721_token" | "erc721_operator" | "erc1155_operator";
+/**
+ * Deterministic counterparty disposition labels used after normalization.
+ */
+type EvmCounterpartyDisposition = "trusted" | "unknown" | "flagged";
+/**
+ * Contract exposure areas accepted in the hydrated EVM snapshot payload.
+ */
+type EvmContractExposureType = "token_contract" | "spender_contract" | "interaction_contract";
+/**
+ * Amount classification derived from a normalized approval record.
+ */
+type EvmApprovalAmountKind = "limited" | "unlimited" | "not_applicable";
+/**
+ * Raw approval-like record supplied to the Phase 4B EVM scanner.
+ */
+interface EvmApprovalRecordInput {
+    readonly tokenStandard: EvmTokenStandard;
+    readonly tokenAddress: string;
+    readonly spenderAddress: string;
+    readonly amount?: string | null;
+    readonly tokenId?: string | null;
+    readonly isApproved?: boolean | null;
+    readonly approvedAt?: string | null;
+    readonly sourceSectionId?: string | null;
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Optional caller-supplied spender reputation input.
+ */
+interface EvmSpenderRiskInput {
+    readonly spenderAddress: string;
+    readonly trusted?: boolean;
+    readonly riskLevel?: RiskLevel | null;
+    readonly flags?: readonly string[];
+    readonly label?: string | null;
+    readonly sourceSectionId?: string | null;
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Optional caller-supplied risky contract exposure input.
+ */
+interface EvmContractExposureInput {
+    readonly contractAddress: string;
+    readonly exposureType: EvmContractExposureType;
+    readonly riskLevel?: RiskLevel | null;
+    readonly flags?: readonly string[];
+    readonly label?: string | null;
+    readonly sourceSectionId?: string | null;
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Fully hydrated EVM snapshot payload evaluated by the Phase 4B scanner.
+ */
+interface EvmWalletHydratedSnapshot {
+    readonly approvals: readonly EvmApprovalRecordInput[];
+    readonly spenders?: readonly EvmSpenderRiskInput[];
+    readonly contractExposures?: readonly EvmContractExposureInput[];
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Normalized spender reputation record used during deterministic evaluation.
+ */
+interface NormalizedEvmSpenderRisk {
+    readonly resourceId: string;
+    readonly spenderAddress: string;
+    readonly disposition: EvmCounterpartyDisposition;
+    readonly riskLevel: RiskLevel | null;
+    readonly flags: readonly string[];
+    readonly label: string | null;
+    readonly sourceSectionId: string | null;
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Normalized risky-contract record used during deterministic evaluation.
+ */
+interface NormalizedEvmContractExposure {
+    readonly resourceId: string;
+    readonly contractAddress: string;
+    readonly exposureType: EvmContractExposureType;
+    readonly riskLevel: RiskLevel | null;
+    readonly flags: readonly string[];
+    readonly label: string | null;
+    readonly isRisky: boolean;
+    readonly sourceSectionId: string | null;
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Normalized approval state evaluated by the Phase 4B scanner.
+ */
+interface NormalizedEvmApprovalState {
+    readonly approvalId: string;
+    readonly walletAddress: string;
+    readonly tokenStandard: EvmTokenStandard;
+    readonly approvalKind: EvmApprovalKind;
+    readonly tokenAddress: string;
+    readonly spenderAddress: string;
+    readonly spenderDisposition: EvmCounterpartyDisposition;
+    readonly spenderRiskLevel: RiskLevel | null;
+    readonly spenderFlags: readonly string[];
+    readonly amount: string | null;
+    readonly amountKind: EvmApprovalAmountKind;
+    readonly tokenId: string | null;
+    readonly isUnlimited: boolean;
+    readonly approvedAt: string | null;
+    readonly ageDays: number | null;
+    readonly isStale: boolean;
+    readonly riskyContractExposureIds: readonly string[];
+    readonly hasRiskyContractExposure: boolean;
+    readonly sourceSectionId: string | null;
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Stable normalized EVM snapshot shape used across signals, rules, and scoring.
+ */
+interface NormalizedEvmWalletSnapshot {
+    readonly walletAddress: string;
+    readonly networkId: string;
+    readonly capturedAt: string;
+    readonly approvals: readonly NormalizedEvmApprovalState[];
+    readonly spenders: readonly NormalizedEvmSpenderRisk[];
+    readonly contractExposures: readonly NormalizedEvmContractExposure[];
+}
+/**
+ * Pure wallet-exposure signals derived from a normalized EVM snapshot.
+ */
+interface EvmWalletSignals {
+    readonly approvalCount: number;
+    readonly erc20ApprovalCount: number;
+    readonly erc721ApprovalCount: number;
+    readonly erc1155ApprovalCount: number;
+    readonly unlimitedApprovalCount: number;
+    readonly unlimitedApprovalIds: readonly string[];
+    readonly unknownUnlimitedApprovalCount: number;
+    readonly unknownUnlimitedApprovalIds: readonly string[];
+    readonly flaggedSpenderCount: number;
+    readonly flaggedSpenderApprovalIds: readonly string[];
+    readonly staleApprovalCount: number;
+    readonly staleApprovalIds: readonly string[];
+    readonly riskyContractExposureCount: number;
+    readonly riskyContractExposureIds: readonly string[];
+    readonly hasExcessiveApprovals: boolean;
+}
+/**
+ * High-level input accepted by the exported Phase 4B EVM evaluator.
+ */
+interface EvmWalletScanEvaluationInput {
+    readonly request: WalletScanRequest;
+    readonly snapshot: WalletScanSnapshot;
+    readonly hydratedSnapshot: EvmWalletHydratedSnapshot;
+    readonly evaluatedAt: string;
+    readonly reportVersion?: WalletReport["reportVersion"];
+}
+/**
+ * Final deterministic Phase 4B evaluation surface for an EVM wallet snapshot.
+ */
+interface EvmWalletScanEvaluation {
+    readonly score: number;
+    readonly riskLevel: RiskLevel;
+    readonly normalizedSnapshot: NormalizedEvmWalletSnapshot;
+    readonly signals: EvmWalletSignals;
+    readonly result: WalletScanResult;
+    readonly summary: WalletSummary;
+    readonly report: WalletReport;
+}
+
+/**
+ * Evaluates a fully hydrated EVM wallet snapshot into deterministic Phase 4B report output.
+ */
+declare function evaluateEvmWalletScan(input: EvmWalletScanEvaluationInput): EvmWalletScanEvaluation;
+
+/**
+ * Supported revoke methods for deterministic EVM cleanup preparation.
+ */
+type EvmCleanupRevocationMethod = "erc20_approve_zero" | "erc721_approve_zero" | "erc721_set_approval_for_all_false" | "erc1155_set_approval_for_all_false";
+/**
+ * Exact approval target represented by a cleanup action.
+ */
+interface EvmRevocableApprovalTarget {
+    /** Stable approval identifier from normalized Phase 4B output. */
+    readonly approvalId: string;
+    /** Approval kind being revoked. */
+    readonly approvalKind: EvmApprovalKind;
+    /** Token contract that receives the revoke call. */
+    readonly tokenAddress: string;
+    /** Spender or operator that currently holds approval. */
+    readonly spenderAddress: string;
+    /** Token identifier for ERC-721 token approvals, else null. */
+    readonly tokenId: string | null;
+    /** Current approval state as represented in normalized input. */
+    readonly currentState: string;
+    /** Intended post-revoke state. */
+    readonly intendedState: string;
+}
+/**
+ * EVM-specific cleanup action with explicit revoke semantics.
+ */
+interface EvmCleanupAction extends WalletCleanupAction {
+    /** Chain family this action belongs to. */
+    readonly walletChain: "evm";
+    /** Guided payload review remains the only supported execution mode. */
+    readonly executionMode: "guided";
+    /** Cleanup requires a wallet-signed transaction. */
+    readonly executionType: "wallet_signature";
+    /** Supported cleanup actions are ready for signature preparation. */
+    readonly status: "ready";
+    /** EVM revoke execution always requires a user signature. */
+    readonly requiresSignature: true;
+    /** Phase 4C supports deterministic revoke payload preparation. */
+    readonly supportStatus: "supported";
+    /** Exact revoke method that will be prepared. */
+    readonly revocationMethod: EvmCleanupRevocationMethod;
+    /** Exact approval target that will be revoked. */
+    readonly approval: EvmRevocableApprovalTarget;
+    /** Estimated risk reduction if the revoke later confirms on-chain. */
+    readonly estimatedRiskReduction: RiskLevel;
+    /** Human-readable explanation of the revoke effect. */
+    readonly explanation: string;
+}
+/**
+ * Honest logical batch grouping for reviewable EVM cleanup actions.
+ */
+interface EvmCleanupBatchPlan {
+    /** Stable batch identifier. */
+    readonly batchId: string;
+    /** Chain family this batch belongs to. */
+    readonly walletChain: "evm";
+    /** Wallet identifier the batch applies to. */
+    readonly walletAddress: string;
+    /** Network scope the batch applies to. */
+    readonly networkId: string;
+    /** ISO-8601 timestamp when the batch was assembled. */
+    readonly createdAt: string;
+    /** Honest support level for executing the selected batch. */
+    readonly supportStatus: WalletCapabilityStatus;
+    /** Honest batch execution packaging model. */
+    readonly executionKind: "multiple_transactions";
+    /** Audit-friendly batch title. */
+    readonly title: string;
+    /** Human-readable batch summary. */
+    readonly summary: string;
+    /** Ordered action identifiers included in the batch. */
+    readonly actionIds: readonly string[];
+    /** Ordered actions included in the batch. */
+    readonly actions: readonly EvmCleanupAction[];
+}
+/**
+ * EVM cleanup plan produced from normalized approvals and findings.
+ */
+interface EvmWalletCleanupPlan extends WalletCleanupPlan {
+    /** Chain family this plan belongs to. */
+    readonly walletChain: "evm";
+    /** Ordered EVM revoke actions. */
+    readonly actions: readonly EvmCleanupAction[];
+    /** Deterministic logical batch groupings for review. */
+    readonly batches: readonly EvmCleanupBatchPlan[];
+}
+/**
+ * Eligibility decision for whether a normalized approval may produce a revoke.
+ */
+interface EvmCleanupEligibility {
+    /** Whether the approval can safely produce a cleanup action. */
+    readonly eligible: boolean;
+    /** Stable reason code describing the eligibility decision. */
+    readonly reasonCode: "supported" | "inactive" | "missing_amount" | "missing_token_id" | "unsupported_approval_kind";
+    /** Revoke method selected for supported approvals, else null. */
+    readonly revocationMethod: EvmCleanupRevocationMethod | null;
+    /** Honest support level for the decision. */
+    readonly supportStatus: WalletCapabilityStatus;
+    /** Human-readable explanation of the decision. */
+    readonly detail: string;
+}
+/**
+ * Prepared EVM transaction argument included in a reviewable revoke payload.
+ */
+interface EvmPreparedCleanupArgument {
+    /** ABI parameter name. */
+    readonly name: string;
+    /** Solidity parameter type. */
+    readonly type: "address" | "uint256" | "bool";
+    /** Canonical string value supplied to the payload. */
+    readonly value: string;
+}
+/**
+ * Deterministic revoke transaction payload prepared for explicit user review.
+ */
+interface EvmPreparedCleanupTransaction {
+    /** Stable prepared transaction identifier. */
+    readonly transactionId: string;
+    /** Cleanup action identifier this payload belongs to. */
+    readonly actionId: string;
+    /** Chain family this payload belongs to. */
+    readonly walletChain: "evm";
+    /** Network scope this payload belongs to. */
+    readonly networkId: string;
+    /** Wallet that must sign the payload. */
+    readonly walletAddress: string;
+    /** Target contract that receives the call, else null when unsupported. */
+    readonly to: string | null;
+    /** Native value attached to the transaction. */
+    readonly value: "0x0";
+    /** ABI-encoded calldata, else null when unsupported. */
+    readonly data: string | null;
+    /** Prepared function name, else null when unsupported. */
+    readonly functionName: "approve" | "setApprovalForAll" | null;
+    /** Prepared 4-byte selector, else null when unsupported. */
+    readonly methodSelector: string | null;
+    /** Ordered ABI arguments. */
+    readonly args: readonly EvmPreparedCleanupArgument[];
+    /** Approval kind the payload revokes. */
+    readonly approvalKind: EvmApprovalKind;
+    /** Revoke method the payload applies. */
+    readonly revocationMethod: EvmCleanupRevocationMethod;
+    /** Intended post-revoke approval state. */
+    readonly intendedState: string;
+    /** Whether the payload contains every required transaction field. */
+    readonly executable: boolean;
+    /** Honest support level for this payload. */
+    readonly supportStatus: WalletCapabilityStatus;
+    /** Human-readable explanation when support is partial or unavailable. */
+    readonly supportDetail: string | null;
+}
+/**
+ * Explicit user selection shape for prepared EVM cleanup execution.
+ */
+type EvmCleanupSelectionKind = "single_action" | "batch_actions";
+/**
+ * Honest packaging model for explicit cleanup execution preparation.
+ */
+type EvmCleanupPackaging = "single_transaction" | "multiple_transactions" | "not_supported";
+/**
+ * Request contract representing explicit user-selected cleanup preparation.
+ */
+interface EvmCleanupExecutionRequest {
+    /** Stable execution request identifier. */
+    readonly requestId: string;
+    /** Cleanup plan identifier this request belongs to. */
+    readonly planId: string;
+    /** Chain family this request belongs to. */
+    readonly walletChain: "evm";
+    /** Wallet that must sign the request payloads. */
+    readonly walletAddress: string;
+    /** Network scope this request belongs to. */
+    readonly networkId: string;
+    /** ISO-8601 timestamp when the request was prepared. */
+    readonly createdAt: string;
+    /** Whether the request targets one action or multiple actions. */
+    readonly selectionKind: EvmCleanupSelectionKind;
+    /** Honest packaging model for the prepared payloads. */
+    readonly packaging: EvmCleanupPackaging;
+    /** Ordered action identifiers selected by the caller. */
+    readonly actionIds: readonly string[];
+    /** Ordered prepared transactions for explicit review. */
+    readonly preparedTransactions: readonly EvmPreparedCleanupTransaction[];
+    /** EVM cleanup always requires a wallet signature. */
+    readonly requiresSignature: true;
+    /** Honest support level for the prepared request. */
+    readonly supportStatus: WalletCapabilityStatus;
+    /** Human-readable explanation of the packaging boundary. */
+    readonly supportDetail: string | null;
+}
+/**
+ * Stable execution status values for externally signed cleanup attempts.
+ */
+type EvmCleanupExecutionStatus = "pending_signature" | "submitted" | "confirmed" | "failed" | "rejected" | "unknown";
+/**
+ * Deterministic result contract for one cleanup action execution attempt.
+ */
+interface EvmCleanupActionExecutionResult {
+    /** Cleanup action identifier. */
+    readonly actionId: string;
+    /** Normalized external execution status. */
+    readonly status: EvmCleanupExecutionStatus;
+    /** Transaction hash when available, else null. */
+    readonly txHash: string | null;
+    /** Stable error code when available, else null. */
+    readonly errorCode: string | null;
+    /** Human-readable error message when available, else null. */
+    readonly errorMessage: string | null;
+    /** Whether later re-scan is required before claiming remediation. */
+    readonly requiresRescan: boolean;
+    /** Finalization timestamp when available, else null. */
+    readonly finalizedAt: string | null;
+}
+/**
+ * Minimal rescan snapshot used to compare confirmed execution with later state.
+ */
+interface EvmCleanupRescanSnapshot {
+    /** Chain family this rescan belongs to. */
+    readonly walletChain: "evm";
+    /** Wallet that was rescanned. */
+    readonly walletAddress: string;
+    /** Network scope that was rescanned. */
+    readonly networkId: string;
+    /** ISO-8601 timestamp when the re-scan completed. */
+    readonly rescannedAt: string;
+    /** Active approval identifiers still present after re-scan. */
+    readonly activeApprovalIds: readonly string[];
+}
+/**
+ * Re-scan comparison status for a cleanup action.
+ */
+type EvmCleanupRescanStatus = "not_requested" | "cleared" | "still_active";
+/**
+ * Reconciliation item tying an action to execution and later re-scan state.
+ */
+interface EvmCleanupReconciliationItem {
+    /** Cleanup action identifier. */
+    readonly actionId: string;
+    /** Approval identifier the action targets. */
+    readonly approvalId: string;
+    /** Execution status recorded for the action. */
+    readonly executionStatus: EvmCleanupExecutionStatus;
+    /** Re-scan comparison status for the targeted approval. */
+    readonly rescanStatus: EvmCleanupRescanStatus;
+    /** Findings linked to the action. */
+    readonly findingIds: readonly string[];
+    /** Transaction hash when available, else null. */
+    readonly txHash: string | null;
+    /** Whether another re-scan is still required. */
+    readonly requiresRescan: boolean;
+}
+/**
+ * Summary view for later comparing plan actions, execution results, and re-scan output.
+ */
+interface EvmCleanupReconciliationSummary {
+    /** Cleanup plan identifier. */
+    readonly planId: string;
+    /** Chain family this reconciliation belongs to. */
+    readonly walletChain: "evm";
+    /** Wallet identifier this reconciliation belongs to. */
+    readonly walletAddress: string;
+    /** Network scope this reconciliation belongs to. */
+    readonly networkId: string;
+    /** Whether any action still requires a re-scan before remediation can be claimed. */
+    readonly requiresRescan: boolean;
+    /** Whether the supplied re-scan snapshot matched the cleanup plan context. */
+    readonly rescanSnapshotAccepted: boolean;
+    /** Explicit mismatch reason when a supplied re-scan snapshot was rejected. */
+    readonly rescanMismatchReason: "wallet_chain_mismatch" | "wallet_address_mismatch" | "network_id_mismatch" | null;
+    /** Confirmed action identifiers recorded so far. */
+    readonly confirmedActionIds: readonly string[];
+    /** Action identifiers that remain unresolved after reconciliation. */
+    readonly outstandingActionIds: readonly string[];
+    /** Per-action reconciliation items. */
+    readonly items: readonly EvmCleanupReconciliationItem[];
+    /** Re-scan snapshot used for comparison, else null. */
+    readonly rescanSnapshot: EvmCleanupRescanSnapshot | null;
+}
+
+/**
+ * Evaluates whether a normalized approval can safely produce a Phase 4C cleanup action.
+ */
+declare function getEvmCleanupEligibility(approval: NormalizedEvmApprovalState): EvmCleanupEligibility;
+
+/**
+ * Builds the deterministic EVM cleanup plan for Phase 4C revoke preparation.
+ */
+declare function buildEvmCleanupPlan(walletAddress: string, networkId: string, evaluatedAt: string, approvals: readonly NormalizedEvmApprovalState[], findings: readonly WalletFinding[], riskFactors: readonly WalletRiskFactor[]): {
+    readonly cleanupPlan: EvmWalletCleanupPlan | null;
+    readonly actionIdsByFindingId: Readonly<Record<string, readonly string[]>>;
+};
+
+/**
+ * Prepares a single EVM revoke payload for explicit user-selected review.
+ */
+declare function prepareEvmCleanupTransaction(action: EvmCleanupAction, walletAddress: string, networkId: string): EvmPreparedCleanupTransaction;
+/**
+ * Prepares an explicit cleanup execution request for one or more selected EVM revoke actions.
+ */
+declare function prepareEvmCleanupExecutionRequest(plan: EvmWalletCleanupPlan, actionIds: readonly string[], createdAt: string): EvmCleanupExecutionRequest;
+
+/**
+ * Normalizes externally supplied cleanup execution status into a deterministic action result.
+ */
+declare function interpretEvmCleanupExecutionResult(input: {
+    /** Cleanup action identifier. */
+    readonly actionId: string;
+    /** External execution status to normalize. */
+    readonly status: EvmCleanupExecutionStatus;
+    /** Transaction hash when available. */
+    readonly txHash?: string | null;
+    /** Stable error code when available. */
+    readonly errorCode?: string | null;
+    /** Human-readable error message when available. */
+    readonly errorMessage?: string | null;
+    /** Finalization timestamp when available. */
+    readonly finalizedAt?: string | null;
+}): EvmCleanupActionExecutionResult;
+/**
+ * Reconciles a cleanup plan against recorded execution results and an optional later re-scan snapshot.
+ */
+declare function reconcileEvmCleanupPlanResults(plan: EvmWalletCleanupPlan, results: readonly EvmCleanupActionExecutionResult[], rescanSnapshot?: EvmCleanupRescanSnapshot | null): EvmCleanupReconciliationSummary;
+
+export { type ApprovalAmountKind, type ApprovalDirection, type ApprovalScope, type BuildContextOptions, type ChainFamily, type CompileDomainIntelSnapshotOptions, type CompiledDomainAllowlistItem, type CompiledDomainAllowlistsSection, type CompiledDomainIntelSnapshot, type CompiledMaliciousDomainItem, type CompiledMaliciousDomainsSection, type DecodedTransactionAction, type DomainAllowlistFeedItem, type DomainAllowlistsSection, type DomainContext, type DomainIntelBundle, type DomainIntelCompileFailure, type DomainIntelCompileResult, type DomainIntelCompileSuccess, type DomainIntelSectionMetadata, type DomainIntelSectionName, type DomainIntelSectionValidationReport, type DomainIntelSignatureEnvelope, type DomainIntelValidationOptions, type DomainIntelValidationReport, type DomainLookupDisposition, type DomainLookupResult, type EngineResult, type EvmApprovalAmountKind, type EvmApprovalKind, type EvmApprovalRecordInput, type EvmCleanupAction, type EvmCleanupActionExecutionResult, type EvmCleanupBatchPlan, type EvmCleanupEligibility, type EvmCleanupExecutionRequest, type EvmCleanupExecutionStatus, type EvmCleanupPackaging, type EvmCleanupReconciliationItem, type EvmCleanupReconciliationSummary, type EvmCleanupRescanSnapshot, type EvmCleanupRescanStatus, type EvmCleanupRevocationMethod, type EvmCleanupSelectionKind, type EvmContractExposureInput, type EvmContractExposureType, type EvmCounterpartyDisposition, type EvmPreparedCleanupArgument, type EvmPreparedCleanupTransaction, type EvmRevocableApprovalTarget, type EvmTokenStandard, type EvmWalletCleanupPlan, type EvmWalletHydratedSnapshot, type EvmWalletScanEvaluation, type EvmWalletScanEvaluationInput, type EvmWalletSignals, type IntelValidationIssue, KNOWN_PROTOCOL_DOMAINS, type Layer2SectionState, type Layer3RpcMethod, type MaliciousDomainFeedItem, type MaliciousDomainsSection, type NavigationContext, type NavigationInput, type NormalizedEvmApprovalState, type NormalizedEvmContractExposure, type NormalizedEvmSpenderRisk, type NormalizedEvmWalletSnapshot, type NormalizedTransactionContext, type NormalizedTypedData, PHISHING_CODES, type PermitKind, type PhishingCode, RULE_SET_VERSION, type RawSignatureRequest, type RawTransactionRequest, type RawTypedDataPayload, type ReasonMessage, type RiskLevel, type RuleOutcome, SUSPICIOUS_TLDS, type SignatureInput, type SignatureRpcMethod, TRANSACTION_SELECTOR_REGISTRY, type TransactionActionType, type TransactionBatchContext, type TransactionCounterpartyContext, type TransactionEvaluationResult, type TransactionEventKind, type TransactionExplanation, type TransactionInput, type TransactionIntelContext, type TransactionIntelDisposition, type TransactionIntelVersions, type Layer2SectionState$1 as TransactionLayer2SectionState, type Layer3RpcMethod as TransactionLayer3RpcMethod, type TransactionMeta, type TransactionOverrideLevel, type TransactionParamValue, type TransactionProviderContext, type TransactionRpcMethod, type TransactionSelectorDefinition, type TransactionSignals, type TransactionVerdict, type TransactionVerdictStatus, type TypedDataField, type TypedDataNormalizationState, type TypedDataTypes, type TypedDataValue, type Verdict, type WalletCapabilityArea, type WalletCapabilityBoundary, type WalletCapabilityStatus, type WalletChain, type WalletCleanupAction, type WalletCleanupActionExecutionStatus, type WalletCleanupActionKind, type WalletCleanupActionResult, type WalletCleanupActionStatus, type WalletCleanupExecutionMode, type WalletCleanupExecutionResult, type WalletCleanupExecutionStatus, type WalletCleanupExecutionType, type WalletCleanupPlan, type WalletCleanupTarget, type WalletCleanupTargetKind, type WalletEvidenceRef, type WalletExposureCategory, type WalletFinding, type WalletFindingStatus, type WalletProviderMetadata, type WalletReport, type WalletReportIdInput, type WalletRiskFactor, type WalletScanMode, type WalletScanRequest, type WalletScanResult, type WalletScanSnapshot, type WalletScoreBreakdown, type WalletScoreComponent, type WalletSnapshotSection, type WalletSummary, buildEvmCleanupPlan, buildNavigationContext, buildTransactionExplanation, buildTransactionSignals, buildWalletReportId, classifyPermitKind, classifyTransactionSelector, compileDomainIntelSnapshot, containsAirdropKeyword, containsMintKeyword, containsWalletConnectPattern, contextToInput, decodeTransactionCalldata, deconfuseHostname, domainSimilarityScore, evaluate, evaluateEvmWalletScan, evaluateTransaction, extractHostname, extractRegistrableDomain, extractTld, getEvmCleanupEligibility, getReasonMessage, getTransactionSelectorDefinition, getVerdictTitle, hasHomoglyphs, hasSuspiciousTld, interpretEvmCleanupExecutionResult, isIpHost, isKnownMaliciousDomain, isNewDomain, isValidUrl, listTransactionSelectors, looksLikeProtocolImpersonation, matchedLureKeywords, normalizeTransactionRequest, normalizeTypedData, normalizeTypedDataRequest, normalizeUrl, prepareEvmCleanupExecutionRequest, prepareEvmCleanupTransaction, reconcileEvmCleanupPlanResults, resolveDomainIntel, riskBadgeLabel, validateDomainIntelBundle };

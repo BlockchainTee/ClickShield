@@ -59,6 +59,20 @@ export type WalletCleanupActionKind =
 export type WalletCleanupExecutionMode = "automated" | "guided" | "manual";
 
 /**
+ * Readiness state for an individual cleanup action.
+ */
+export type WalletCleanupActionStatus =
+  | "planned"
+  | "ready"
+  | "blocked"
+  | "not_supported";
+
+/**
+ * Concrete execution mechanism expected for a cleanup action.
+ */
+export type WalletCleanupExecutionType = "wallet_signature" | "manual_review";
+
+/**
  * Shared cleanup target categories.
  */
 export type WalletCleanupTargetKind =
@@ -298,6 +312,12 @@ export interface WalletCleanupAction {
   readonly kind: WalletCleanupActionKind;
   /** How the action is expected to be carried out. */
   readonly executionMode: WalletCleanupExecutionMode;
+  /** Concrete execution mechanism required for this action. */
+  readonly executionType: WalletCleanupExecutionType;
+  /** Current readiness state for this action. */
+  readonly status: WalletCleanupActionStatus;
+  /** Whether the action requires an external wallet signature. */
+  readonly requiresSignature: boolean;
   /** Honest support level for the action in the current phase. */
   readonly supportStatus: WalletCapabilityStatus;
   /** Audit-friendly action title. */

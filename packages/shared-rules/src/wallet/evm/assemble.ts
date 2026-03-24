@@ -46,13 +46,13 @@ function buildCapabilityBoundaries(): readonly WalletCapabilityBoundary[] {
     {
       boundaryId: buildStableId("wallet_boundary", {
         area: "cleanup_plan",
-        capabilityKey: "recommendation_only_cleanup_plan",
+        capabilityKey: "deterministic_evm_cleanup_plan",
       }),
       area: "cleanup_plan",
-      capabilityKey: "recommendation_only_cleanup_plan",
-      status: "partial",
+      capabilityKey: "deterministic_evm_cleanup_plan",
+      status: "supported",
       detail:
-        "Phase 4B produces recommendation-only cleanup actions. It does not construct or submit revoke transactions.",
+        "Phase 4C builds deterministic EVM revoke actions and logical batch groupings from normalized approval data only.",
     },
     {
       boundaryId: buildStableId("wallet_boundary", {
@@ -61,9 +61,9 @@ function buildCapabilityBoundaries(): readonly WalletCapabilityBoundary[] {
       }),
       area: "cleanup_execution",
       capabilityKey: "evm_cleanup_execution",
-      status: "not_supported",
+      status: "partial",
       detail:
-        "Cleanup execution is intentionally out of scope for Phase 4B and is deferred to Phase 4C.",
+        "Phase 4C prepares deterministic revoke payloads and normalizes externally supplied execution results, but it does not request signatures or broadcast transactions.",
     },
   ];
 }
@@ -160,6 +160,7 @@ export function assembleEvmWalletEvaluation(input: {
     input.normalizedSnapshot.walletAddress,
     normalizedRequest.networkId,
     input.evaluatedAt,
+    input.normalizedSnapshot.approvals,
     findingsWithFactors,
     riskFactors
   );

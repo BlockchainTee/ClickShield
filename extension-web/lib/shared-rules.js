@@ -5291,15 +5291,1711 @@ function resolveDomainIntel(snapshot, input) {
     allowlistFeedVersion
   };
 }
+
+// src/wallet/report-id.ts
+function canonicalizeStringRecord(record) {
+  const canonicalRecord = {};
+  for (const key of Object.keys(record).sort()) {
+    canonicalRecord[key] = record[key];
+  }
+  return canonicalRecord;
+}
+function copyStringList(values) {
+  return values.map((value) => value);
+}
+function canonicalizeSnapshotSection(section) {
+  return {
+    contentHash: section.contentHash,
+    itemCount: section.itemCount,
+    label: section.label,
+    metadata: canonicalizeStringRecord(section.metadata),
+    sectionId: section.sectionId,
+    sectionType: section.sectionType
+  };
+}
+function canonicalizeEvidenceRef(evidence) {
+  return {
+    evidenceId: evidence.evidenceId,
+    label: evidence.label,
+    sourceId: evidence.sourceId,
+    sourceType: evidence.sourceType
+  };
+}
+function canonicalizeCapabilityBoundary(boundary) {
+  return {
+    area: boundary.area,
+    boundaryId: boundary.boundaryId,
+    capabilityKey: boundary.capabilityKey,
+    detail: boundary.detail,
+    status: boundary.status
+  };
+}
+function canonicalizeFinding(finding) {
+  return {
+    category: finding.category,
+    cleanupActionIds: copyStringList(finding.cleanupActionIds),
+    detectedAt: finding.detectedAt,
+    evidence: finding.evidence.map(canonicalizeEvidenceRef),
+    findingId: finding.findingId,
+    metadata: canonicalizeStringRecord(finding.metadata),
+    resourceIds: copyStringList(finding.resourceIds),
+    riskFactorIds: copyStringList(finding.riskFactorIds),
+    riskLevel: finding.riskLevel,
+    status: finding.status,
+    summary: finding.summary,
+    title: finding.title,
+    walletChain: finding.walletChain
+  };
+}
+function canonicalizeRiskFactor(factor) {
+  return {
+    category: factor.category,
+    factorId: factor.factorId,
+    findingIds: copyStringList(factor.findingIds),
+    metadata: canonicalizeStringRecord(factor.metadata),
+    resourceIds: copyStringList(factor.resourceIds),
+    riskLevel: factor.riskLevel,
+    summary: factor.summary,
+    title: factor.title,
+    walletChain: factor.walletChain
+  };
+}
+function canonicalizeScoreComponent(component) {
+  return {
+    componentId: component.componentId,
+    findingIds: copyStringList(component.findingIds),
+    label: component.label,
+    maxScore: component.maxScore,
+    rationale: component.rationale,
+    riskFactorIds: copyStringList(component.riskFactorIds),
+    riskLevel: component.riskLevel,
+    score: component.score
+  };
+}
+function canonicalizeScoreBreakdown(breakdown) {
+  return {
+    components: breakdown.components.map(canonicalizeScoreComponent),
+    rationale: breakdown.rationale,
+    riskLevel: breakdown.riskLevel,
+    totalScore: breakdown.totalScore
+  };
+}
+function canonicalizeCleanupTarget(target) {
+  return {
+    label: target.label,
+    metadata: canonicalizeStringRecord(target.metadata),
+    targetId: target.targetId,
+    targetKind: target.targetKind
+  };
+}
+function isEvmCleanupAction(action) {
+  return action.walletChain === "evm" && "approval" in action && "estimatedRiskReduction" in action && "explanation" in action && "revocationMethod" in action;
+}
+function isEvmWalletCleanupPlan(plan) {
+  return plan.walletChain === "evm" && "batches" in plan;
+}
+function canonicalizeEvmApprovalTarget(approval) {
+  return {
+    approvalId: approval.approvalId,
+    approvalKind: approval.approvalKind,
+    currentState: approval.currentState,
+    intendedState: approval.intendedState,
+    spenderAddress: approval.spenderAddress,
+    tokenAddress: approval.tokenAddress,
+    tokenId: approval.tokenId
+  };
+}
+function canonicalizeCleanupAction(action) {
+  const canonicalAction = {
+    actionId: action.actionId,
+    description: action.description,
+    executionMode: action.executionMode,
+    executionType: action.executionType,
+    findingIds: copyStringList(action.findingIds),
+    kind: action.kind,
+    metadata: canonicalizeStringRecord(action.metadata),
+    priority: action.priority,
+    requiresSignature: action.requiresSignature,
+    riskFactorIds: copyStringList(action.riskFactorIds),
+    status: action.status,
+    supportDetail: action.supportDetail,
+    supportStatus: action.supportStatus,
+    target: canonicalizeCleanupTarget(action.target),
+    title: action.title,
+    walletChain: action.walletChain
+  };
+  if (!isEvmCleanupAction(action)) {
+    return canonicalAction;
+  }
+  return {
+    ...canonicalAction,
+    approval: canonicalizeEvmApprovalTarget(action.approval),
+    estimatedRiskReduction: action.estimatedRiskReduction,
+    explanation: action.explanation,
+    revocationMethod: action.revocationMethod
+  };
+}
+function canonicalizeEvmCleanupBatch(batch) {
+  return {
+    actionIds: copyStringList(batch.actionIds),
+    actions: batch.actions.map(canonicalizeCleanupAction),
+    batchId: batch.batchId,
+    createdAt: batch.createdAt,
+    executionKind: batch.executionKind,
+    networkId: batch.networkId,
+    summary: batch.summary,
+    supportStatus: batch.supportStatus,
+    title: batch.title,
+    walletAddress: batch.walletAddress,
+    walletChain: batch.walletChain
+  };
+}
+function canonicalizeCleanupPlan(plan) {
+  if (plan === null) {
+    return null;
+  }
+  const canonicalPlan = {
+    actions: plan.actions.map(canonicalizeCleanupAction),
+    createdAt: plan.createdAt,
+    networkId: plan.networkId,
+    planId: plan.planId,
+    projectedRiskLevel: plan.projectedRiskLevel,
+    projectedScore: plan.projectedScore,
+    summary: plan.summary,
+    walletAddress: plan.walletAddress,
+    walletChain: plan.walletChain
+  };
+  if (!isEvmWalletCleanupPlan(plan)) {
+    return canonicalPlan;
+  }
+  return {
+    ...canonicalPlan,
+    batches: plan.batches.map(canonicalizeEvmCleanupBatch)
+  };
+}
+function canonicalizeCleanupActionResult(actionResult) {
+  return {
+    actionId: actionResult.actionId,
+    detail: actionResult.detail,
+    evidence: actionResult.evidence.map(canonicalizeEvidenceRef),
+    executedAt: actionResult.executedAt,
+    status: actionResult.status
+  };
+}
+function canonicalizeCleanupExecution(cleanupExecution) {
+  if (cleanupExecution === null) {
+    return null;
+  }
+  return {
+    actionResults: cleanupExecution.actionResults.map(
+      canonicalizeCleanupActionResult
+    ),
+    completedAt: cleanupExecution.completedAt,
+    networkId: cleanupExecution.networkId,
+    planId: cleanupExecution.planId,
+    startedAt: cleanupExecution.startedAt,
+    status: cleanupExecution.status,
+    walletAddress: cleanupExecution.walletAddress,
+    walletChain: cleanupExecution.walletChain
+  };
+}
+function canonicalizeRequest(request) {
+  return {
+    metadata: canonicalizeStringRecord(request.metadata),
+    networkId: request.networkId,
+    requestId: request.requestId,
+    requestedAt: request.requestedAt,
+    scanMode: request.scanMode,
+    walletAddress: request.walletAddress,
+    walletChain: request.walletChain
+  };
+}
+function canonicalizeSnapshot(snapshot) {
+  return {
+    capturedAt: snapshot.capturedAt,
+    metadata: canonicalizeStringRecord(snapshot.metadata),
+    networkId: snapshot.networkId,
+    requestId: snapshot.requestId,
+    sections: snapshot.sections.map(canonicalizeSnapshotSection),
+    snapshotId: snapshot.snapshotId,
+    walletAddress: snapshot.walletAddress,
+    walletChain: snapshot.walletChain
+  };
+}
+function canonicalizeResult(result) {
+  return {
+    capabilityBoundaries: result.capabilityBoundaries.map(
+      canonicalizeCapabilityBoundary
+    ),
+    cleanupPlan: canonicalizeCleanupPlan(result.cleanupPlan),
+    evaluatedAt: result.evaluatedAt,
+    findings: result.findings.map(canonicalizeFinding),
+    networkId: result.networkId,
+    requestId: result.requestId,
+    riskFactors: result.riskFactors.map(canonicalizeRiskFactor),
+    scoreBreakdown: canonicalizeScoreBreakdown(result.scoreBreakdown),
+    snapshotId: result.snapshotId,
+    walletAddress: result.walletAddress,
+    walletChain: result.walletChain
+  };
+}
+function canonicalizeSummary(summary) {
+  return {
+    actionableFindingCount: summary.actionableFindingCount,
+    cleanupActionCount: summary.cleanupActionCount,
+    findingCount: summary.findingCount,
+    generatedAt: summary.generatedAt,
+    networkId: summary.networkId,
+    openFindingCount: summary.openFindingCount,
+    riskLevel: summary.riskLevel,
+    scanMode: summary.scanMode,
+    score: summary.score,
+    snapshotCapturedAt: summary.snapshotCapturedAt,
+    walletAddress: summary.walletAddress,
+    walletChain: summary.walletChain
+  };
+}
+function canonicalizeReportIdInput(input) {
+  return {
+    cleanupExecution: canonicalizeCleanupExecution(input.cleanupExecution),
+    generatedAt: input.generatedAt,
+    reportVersion: input.reportVersion,
+    request: canonicalizeRequest(input.request),
+    result: canonicalizeResult(input.result),
+    snapshot: canonicalizeSnapshot(input.snapshot),
+    summary: canonicalizeSummary(input.summary)
+  };
+}
+function buildWalletReportId(input) {
+  const canonicalPayload = serializeCanonicalJson(canonicalizeReportIdInput(input));
+  return `wallet_report_${sha256Hex(canonicalPayload)}`;
+}
+
+// src/wallet/evm/ids.ts
+function buildStableId(prefix, payload) {
+  return `${prefix}_${sha256Hex(serializeCanonicalJson(payload)).slice(0, 24)}`;
+}
+
+// src/wallet/evm/constants.ts
+var EVM_WALLET_FINDING_CODES = Object.freeze({
+  FLAGGED_SPENDER: "EVM_FLAGGED_SPENDER_EXPOSURE",
+  RISKY_CONTRACT: "EVM_RISKY_CONTRACT_EXPOSURE",
+  UNLIMITED_APPROVAL: "EVM_UNLIMITED_APPROVAL_EXPOSURE",
+  STALE_APPROVAL: "EVM_STALE_APPROVAL_EXPOSURE",
+  EXCESSIVE_APPROVALS: "EVM_EXCESSIVE_APPROVALS"
+});
+var EVM_APPROVAL_STALE_DAYS = 90;
+var EVM_EXCESSIVE_APPROVAL_THRESHOLD = 10;
+var EVM_SEVERE_APPROVAL_THRESHOLD = 20;
+var EVM_WALLET_SCORE_COMPONENT_MAX = Object.freeze({
+  authorizationHygiene: 40,
+  spenderTrust: 25,
+  approvalFreshness: 15,
+  contractExposure: 20
+});
+
+// src/wallet/evm/cleanup-eligibility.ts
+function isActiveApproval(approval) {
+  if (approval.approvalKind === "erc20_allowance") {
+    return approval.amount !== null && approval.amount !== "0";
+  }
+  return true;
+}
+function getEvmCleanupRevocationMethod(approval) {
+  switch (approval.approvalKind) {
+    case "erc20_allowance":
+      return "erc20_approve_zero";
+    case "erc721_token":
+      return "erc721_approve_zero";
+    case "erc721_operator":
+      return "erc721_set_approval_for_all_false";
+    case "erc1155_operator":
+      return "erc1155_set_approval_for_all_false";
+    default:
+      return null;
+  }
+}
+function getEvmCleanupEligibility(approval) {
+  if (!isActiveApproval(approval)) {
+    return {
+      eligible: false,
+      reasonCode: "inactive",
+      revocationMethod: null,
+      supportStatus: "not_supported",
+      detail: "Inactive approvals must not produce cleanup actions or revoke payloads."
+    };
+  }
+  const revocationMethod = getEvmCleanupRevocationMethod(approval);
+  if (revocationMethod === null) {
+    return {
+      eligible: false,
+      reasonCode: "unsupported_approval_kind",
+      revocationMethod: null,
+      supportStatus: "not_supported",
+      detail: "This approval kind does not have a supported deterministic revoke method."
+    };
+  }
+  if (approval.approvalKind === "erc20_allowance" && approval.amount === null) {
+    return {
+      eligible: false,
+      reasonCode: "missing_amount",
+      revocationMethod: null,
+      supportStatus: "not_supported",
+      detail: "ERC-20 cleanup requires a normalized allowance amount before a revoke can be prepared."
+    };
+  }
+  if (approval.approvalKind === "erc721_token" && approval.tokenId === null) {
+    return {
+      eligible: false,
+      reasonCode: "missing_token_id",
+      revocationMethod: null,
+      supportStatus: "not_supported",
+      detail: "ERC-721 token approval cleanup requires a tokenId before a revoke can be prepared."
+    };
+  }
+  return {
+    eligible: true,
+    reasonCode: "supported",
+    revocationMethod,
+    supportStatus: "supported",
+    detail: "Active approval has a supported deterministic revoke method and can be prepared for wallet signature."
+  };
+}
+
+// src/wallet/evm/cleanup.ts
+var PHASE_4C_SUPPORT_DETAIL = "Prepared from normalized approval data only. User review, signature, submission, and confirmation occur outside this layer.";
+var ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+function compareRiskLevel(left, right) {
+  const order = {
+    low: 0,
+    medium: 1,
+    high: 2,
+    critical: 3
+  };
+  return order[left] - order[right];
+}
+function uniqueSorted(values) {
+  return [...new Set(values)].sort();
+}
+function compareApprovals(left, right) {
+  return left.approvalId.localeCompare(right.approvalId) || left.tokenAddress.localeCompare(right.tokenAddress) || left.spenderAddress.localeCompare(right.spenderAddress) || (left.tokenId ?? "").localeCompare(right.tokenId ?? "");
+}
+function deduplicateApprovals(approvals) {
+  const uniqueApprovals = /* @__PURE__ */ new Map();
+  for (const approval of [...approvals].sort(compareApprovals)) {
+    if (!uniqueApprovals.has(approval.approvalId)) {
+      uniqueApprovals.set(approval.approvalId, approval);
+    }
+  }
+  return [...uniqueApprovals.values()];
+}
+function hasSevereSpenderFlag(approval) {
+  return approval.spenderFlags.some(
+    (flag) => ["drainer", "malicious", "phishing", "exploit", "sanctioned"].includes(flag)
+  );
+}
+function getFindingPriority(approval, finding) {
+  switch (finding.metadata.code) {
+    case EVM_WALLET_FINDING_CODES.FLAGGED_SPENDER:
+      return approval.spenderRiskLevel === "critical" || hasSevereSpenderFlag(approval) ? "critical" : "high";
+    case EVM_WALLET_FINDING_CODES.RISKY_CONTRACT:
+      return "high";
+    case EVM_WALLET_FINDING_CODES.UNLIMITED_APPROVAL:
+      if (approval.spenderDisposition === "flagged" || approval.hasRiskyContractExposure) {
+        return "critical";
+      }
+      return approval.spenderDisposition === "unknown" ? "high" : "medium";
+    case EVM_WALLET_FINDING_CODES.STALE_APPROVAL:
+      return "medium";
+    case EVM_WALLET_FINDING_CODES.EXCESSIVE_APPROVALS:
+      return "medium";
+    default:
+      return finding.riskLevel;
+  }
+}
+function buildActionTitle(approval) {
+  switch (approval.approvalKind) {
+    case "erc20_allowance":
+      return "Revoke ERC-20 allowance";
+    case "erc721_token":
+      return "Clear ERC-721 token approval";
+    case "erc721_operator":
+      return "Revoke ERC-721 operator approval";
+    case "erc1155_operator":
+      return "Revoke ERC-1155 operator approval";
+  }
+}
+function buildActionDescription(approval) {
+  switch (approval.approvalKind) {
+    case "erc20_allowance":
+      return `Prepare approve(spender, 0) for ${approval.spenderAddress} on token ${approval.tokenAddress}.`;
+    case "erc721_token":
+      return `Prepare approve(${ZERO_ADDRESS}, tokenId) to clear token ${approval.tokenId ?? ""} approval on ${approval.tokenAddress}.`;
+    case "erc721_operator":
+      return `Prepare setApprovalForAll(operator, false) for ${approval.spenderAddress} on ERC-721 contract ${approval.tokenAddress}.`;
+    case "erc1155_operator":
+      return `Prepare setApprovalForAll(operator, false) for ${approval.spenderAddress} on ERC-1155 contract ${approval.tokenAddress}.`;
+  }
+}
+function buildApprovalCurrentState(approval) {
+  switch (approval.approvalKind) {
+    case "erc20_allowance":
+      return approval.amount ?? "0";
+    case "erc721_token":
+      return approval.spenderAddress;
+    case "erc721_operator":
+    case "erc1155_operator":
+      return "true";
+  }
+}
+function buildApprovalIntendedState(approval) {
+  switch (approval.approvalKind) {
+    case "erc20_allowance":
+      return "0";
+    case "erc721_token":
+      return ZERO_ADDRESS;
+    case "erc721_operator":
+    case "erc1155_operator":
+      return "false";
+  }
+}
+function buildTargetLabel(approval) {
+  return `${approval.approvalKind}:${approval.tokenAddress}`;
+}
+function approvalMatchesFinding(approval, finding) {
+  if (finding.resourceIds.includes(approval.approvalId)) {
+    return true;
+  }
+  if (finding.metadata.code === EVM_WALLET_FINDING_CODES.RISKY_CONTRACT) {
+    return approval.riskyContractExposureIds.some(
+      (resourceId) => finding.resourceIds.includes(resourceId)
+    );
+  }
+  return false;
+}
+function buildBatchPlans(actions, walletAddress, networkId, evaluatedAt) {
+  const grouped = /* @__PURE__ */ new Map();
+  for (const action of actions) {
+    const key = `${action.revocationMethod}:${action.approval.tokenAddress}`;
+    const existing = grouped.get(key) ?? [];
+    grouped.set(key, [...existing, action]);
+  }
+  return [...grouped.entries()].map(([, batchActions]) => ({
+    batchId: buildStableId("wallet_batch", {
+      actionIds: batchActions.map((action) => action.actionId),
+      networkId,
+      walletAddress
+    }),
+    walletChain: "evm",
+    walletAddress,
+    networkId,
+    createdAt: evaluatedAt,
+    supportStatus: "partial",
+    executionKind: "multiple_transactions",
+    title: `Review ${batchActions.length} revoke action(s)`,
+    summary: `Grouped by ${batchActions[0]?.revocationMethod ?? "revoke"} on ${batchActions[0]?.approval.tokenAddress ?? "unknown contract"}. Execution remains explicit and may require ${batchActions.length} separate transaction(s).`,
+    actionIds: batchActions.map((action) => action.actionId),
+    actions: batchActions
+  }));
+}
+function buildEvmCleanupPlan(walletAddress, networkId, evaluatedAt, approvals, findings, riskFactors) {
+  if (findings.length === 0 || approvals.length === 0) {
+    return {
+      cleanupPlan: null,
+      actionIdsByFindingId: {}
+    };
+  }
+  const riskFactorIds = new Set(riskFactors.map((factor) => factor.factorId));
+  const actionIdsByFindingId = /* @__PURE__ */ new Map();
+  const actions = deduplicateApprovals(approvals).map((approval) => {
+    const eligibility = getEvmCleanupEligibility(approval);
+    if (!eligibility.eligible || eligibility.revocationMethod === null) {
+      return null;
+    }
+    const linkedFindings = findings.filter((finding) => approvalMatchesFinding(approval, finding)).sort((left, right) => left.findingId.localeCompare(right.findingId));
+    if (linkedFindings.length === 0) {
+      return null;
+    }
+    const firstFinding = linkedFindings[0];
+    if (!firstFinding) {
+      return null;
+    }
+    const findingIds = linkedFindings.map((finding) => finding.findingId);
+    const linkedRiskFactorIds = uniqueSorted(
+      linkedFindings.flatMap((finding) => finding.riskFactorIds)
+    );
+    const priority = linkedFindings.reduce(
+      (highest, finding) => compareRiskLevel(getFindingPriority(approval, finding), highest) > 0 ? getFindingPriority(approval, finding) : highest,
+      getFindingPriority(approval, firstFinding)
+    );
+    const explanation = `Revoking ${approval.approvalKind} for ${approval.spenderAddress} on ${approval.tokenAddress} removes the currently active authorization. A later re-scan is still required before claiming remediation.`;
+    const action = {
+      actionId: buildStableId("wallet_action", {
+        approvalId: approval.approvalId
+      }),
+      walletChain: "evm",
+      kind: "revoke_authorization",
+      executionMode: "guided",
+      executionType: "wallet_signature",
+      status: "ready",
+      requiresSignature: true,
+      supportStatus: "supported",
+      title: buildActionTitle(approval),
+      description: buildActionDescription(approval),
+      priority,
+      target: {
+        targetId: buildStableId("wallet_target", {
+          approvalId: approval.approvalId,
+          walletAddress
+        }),
+        targetKind: "authorization",
+        label: buildTargetLabel(approval),
+        metadata: {
+          approvalId: approval.approvalId,
+          approvalKind: approval.approvalKind,
+          spenderAddress: approval.spenderAddress,
+          tokenAddress: approval.tokenAddress,
+          tokenId: approval.tokenId ?? ""
+        }
+      },
+      findingIds,
+      riskFactorIds: linkedRiskFactorIds.filter(
+        (factorId) => riskFactorIds.has(factorId)
+      ),
+      supportDetail: PHASE_4C_SUPPORT_DETAIL,
+      metadata: {
+        approvalId: approval.approvalId,
+        approvalKind: approval.approvalKind,
+        estimatedRiskReduction: priority,
+        executionType: "wallet_signature",
+        intendedState: buildApprovalIntendedState(approval),
+        requiresSignature: "true",
+        revocationMethod: eligibility.revocationMethod,
+        spenderAddress: approval.spenderAddress,
+        tokenAddress: approval.tokenAddress,
+        tokenId: approval.tokenId ?? ""
+      },
+      revocationMethod: eligibility.revocationMethod,
+      approval: {
+        approvalId: approval.approvalId,
+        approvalKind: approval.approvalKind,
+        tokenAddress: approval.tokenAddress,
+        spenderAddress: approval.spenderAddress,
+        tokenId: approval.tokenId,
+        currentState: buildApprovalCurrentState(approval),
+        intendedState: buildApprovalIntendedState(approval)
+      },
+      estimatedRiskReduction: priority,
+      explanation
+    };
+    for (const findingId of findingIds) {
+      const actionIds = actionIdsByFindingId.get(findingId) ?? /* @__PURE__ */ new Set();
+      actionIds.add(action.actionId);
+      actionIdsByFindingId.set(findingId, actionIds);
+    }
+    return action;
+  }).filter((action) => action !== null).sort((left, right) => {
+    const priorityDelta = compareRiskLevel(right.priority, left.priority);
+    if (priorityDelta !== 0) {
+      return priorityDelta;
+    }
+    return left.approval.tokenAddress.localeCompare(right.approval.tokenAddress) || left.approval.spenderAddress.localeCompare(right.approval.spenderAddress) || (left.approval.tokenId ?? "").localeCompare(right.approval.tokenId ?? "") || left.actionId.localeCompare(right.actionId);
+  });
+  if (actions.length === 0) {
+    return {
+      cleanupPlan: null,
+      actionIdsByFindingId: {}
+    };
+  }
+  const batches = buildBatchPlans(actions, walletAddress, networkId, evaluatedAt);
+  const serializedActionIdsByFindingId = {};
+  for (const [findingId, actionIds] of actionIdsByFindingId.entries()) {
+    serializedActionIdsByFindingId[findingId] = [...actionIds].sort();
+  }
+  const cleanupPlan = {
+    planId: buildStableId("wallet_plan", {
+      actionIds: actions.map((action) => action.actionId),
+      networkId,
+      walletAddress
+    }),
+    walletChain: "evm",
+    walletAddress,
+    networkId,
+    createdAt: evaluatedAt,
+    summary: `Prepared ${actions.length} deterministic revoke action(s) across ${batches.length} logical batch group(s). Execution still requires explicit user review and signature outside this layer.`,
+    actions,
+    batches,
+    projectedScore: null,
+    projectedRiskLevel: null
+  };
+  return {
+    cleanupPlan,
+    actionIdsByFindingId: serializedActionIdsByFindingId
+  };
+}
+
+// src/wallet/evm/score.ts
+var RISK_LEVEL_ORDER = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  critical: 3
+};
+function maxRiskLevel(levels, fallback) {
+  return levels.reduce(
+    (current, candidate) => RISK_LEVEL_ORDER[candidate] > RISK_LEVEL_ORDER[current] ? candidate : current,
+    fallback
+  );
+}
+function scoreBand(totalScore) {
+  if (totalScore >= 85) {
+    return "low";
+  }
+  if (totalScore >= 60) {
+    return "medium";
+  }
+  if (totalScore >= 35) {
+    return "high";
+  }
+  return "critical";
+}
+function findItemsByCode(items, code) {
+  return items.filter((item) => item.metadata.code === code);
+}
+function buildComponent(label, maxScore, score, rationale, findings, factors) {
+  return {
+    componentId: buildStableId("wallet_component", {
+      label,
+      score,
+      maxScore
+    }),
+    label,
+    score,
+    maxScore,
+    riskLevel: maxRiskLevel(
+      [...findings.map((finding) => finding.riskLevel), ...factors.map((factor) => factor.riskLevel)],
+      score === maxScore ? "low" : "medium"
+    ),
+    rationale,
+    findingIds: findings.map((finding) => finding.findingId),
+    riskFactorIds: factors.map((factor) => factor.factorId)
+  };
+}
+function buildEvmWalletScoreBreakdown(_snapshot, signals, findings, riskFactors) {
+  const unlimitedFindings = findItemsByCode(
+    findings,
+    EVM_WALLET_FINDING_CODES.UNLIMITED_APPROVAL
+  );
+  const flaggedFindings = findItemsByCode(
+    findings,
+    EVM_WALLET_FINDING_CODES.FLAGGED_SPENDER
+  );
+  const staleFindings = findItemsByCode(
+    findings,
+    EVM_WALLET_FINDING_CODES.STALE_APPROVAL
+  );
+  const excessiveFindings = findItemsByCode(
+    findings,
+    EVM_WALLET_FINDING_CODES.EXCESSIVE_APPROVALS
+  );
+  const contractFindings = findItemsByCode(
+    findings,
+    EVM_WALLET_FINDING_CODES.RISKY_CONTRACT
+  );
+  const unlimitedPenalty = Math.min(signals.unlimitedApprovalCount * 10, 24);
+  const approvalCountPenalty = signals.approvalCount >= EVM_SEVERE_APPROVAL_THRESHOLD ? 16 : signals.approvalCount >= EVM_EXCESSIVE_APPROVAL_THRESHOLD ? 8 : 0;
+  const authorizationScore = EVM_WALLET_SCORE_COMPONENT_MAX.authorizationHygiene - Math.min(
+    EVM_WALLET_SCORE_COMPONENT_MAX.authorizationHygiene,
+    unlimitedPenalty + approvalCountPenalty
+  );
+  const flaggedPenalty = Math.min(signals.flaggedSpenderCount * 12, 25);
+  const unknownUnlimitedPenalty = Math.min(
+    signals.unknownUnlimitedApprovalCount * 6,
+    12
+  );
+  const spenderTrustScore = EVM_WALLET_SCORE_COMPONENT_MAX.spenderTrust - Math.min(
+    EVM_WALLET_SCORE_COMPONENT_MAX.spenderTrust,
+    flaggedPenalty + unknownUnlimitedPenalty
+  );
+  const stalePenalty = Math.min(signals.staleApprovalCount * 5, 15);
+  const freshnessScore = EVM_WALLET_SCORE_COMPONENT_MAX.approvalFreshness - stalePenalty;
+  const contractPenalty = Math.min(signals.riskyContractExposureCount * 10, 20);
+  const contractExposureScore = EVM_WALLET_SCORE_COMPONENT_MAX.contractExposure - contractPenalty;
+  const components = [
+    buildComponent(
+      "Authorization hygiene",
+      EVM_WALLET_SCORE_COMPONENT_MAX.authorizationHygiene,
+      authorizationScore,
+      `${signals.unlimitedApprovalCount} unlimited approval(s) and ${signals.approvalCount} active approval(s) drive this component.`,
+      [...unlimitedFindings, ...excessiveFindings],
+      riskFactors.filter(
+        (factor) => factor.metadata.code === EVM_WALLET_FINDING_CODES.UNLIMITED_APPROVAL || factor.metadata.code === EVM_WALLET_FINDING_CODES.EXCESSIVE_APPROVALS
+      )
+    ),
+    buildComponent(
+      "Spender trust",
+      EVM_WALLET_SCORE_COMPONENT_MAX.spenderTrust,
+      spenderTrustScore,
+      `${signals.flaggedSpenderCount} approval(s) point to flagged spenders and ${signals.unknownUnlimitedApprovalCount} unlimited approval(s) point to unknown spenders.`,
+      [...flaggedFindings, ...unlimitedFindings],
+      riskFactors.filter(
+        (factor) => factor.metadata.code === EVM_WALLET_FINDING_CODES.FLAGGED_SPENDER || factor.metadata.code === EVM_WALLET_FINDING_CODES.UNLIMITED_APPROVAL
+      )
+    ),
+    buildComponent(
+      "Approval freshness",
+      EVM_WALLET_SCORE_COMPONENT_MAX.approvalFreshness,
+      freshnessScore,
+      `${signals.staleApprovalCount} approval(s) exceeded the stale threshold.`,
+      staleFindings,
+      riskFactors.filter(
+        (factor) => factor.metadata.code === EVM_WALLET_FINDING_CODES.STALE_APPROVAL
+      )
+    ),
+    buildComponent(
+      "Contract exposure",
+      EVM_WALLET_SCORE_COMPONENT_MAX.contractExposure,
+      contractExposureScore,
+      `${signals.riskyContractExposureCount} risky contract exposure(s) were supplied in the hydrated snapshot.`,
+      contractFindings,
+      riskFactors.filter(
+        (factor) => factor.metadata.code === EVM_WALLET_FINDING_CODES.RISKY_CONTRACT
+      )
+    )
+  ];
+  const totalScore = components.reduce((sum, component) => sum + component.score, 0);
+  const findingRiskLevel = maxRiskLevel(
+    findings.map((finding) => finding.riskLevel),
+    "low"
+  );
+  const riskLevel = maxRiskLevel([scoreBand(totalScore), findingRiskLevel], "low");
+  return {
+    totalScore,
+    riskLevel,
+    rationale: findings.length === 0 ? "No deterministic EVM approval findings were produced from the hydrated snapshot." : `Score starts at 100 and applies fixed deductions for authorization hygiene, spender trust, approval freshness, and risky contract exposure.`,
+    components
+  };
+}
+
+// src/wallet/evm/assemble.ts
+function buildCapabilityBoundaries() {
+  return [
+    {
+      boundaryId: buildStableId("wallet_boundary", {
+        area: "snapshot",
+        capabilityKey: "hydrated_evm_snapshot"
+      }),
+      area: "snapshot",
+      capabilityKey: "hydrated_evm_snapshot",
+      status: "supported",
+      detail: "Phase 4B evaluates only caller-supplied hydrated EVM snapshot data and performs no live lookups during normalization or scoring."
+    },
+    {
+      boundaryId: buildStableId("wallet_boundary", {
+        area: "finding",
+        capabilityKey: "deterministic_evm_findings"
+      }),
+      area: "finding",
+      capabilityKey: "deterministic_evm_findings",
+      status: "supported",
+      detail: "Phase 4B emits deterministic EVM approval findings, factors, and score breakdowns from the supplied snapshot only."
+    },
+    {
+      boundaryId: buildStableId("wallet_boundary", {
+        area: "cleanup_plan",
+        capabilityKey: "deterministic_evm_cleanup_plan"
+      }),
+      area: "cleanup_plan",
+      capabilityKey: "deterministic_evm_cleanup_plan",
+      status: "supported",
+      detail: "Phase 4C builds deterministic EVM revoke actions and logical batch groupings from normalized approval data only."
+    },
+    {
+      boundaryId: buildStableId("wallet_boundary", {
+        area: "cleanup_execution",
+        capabilityKey: "evm_cleanup_execution"
+      }),
+      area: "cleanup_execution",
+      capabilityKey: "evm_cleanup_execution",
+      status: "partial",
+      detail: "Phase 4C prepares deterministic revoke payloads and normalizes externally supplied execution results, but it does not request signatures or broadcast transactions."
+    }
+  ];
+}
+function buildFindingId(walletAddress, code, resourceIds) {
+  return buildStableId("wallet_finding", {
+    code,
+    resourceIds,
+    walletAddress
+  });
+}
+function buildRiskFactors(findings) {
+  return findings.map((finding) => ({
+    factorId: buildStableId("wallet_factor", {
+      code: finding.metadata.code ?? "",
+      findingId: finding.findingId,
+      resourceIds: finding.resourceIds
+    }),
+    walletChain: "evm",
+    category: finding.category,
+    riskLevel: finding.riskLevel,
+    title: finding.title,
+    summary: finding.summary,
+    findingIds: [finding.findingId],
+    resourceIds: finding.resourceIds,
+    metadata: {
+      code: finding.metadata.code ?? "",
+      sourceFindingId: finding.findingId
+    }
+  }));
+}
+function assembleEvmWalletEvaluation(input) {
+  const normalizedRequest = {
+    ...input.request,
+    walletAddress: input.normalizedSnapshot.walletAddress
+  };
+  const normalizedSnapshotContract = {
+    ...input.snapshot,
+    walletAddress: input.normalizedSnapshot.walletAddress
+  };
+  const findingsWithoutActions = input.findingDrafts.map((draft) => ({
+    findingId: buildFindingId(
+      input.normalizedSnapshot.walletAddress,
+      draft.code,
+      draft.resourceIds
+    ),
+    walletChain: "evm",
+    category: draft.category,
+    riskLevel: draft.riskLevel,
+    status: "open",
+    title: draft.title,
+    summary: draft.summary,
+    detectedAt: input.evaluatedAt,
+    resourceIds: draft.resourceIds,
+    riskFactorIds: [],
+    cleanupActionIds: [],
+    evidence: draft.evidence,
+    metadata: draft.metadata
+  }));
+  const riskFactors = buildRiskFactors(findingsWithoutActions);
+  const riskFactorByCode = new Map(
+    riskFactors.map((factor) => [factor.metadata.code, factor.factorId])
+  );
+  const findingsWithFactors = findingsWithoutActions.map((finding) => ({
+    ...finding,
+    riskFactorIds: riskFactorByCode.get(finding.metadata.code ?? "") ? [riskFactorByCode.get(finding.metadata.code ?? "")] : []
+  }));
+  const scoreBreakdown = buildEvmWalletScoreBreakdown(
+    input.normalizedSnapshot,
+    input.signals,
+    findingsWithFactors,
+    riskFactors
+  );
+  const { cleanupPlan, actionIdsByFindingId } = buildEvmCleanupPlan(
+    input.normalizedSnapshot.walletAddress,
+    normalizedRequest.networkId,
+    input.evaluatedAt,
+    input.normalizedSnapshot.approvals,
+    findingsWithFactors,
+    riskFactors
+  );
+  const findings = findingsWithFactors.map((finding) => ({
+    ...finding,
+    cleanupActionIds: actionIdsByFindingId[finding.findingId] ?? []
+  }));
+  const capabilityBoundaries = buildCapabilityBoundaries();
+  const result = {
+    requestId: normalizedRequest.requestId,
+    snapshotId: normalizedSnapshotContract.snapshotId,
+    walletChain: "evm",
+    walletAddress: input.normalizedSnapshot.walletAddress,
+    networkId: normalizedRequest.networkId,
+    evaluatedAt: input.evaluatedAt,
+    findings,
+    riskFactors,
+    scoreBreakdown,
+    cleanupPlan,
+    capabilityBoundaries
+  };
+  const summary = {
+    walletChain: "evm",
+    walletAddress: input.normalizedSnapshot.walletAddress,
+    networkId: normalizedRequest.networkId,
+    scanMode: normalizedRequest.scanMode,
+    generatedAt: input.evaluatedAt,
+    snapshotCapturedAt: normalizedSnapshotContract.capturedAt,
+    score: scoreBreakdown.totalScore,
+    riskLevel: scoreBreakdown.riskLevel,
+    findingCount: findings.length,
+    openFindingCount: findings.length,
+    cleanupActionCount: cleanupPlan?.actions.length ?? 0,
+    actionableFindingCount: findings.filter(
+      (finding) => finding.cleanupActionIds.length > 0
+    ).length
+  };
+  const report = {
+    reportId: buildWalletReportId({
+      reportVersion: input.reportVersion,
+      generatedAt: input.evaluatedAt,
+      request: normalizedRequest,
+      snapshot: normalizedSnapshotContract,
+      result,
+      summary,
+      cleanupExecution: null
+    }),
+    reportVersion: input.reportVersion,
+    generatedAt: input.evaluatedAt,
+    request: normalizedRequest,
+    snapshot: normalizedSnapshotContract,
+    result,
+    summary,
+    cleanupExecution: null
+  };
+  return {
+    score: scoreBreakdown.totalScore,
+    riskLevel: scoreBreakdown.riskLevel,
+    normalizedSnapshot: input.normalizedSnapshot,
+    signals: input.signals,
+    result,
+    summary,
+    report
+  };
+}
+
+// src/wallet/evm/normalize.ts
+var MAX_UINT256 = (1n << 256n) - 1n;
+function normalizeMetadata(metadata) {
+  if (!metadata) {
+    return {};
+  }
+  const normalized = {};
+  for (const key of Object.keys(metadata).sort()) {
+    normalized[key] = metadata[key];
+  }
+  return normalized;
+}
+function normalizeFlags(flags) {
+  return [...new Set((flags ?? []).map((flag) => flag.trim().toLowerCase()).filter(Boolean))].sort();
+}
+function parseIntegerString(value) {
+  if (value === null || value === void 0) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (/^0x[0-9a-fA-F]+$/.test(trimmed)) {
+    return BigInt(trimmed).toString(10);
+  }
+  if (/^[0-9]+$/.test(trimmed)) {
+    return BigInt(trimmed).toString(10);
+  }
+  return trimmed;
+}
+function compareNullable(left, right) {
+  return (left ?? "").localeCompare(right ?? "");
+}
+function pickSourceSectionId(explicitSectionId, candidates) {
+  if (explicitSectionId) {
+    return explicitSectionId;
+  }
+  return candidates[0] ?? null;
+}
+function findSectionIds(input, matcher) {
+  return input.snapshot.sections.filter((section) => {
+    const haystacks = [
+      section.sectionId,
+      section.sectionType,
+      section.label
+    ].map((value) => value.toLowerCase());
+    return haystacks.some(matcher);
+  }).map((section) => section.sectionId).sort();
+}
+function normalizeSpender(input, defaultSectionIds) {
+  const flags = normalizeFlags(input.flags);
+  const riskLevel = input.riskLevel ?? (flags.length > 0 ? "high" : null);
+  const disposition = flags.length > 0 || riskLevel !== null && riskLevel !== "low" ? "flagged" : input.trusted ? "trusted" : "unknown";
+  const spenderAddress = normalizeEvmAddress(input.spenderAddress);
+  const sourceSectionId = pickSourceSectionId(input.sourceSectionId, defaultSectionIds);
+  const metadata = normalizeMetadata(input.metadata);
+  return {
+    resourceId: buildStableId("wallet_spender", {
+      disposition,
+      riskLevel,
+      sourceSectionId,
+      spenderAddress
+    }),
+    spenderAddress,
+    disposition,
+    riskLevel,
+    flags,
+    label: input.label ?? null,
+    sourceSectionId,
+    metadata
+  };
+}
+function normalizeContractExposure(input, defaultSectionIds) {
+  const flags = normalizeFlags(input.flags);
+  const riskLevel = input.riskLevel ?? (flags.length > 0 ? "high" : null);
+  const contractAddress = normalizeEvmAddress(input.contractAddress);
+  const sourceSectionId = pickSourceSectionId(input.sourceSectionId, defaultSectionIds);
+  const metadata = normalizeMetadata(input.metadata);
+  const isRisky = flags.length > 0 || riskLevel !== null && riskLevel !== "low";
+  return {
+    resourceId: buildStableId("wallet_contract", {
+      contractAddress,
+      exposureType: input.exposureType,
+      riskLevel,
+      sourceSectionId
+    }),
+    contractAddress,
+    exposureType: input.exposureType,
+    riskLevel,
+    flags,
+    label: input.label ?? null,
+    isRisky,
+    sourceSectionId,
+    metadata
+  };
+}
+function deriveApprovalKind(input) {
+  if (input.tokenStandard === "erc20") {
+    return "erc20_allowance";
+  }
+  if (input.tokenStandard === "erc721" && input.tokenId) {
+    return "erc721_token";
+  }
+  return input.tokenStandard === "erc721" ? "erc721_operator" : "erc1155_operator";
+}
+function isInactiveApproval(approvalKind, amount, isApproved) {
+  if (approvalKind === "erc20_allowance") {
+    return amount === "0";
+  }
+  if (approvalKind === "erc721_token" || approvalKind === "erc721_operator" || approvalKind === "erc1155_operator") {
+    return isApproved === false;
+  }
+  return false;
+}
+function computeAgeDays(approvedAt, capturedAt) {
+  if (!approvedAt) {
+    return null;
+  }
+  const approvedAtMs = Date.parse(approvedAt);
+  const capturedAtMs = Date.parse(capturedAt);
+  if (Number.isNaN(approvedAtMs) || Number.isNaN(capturedAtMs) || approvedAtMs > capturedAtMs) {
+    return null;
+  }
+  return Math.floor((capturedAtMs - approvedAtMs) / 864e5);
+}
+function normalizeApproval(input, walletAddress, capturedAt, spenderMap, contractMap, defaultSectionIds) {
+  const approvalKind = deriveApprovalKind(input);
+  const tokenAddress = normalizeEvmAddress(input.tokenAddress);
+  const spenderAddress = normalizeEvmAddress(input.spenderAddress);
+  const amount = parseIntegerString(input.amount);
+  if (isInactiveApproval(approvalKind, amount, input.isApproved)) {
+    return null;
+  }
+  const spender = spenderMap.get(spenderAddress);
+  const contractMatches = [tokenAddress, spenderAddress].map((address) => contractMap.get(address)).filter(
+    (exposure) => exposure !== void 0 && exposure.isRisky
+  ).sort((left, right) => left.resourceId.localeCompare(right.resourceId));
+  const riskyContractExposureIds = contractMatches.map((match) => match.resourceId);
+  const ageDays = computeAgeDays(input.approvedAt ?? null, capturedAt);
+  const amountKind = approvalKind === "erc20_allowance" ? amount === MAX_UINT256.toString(10) ? "unlimited" : "limited" : approvalKind === "erc721_token" ? "not_applicable" : "unlimited";
+  const metadata = normalizeMetadata(input.metadata);
+  const sourceSectionId = pickSourceSectionId(input.sourceSectionId, defaultSectionIds);
+  return {
+    approvalId: buildStableId("wallet_approval", {
+      amount: amount ?? "",
+      approvalKind,
+      approvedAt: input.approvedAt ?? "",
+      spenderAddress,
+      tokenAddress,
+      tokenId: input.tokenId ?? "",
+      walletAddress
+    }),
+    walletAddress,
+    tokenStandard: input.tokenStandard,
+    approvalKind,
+    tokenAddress,
+    spenderAddress,
+    spenderDisposition: spender?.disposition ?? "unknown",
+    spenderRiskLevel: spender?.riskLevel ?? null,
+    spenderFlags: spender?.flags ?? [],
+    amount,
+    amountKind,
+    tokenId: input.tokenId ?? null,
+    isUnlimited: amountKind === "unlimited",
+    approvedAt: input.approvedAt ?? null,
+    ageDays,
+    isStale: ageDays !== null && ageDays >= EVM_APPROVAL_STALE_DAYS,
+    riskyContractExposureIds,
+    hasRiskyContractExposure: riskyContractExposureIds.length > 0,
+    sourceSectionId,
+    metadata
+  };
+}
+function normalizeEvmWalletSnapshot(input) {
+  if (input.request.walletChain !== "evm" || input.snapshot.walletChain !== "evm") {
+    throw new Error("Phase 4B EVM evaluation requires evm request and snapshot contracts.");
+  }
+  const requestWallet = normalizeEvmAddress(input.request.walletAddress);
+  const snapshotWallet = normalizeEvmAddress(input.snapshot.walletAddress);
+  if (requestWallet !== snapshotWallet) {
+    throw new Error("Wallet request and snapshot addresses must match for EVM evaluation.");
+  }
+  if (input.request.requestId !== input.snapshot.requestId) {
+    throw new Error("Wallet request and snapshot requestId values must match.");
+  }
+  if (input.request.networkId !== input.snapshot.networkId) {
+    throw new Error("Wallet request and snapshot networkId values must match.");
+  }
+  const spenderSectionIds = findSectionIds(input, (value) => value.includes("spender"));
+  const contractSectionIds = findSectionIds(input, (value) => value.includes("contract"));
+  const approvalSectionIds = findSectionIds(input, (value) => value.includes("approval"));
+  const spenders = (input.hydratedSnapshot.spenders ?? []).map((spender) => normalizeSpender(spender, spenderSectionIds)).sort((left, right) => left.spenderAddress.localeCompare(right.spenderAddress));
+  const contractExposures = (input.hydratedSnapshot.contractExposures ?? []).map((exposure) => normalizeContractExposure(exposure, contractSectionIds)).sort((left, right) => left.resourceId.localeCompare(right.resourceId));
+  const spenderMap = new Map(spenders.map((spender) => [spender.spenderAddress, spender]));
+  const contractMap = new Map(
+    contractExposures.map((exposure) => [exposure.contractAddress, exposure])
+  );
+  const approvals = input.hydratedSnapshot.approvals.map(
+    (approval) => normalizeApproval(
+      approval,
+      requestWallet,
+      input.snapshot.capturedAt,
+      spenderMap,
+      contractMap,
+      approvalSectionIds
+    )
+  ).filter(
+    (approval) => approval !== null
+  ).sort((left, right) => {
+    return left.approvalKind.localeCompare(right.approvalKind) || left.tokenAddress.localeCompare(right.tokenAddress) || left.spenderAddress.localeCompare(right.spenderAddress) || compareNullable(left.tokenId, right.tokenId) || compareNullable(left.approvedAt, right.approvedAt) || left.approvalId.localeCompare(right.approvalId);
+  });
+  return {
+    walletAddress: requestWallet,
+    networkId: input.request.networkId,
+    capturedAt: input.snapshot.capturedAt,
+    approvals,
+    spenders,
+    contractExposures
+  };
+}
+
+// src/wallet/evm/rules.ts
+function compareRiskLevel2(left, right) {
+  const order = {
+    low: 0,
+    medium: 1,
+    high: 2,
+    critical: 3
+  };
+  return order[left] - order[right];
+}
+function maxRiskLevel2(levels, fallback) {
+  return levels.reduce(
+    (current, candidate) => compareRiskLevel2(candidate, current) > 0 ? candidate : current,
+    fallback
+  );
+}
+function uniqueSorted2(values) {
+  return [...new Set(values)].sort();
+}
+function isSevereFlag(flags) {
+  return flags.some(
+    (flag) => ["drainer", "malicious", "phishing", "exploit", "sanctioned"].includes(flag)
+  );
+}
+function buildEvidenceRefs(snapshot, sourceSectionIds, fallbackLabel) {
+  const sectionIds = uniqueSorted2(sourceSectionIds.filter(Boolean));
+  if (sectionIds.length > 0) {
+    return sectionIds.map((sectionId) => ({
+      evidenceId: buildStableId("wallet_evidence", {
+        sectionId,
+        fallbackLabel
+      }),
+      sourceType: "snapshot_section",
+      sourceId: sectionId,
+      label: snapshot.capturedAt && sectionId ? `Snapshot section: ${sectionId}` : fallbackLabel
+    }));
+  }
+  return [
+    {
+      evidenceId: buildStableId("wallet_evidence", {
+        fallbackLabel
+      }),
+      sourceType: "derived",
+      sourceId: fallbackLabel.toLowerCase().replace(/\s+/g, "_"),
+      label: fallbackLabel
+    }
+  ];
+}
+function approvalEvidence(snapshot, approvals, fallbackLabel) {
+  return buildEvidenceRefs(
+    snapshot,
+    approvals.map((approval) => approval.sourceSectionId ?? ""),
+    fallbackLabel
+  );
+}
+function contractEvidence(snapshot, exposures, fallbackLabel) {
+  return buildEvidenceRefs(
+    snapshot,
+    exposures.map((exposure) => exposure.sourceSectionId ?? ""),
+    fallbackLabel
+  );
+}
+function buildEvmWalletFindings(snapshot, signals) {
+  const drafts = [];
+  const approvals = snapshot.approvals;
+  const flaggedApprovals = approvals.filter(
+    (approval) => approval.spenderDisposition === "flagged"
+  );
+  const riskyExposures = snapshot.contractExposures.filter(
+    (exposure) => exposure.isRisky
+  );
+  const unlimitedApprovals = approvals.filter((approval) => approval.isUnlimited);
+  const staleApprovals = approvals.filter((approval) => approval.isStale);
+  if (flaggedApprovals.length > 0) {
+    const severe = flaggedApprovals.some(
+      (approval) => approval.spenderRiskLevel === "critical" || isSevereFlag(approval.spenderFlags)
+    );
+    drafts.push({
+      code: EVM_WALLET_FINDING_CODES.FLAGGED_SPENDER,
+      category: "counterparty",
+      riskLevel: severe ? "critical" : "high",
+      title: "Flagged spender exposure",
+      summary: `${flaggedApprovals.length} approval${flaggedApprovals.length === 1 ? "" : "s"} target flagged spenders and should be reviewed first.`,
+      resourceIds: uniqueSorted2(flaggedApprovals.map((approval) => approval.approvalId)),
+      evidence: approvalEvidence(snapshot, flaggedApprovals, "Flagged spender exposure"),
+      metadata: {
+        approvalCount: String(flaggedApprovals.length),
+        code: EVM_WALLET_FINDING_CODES.FLAGGED_SPENDER,
+        highestSpenderRisk: maxRiskLevel2(
+          flaggedApprovals.map((approval) => approval.spenderRiskLevel).filter((level) => level !== null),
+          severe ? "critical" : "high"
+        )
+      }
+    });
+  }
+  if (riskyExposures.length > 0) {
+    const severe = riskyExposures.some(
+      (exposure) => exposure.riskLevel === "critical" || isSevereFlag(exposure.flags)
+    );
+    drafts.push({
+      code: EVM_WALLET_FINDING_CODES.RISKY_CONTRACT,
+      category: "counterparty",
+      riskLevel: severe ? "critical" : "high",
+      title: "Risky contract exposure",
+      summary: `${riskyExposures.length} risky contract exposure${riskyExposures.length === 1 ? "" : "s"} were supplied in the hydrated snapshot.`,
+      resourceIds: uniqueSorted2(riskyExposures.map((exposure) => exposure.resourceId)),
+      evidence: contractEvidence(snapshot, riskyExposures, "Risky contract exposure"),
+      metadata: {
+        code: EVM_WALLET_FINDING_CODES.RISKY_CONTRACT,
+        exposureCount: String(riskyExposures.length)
+      }
+    });
+  }
+  if (unlimitedApprovals.length > 0) {
+    const unknownCount = unlimitedApprovals.filter(
+      (approval) => approval.spenderDisposition === "unknown"
+    ).length;
+    const hasCriticalExposure = unlimitedApprovals.some(
+      (approval) => approval.spenderDisposition === "flagged" || approval.hasRiskyContractExposure
+    );
+    drafts.push({
+      code: EVM_WALLET_FINDING_CODES.UNLIMITED_APPROVAL,
+      category: "authorization",
+      riskLevel: hasCriticalExposure ? "critical" : unknownCount > 0 ? "high" : "medium",
+      title: "Unlimited approvals remain active",
+      summary: `${unlimitedApprovals.length} unlimited approval${unlimitedApprovals.length === 1 ? "" : "s"} remain active; ${unknownCount} target unknown spenders.`,
+      resourceIds: uniqueSorted2(unlimitedApprovals.map((approval) => approval.approvalId)),
+      evidence: approvalEvidence(snapshot, unlimitedApprovals, "Unlimited approval exposure"),
+      metadata: {
+        code: EVM_WALLET_FINDING_CODES.UNLIMITED_APPROVAL,
+        riskyApprovalCount: String(
+          unlimitedApprovals.filter((approval) => approval.hasRiskyContractExposure).length
+        ),
+        unknownSpenderCount: String(unknownCount),
+        unlimitedApprovalCount: String(unlimitedApprovals.length)
+      }
+    });
+  }
+  if (staleApprovals.length > 0) {
+    drafts.push({
+      code: EVM_WALLET_FINDING_CODES.STALE_APPROVAL,
+      category: "authorization",
+      riskLevel: staleApprovals.length >= 5 ? "high" : "medium",
+      title: "Stale approvals still exist",
+      summary: `${staleApprovals.length} approval${staleApprovals.length === 1 ? "" : "s"} are at least ${EVM_APPROVAL_STALE_DAYS} days old.`,
+      resourceIds: uniqueSorted2(staleApprovals.map((approval) => approval.approvalId)),
+      evidence: approvalEvidence(snapshot, staleApprovals, "Stale approval exposure"),
+      metadata: {
+        code: EVM_WALLET_FINDING_CODES.STALE_APPROVAL,
+        staleApprovalCount: String(staleApprovals.length)
+      }
+    });
+  }
+  if (signals.hasExcessiveApprovals) {
+    drafts.push({
+      code: EVM_WALLET_FINDING_CODES.EXCESSIVE_APPROVALS,
+      category: "authorization",
+      riskLevel: signals.approvalCount >= EVM_SEVERE_APPROVAL_THRESHOLD ? "high" : "medium",
+      title: "Approval count exceeds review threshold",
+      summary: `Wallet currently carries ${signals.approvalCount} active approvals, above the review threshold of ${EVM_EXCESSIVE_APPROVAL_THRESHOLD}.`,
+      resourceIds: uniqueSorted2(approvals.map((approval) => approval.approvalId)),
+      evidence: approvalEvidence(snapshot, approvals, "Excessive approval exposure"),
+      metadata: {
+        approvalCount: String(signals.approvalCount),
+        code: EVM_WALLET_FINDING_CODES.EXCESSIVE_APPROVALS
+      }
+    });
+  }
+  return drafts;
+}
+
+// src/wallet/evm/signals.ts
+function buildEvmWalletSignals(snapshot) {
+  const approvals = snapshot.approvals;
+  const unlimitedApprovals = approvals.filter((approval) => approval.isUnlimited);
+  const unknownUnlimitedApprovals = unlimitedApprovals.filter(
+    (approval) => approval.spenderDisposition === "unknown"
+  );
+  const flaggedSpenderApprovals = approvals.filter(
+    (approval) => approval.spenderDisposition === "flagged"
+  );
+  const staleApprovals = approvals.filter((approval) => approval.isStale);
+  const riskyContractExposures = snapshot.contractExposures.filter(
+    (exposure) => exposure.isRisky
+  );
+  return {
+    approvalCount: approvals.length,
+    erc20ApprovalCount: approvals.filter((approval) => approval.tokenStandard === "erc20").length,
+    erc721ApprovalCount: approvals.filter((approval) => approval.tokenStandard === "erc721").length,
+    erc1155ApprovalCount: approvals.filter((approval) => approval.tokenStandard === "erc1155").length,
+    unlimitedApprovalCount: unlimitedApprovals.length,
+    unlimitedApprovalIds: unlimitedApprovals.map((approval) => approval.approvalId),
+    unknownUnlimitedApprovalCount: unknownUnlimitedApprovals.length,
+    unknownUnlimitedApprovalIds: unknownUnlimitedApprovals.map(
+      (approval) => approval.approvalId
+    ),
+    flaggedSpenderCount: flaggedSpenderApprovals.length,
+    flaggedSpenderApprovalIds: flaggedSpenderApprovals.map(
+      (approval) => approval.approvalId
+    ),
+    staleApprovalCount: staleApprovals.length,
+    staleApprovalIds: staleApprovals.map((approval) => approval.approvalId),
+    riskyContractExposureCount: riskyContractExposures.length,
+    riskyContractExposureIds: riskyContractExposures.map(
+      (exposure) => exposure.resourceId
+    ),
+    hasExcessiveApprovals: approvals.length >= EVM_EXCESSIVE_APPROVAL_THRESHOLD
+  };
+}
+
+// src/wallet/evm/evaluate.ts
+function evaluateEvmWalletScan(input) {
+  const normalizedSnapshot = normalizeEvmWalletSnapshot(input);
+  const signals = buildEvmWalletSignals(normalizedSnapshot);
+  const findingDrafts = buildEvmWalletFindings(normalizedSnapshot, signals);
+  return assembleEvmWalletEvaluation({
+    request: input.request,
+    snapshot: input.snapshot,
+    normalizedSnapshot,
+    signals,
+    findingDrafts,
+    evaluatedAt: input.evaluatedAt,
+    reportVersion: input.reportVersion ?? "1"
+  });
+}
+
+// src/wallet/evm/cleanup-prepare.ts
+var ZERO_ADDRESS2 = "0x0000000000000000000000000000000000000000";
+var ZERO_VALUE = "0x0";
+var ADDRESS_PATTERN = /^0x[0-9a-f]{40}$/;
+function stripHexPrefix2(value) {
+  return value.startsWith("0x") ? value.slice(2) : value;
+}
+function encodeWord(hexValue) {
+  return hexValue.padStart(64, "0");
+}
+function encodeAddressWord(address) {
+  if (!ADDRESS_PATTERN.test(address)) {
+    return null;
+  }
+  return encodeWord(stripHexPrefix2(address));
+}
+function encodeUint256Word(value) {
+  try {
+    return encodeWord(BigInt(value).toString(16));
+  } catch {
+    return null;
+  }
+}
+function encodeBoolWord(value) {
+  return encodeWord(value ? "1" : "0");
+}
+function buildPreparedTransaction(action, walletAddress, networkId) {
+  let functionName = null;
+  let methodSelector = null;
+  let args = [];
+  let data = null;
+  let supportStatus = "supported";
+  let supportDetail = "Prepared from normalized approval data only. User signature, submission, and confirmation happen outside this layer.";
+  switch (action.revocationMethod) {
+    case "erc20_approve_zero": {
+      const spenderWord = encodeAddressWord(action.approval.spenderAddress);
+      const amountWord = encodeUint256Word("0");
+      functionName = "approve";
+      methodSelector = APPROVE_SELECTOR;
+      args = [
+        {
+          name: "spender",
+          type: "address",
+          value: action.approval.spenderAddress
+        },
+        {
+          name: "amount",
+          type: "uint256",
+          value: "0"
+        }
+      ];
+      if (spenderWord === null || amountWord === null) {
+        supportStatus = "not_supported";
+        supportDetail = "ERC-20 revoke payload is missing a valid spender address or allowance value.";
+        break;
+      }
+      data = `${methodSelector}${spenderWord}${amountWord}`;
+      break;
+    }
+    case "erc721_approve_zero": {
+      const zeroWord = encodeAddressWord(ZERO_ADDRESS2);
+      const tokenIdWord = action.approval.tokenId === null ? null : encodeUint256Word(action.approval.tokenId);
+      functionName = "approve";
+      methodSelector = APPROVE_SELECTOR;
+      args = [
+        {
+          name: "to",
+          type: "address",
+          value: ZERO_ADDRESS2
+        },
+        {
+          name: "tokenId",
+          type: "uint256",
+          value: action.approval.tokenId ?? ""
+        }
+      ];
+      if (zeroWord === null || tokenIdWord === null) {
+        supportStatus = "not_supported";
+        supportDetail = "ERC-721 token revoke payload requires a deterministic tokenId.";
+        break;
+      }
+      data = `${methodSelector}${zeroWord}${tokenIdWord}`;
+      break;
+    }
+    case "erc721_set_approval_for_all_false":
+    case "erc1155_set_approval_for_all_false": {
+      const operatorWord = encodeAddressWord(action.approval.spenderAddress);
+      functionName = "setApprovalForAll";
+      methodSelector = SET_APPROVAL_FOR_ALL_SELECTOR;
+      args = [
+        {
+          name: "operator",
+          type: "address",
+          value: action.approval.spenderAddress
+        },
+        {
+          name: "approved",
+          type: "bool",
+          value: "false"
+        }
+      ];
+      if (operatorWord === null) {
+        supportStatus = "not_supported";
+        supportDetail = "Operator revoke payload requires a valid normalized operator address.";
+        break;
+      }
+      data = `${methodSelector}${operatorWord}${encodeBoolWord(false)}`;
+      break;
+    }
+  }
+  const executable = supportStatus === "supported" && functionName !== null && methodSelector !== null && data !== null && ADDRESS_PATTERN.test(action.approval.tokenAddress);
+  return {
+    transactionId: buildStableId("wallet_cleanup_tx", {
+      actionId: action.actionId,
+      networkId,
+      walletAddress
+    }),
+    actionId: action.actionId,
+    walletChain: "evm",
+    networkId,
+    walletAddress,
+    to: executable ? action.approval.tokenAddress : null,
+    value: ZERO_VALUE,
+    data: executable ? data : null,
+    functionName: executable ? functionName : null,
+    methodSelector: executable ? methodSelector : null,
+    args,
+    approvalKind: action.approval.approvalKind,
+    revocationMethod: action.revocationMethod,
+    intendedState: action.approval.intendedState,
+    executable,
+    supportStatus: executable ? "supported" : "not_supported",
+    supportDetail: executable ? supportDetail : supportDetail ?? "Required transaction fields were incomplete."
+  };
+}
+function getSelectedActions(plan, actionIds) {
+  const requested = new Set(actionIds);
+  return plan.actions.filter((action) => requested.has(action.actionId));
+}
+function prepareEvmCleanupTransaction(action, walletAddress, networkId) {
+  return buildPreparedTransaction(action, walletAddress, networkId);
+}
+function prepareEvmCleanupExecutionRequest(plan, actionIds, createdAt) {
+  const actions = getSelectedActions(plan, actionIds);
+  const preparedTransactions = actions.map(
+    (action) => prepareEvmCleanupTransaction(action, plan.walletAddress, plan.networkId)
+  );
+  const allExecutable = preparedTransactions.length > 0 && preparedTransactions.every((transaction) => transaction.executable);
+  const selectionKind = preparedTransactions.length <= 1 ? "single_action" : "batch_actions";
+  const packaging = !allExecutable ? "not_supported" : preparedTransactions.length <= 1 ? "single_transaction" : "multiple_transactions";
+  return {
+    requestId: buildStableId("wallet_cleanup_request", {
+      actionIds: actions.map((action) => action.actionId),
+      createdAt,
+      planId: plan.planId
+    }),
+    planId: plan.planId,
+    walletChain: "evm",
+    walletAddress: plan.walletAddress,
+    networkId: plan.networkId,
+    createdAt,
+    selectionKind,
+    packaging,
+    actionIds: actions.map((action) => action.actionId),
+    preparedTransactions,
+    requiresSignature: true,
+    supportStatus: !allExecutable ? "not_supported" : preparedTransactions.length <= 1 ? "supported" : "partial",
+    supportDetail: !allExecutable ? "At least one selected revoke action could not be converted into a complete transaction payload." : preparedTransactions.length <= 1 ? "Prepared one revoke transaction for explicit wallet signature." : `Prepared ${preparedTransactions.length} ordered revoke transaction(s). Execution remains reviewable and may require multiple wallet signatures or confirmations.`
+  };
+}
+
+// src/wallet/evm/cleanup-execution.ts
+function normalizeNullableString(value) {
+  const normalized = value?.trim() ?? "";
+  return normalized.length > 0 ? normalized : null;
+}
+function interpretEvmCleanupExecutionResult(input) {
+  return {
+    actionId: input.actionId,
+    status: input.status,
+    txHash: normalizeNullableString(input.txHash)?.toLowerCase() ?? null,
+    errorCode: normalizeNullableString(input.errorCode),
+    errorMessage: normalizeNullableString(input.errorMessage),
+    requiresRescan: input.status === "confirmed",
+    finalizedAt: normalizeNullableString(input.finalizedAt)
+  };
+}
+function buildPendingResult(actionId) {
+  return {
+    actionId,
+    status: "pending_signature",
+    txHash: null,
+    errorCode: null,
+    errorMessage: null,
+    requiresRescan: false,
+    finalizedAt: null
+  };
+}
+function validateRescanSnapshotContext(plan, rescanSnapshot) {
+  if (rescanSnapshot === null) {
+    return {
+      acceptedSnapshot: null,
+      accepted: true,
+      mismatchReason: null
+    };
+  }
+  if (rescanSnapshot.walletChain !== plan.walletChain) {
+    return {
+      acceptedSnapshot: null,
+      accepted: false,
+      mismatchReason: "wallet_chain_mismatch"
+    };
+  }
+  if (rescanSnapshot.walletAddress !== plan.walletAddress) {
+    return {
+      acceptedSnapshot: null,
+      accepted: false,
+      mismatchReason: "wallet_address_mismatch"
+    };
+  }
+  if (rescanSnapshot.networkId !== plan.networkId) {
+    return {
+      acceptedSnapshot: null,
+      accepted: false,
+      mismatchReason: "network_id_mismatch"
+    };
+  }
+  return {
+    acceptedSnapshot: rescanSnapshot,
+    accepted: true,
+    mismatchReason: null
+  };
+}
+function buildReconciliationItem(action, result, rescanSnapshot) {
+  let rescanStatus = "not_requested";
+  if (result.status === "confirmed" && rescanSnapshot !== null) {
+    rescanStatus = rescanSnapshot.activeApprovalIds.includes(action.approval.approvalId) ? "still_active" : "cleared";
+  }
+  return {
+    actionId: action.actionId,
+    approvalId: action.approval.approvalId,
+    executionStatus: result.status,
+    rescanStatus,
+    findingIds: action.findingIds,
+    txHash: result.txHash,
+    requiresRescan: result.status === "confirmed" && rescanSnapshot === null
+  };
+}
+function reconcileEvmCleanupPlanResults(plan, results, rescanSnapshot) {
+  const resultMap = new Map(results.map((result) => [result.actionId, result]));
+  const validation = validateRescanSnapshotContext(plan, rescanSnapshot ?? null);
+  const normalizedRescanSnapshot = validation.acceptedSnapshot;
+  const items = plan.actions.map(
+    (action) => buildReconciliationItem(
+      action,
+      resultMap.get(action.actionId) ?? buildPendingResult(action.actionId),
+      normalizedRescanSnapshot
+    )
+  );
+  return {
+    planId: plan.planId,
+    walletChain: "evm",
+    walletAddress: plan.walletAddress,
+    networkId: plan.networkId,
+    requiresRescan: items.some((item) => item.requiresRescan),
+    rescanSnapshotAccepted: validation.accepted,
+    rescanMismatchReason: validation.mismatchReason,
+    confirmedActionIds: items.filter((item) => item.executionStatus === "confirmed").map((item) => item.actionId),
+    outstandingActionIds: items.filter(
+      (item) => item.executionStatus !== "confirmed" || item.rescanStatus !== "cleared"
+    ).map((item) => item.actionId),
+    items,
+    rescanSnapshot: normalizedRescanSnapshot
+  };
+}
 export {
   KNOWN_PROTOCOL_DOMAINS,
   PHISHING_CODES,
   RULE_SET_VERSION,
   SUSPICIOUS_TLDS,
   TRANSACTION_SELECTOR_REGISTRY,
+  buildEvmCleanupPlan,
   buildNavigationContext,
   buildTransactionExplanation,
   buildTransactionSignals,
+  buildWalletReportId,
   classifyPermitKind,
   classifyTransactionSelector,
   compileDomainIntelSnapshot,
@@ -5311,15 +7007,18 @@ export {
   deconfuseHostname,
   domainSimilarityScore,
   evaluate,
+  evaluateEvmWalletScan,
   evaluateTransaction,
   extractHostname,
   extractRegistrableDomain,
   extractTld,
+  getEvmCleanupEligibility,
   getReasonMessage,
   getTransactionSelectorDefinition,
   getVerdictTitle,
   hasHomoglyphs,
   hasSuspiciousTld,
+  interpretEvmCleanupExecutionResult,
   isIpHost,
   isKnownMaliciousDomain,
   isNewDomain,
@@ -5331,6 +7030,9 @@ export {
   normalizeTypedData,
   normalizeTypedDataRequest,
   normalizeUrl,
+  prepareEvmCleanupExecutionRequest,
+  prepareEvmCleanupTransaction,
+  reconcileEvmCleanupPlanResults,
   resolveDomainIntel,
   riskBadgeLabel,
   validateDomainIntelBundle
