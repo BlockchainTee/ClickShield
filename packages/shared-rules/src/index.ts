@@ -150,6 +150,7 @@ export type {
 // ── Layer 4 Wallet Framework (Phase 4A) ──
 export { buildWalletReportId } from "./wallet/report-id.js";
 export { evaluateEvmWalletScan } from "./wallet/evm/evaluate.js";
+export { evaluateSolanaWalletScan } from "./wallet/solana/evaluate.js";
 export { getEvmCleanupEligibility } from "./wallet/evm/cleanup-eligibility.js";
 export { buildEvmCleanupPlan } from "./wallet/evm/cleanup.js";
 export {
@@ -178,6 +179,23 @@ export type {
   NormalizedEvmSpenderRisk,
   NormalizedEvmWalletSnapshot,
 } from "./wallet/evm/types.js";
+export type {
+  NormalizedSolanaAuthorityAssignment,
+  NormalizedSolanaConnectionRecord,
+  NormalizedSolanaProgramExposure,
+  NormalizedSolanaTokenAccountState,
+  NormalizedSolanaWalletSnapshot,
+  SolanaAuthorityAssignmentInput,
+  SolanaAuthorityType,
+  SolanaConnectionRecordInput,
+  SolanaPermissionLevel,
+  SolanaProgramExposureInput,
+  SolanaTokenAccountInput,
+  SolanaWalletHydratedSnapshot,
+  SolanaWalletScanEvaluation,
+  SolanaWalletScanEvaluationInput,
+  SolanaWalletSignals,
+} from "./wallet/solana/types.js";
 export type {
   EvmCleanupAction,
   EvmCleanupActionExecutionResult,
