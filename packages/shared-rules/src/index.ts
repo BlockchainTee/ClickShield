@@ -151,6 +151,7 @@ export type {
 export { buildWalletReportId } from "./wallet/report-id.js";
 export { evaluateEvmWalletScan } from "./wallet/evm/evaluate.js";
 export { evaluateSolanaWalletScan } from "./wallet/solana/evaluate.js";
+export { evaluateBitcoinWalletScan } from "./wallet/bitcoin/evaluate.js";
 export { getEvmCleanupEligibility } from "./wallet/evm/cleanup-eligibility.js";
 export { buildEvmCleanupPlan } from "./wallet/evm/cleanup.js";
 export {
@@ -162,6 +163,24 @@ export {
   reconcileEvmCleanupPlanResults,
 } from "./wallet/evm/cleanup-execution.js";
 export type { WalletReportIdInput } from "./wallet/report-id.js";
+export type {
+  BitcoinAddressRole,
+  BitcoinAddressSummaryInput,
+  BitcoinAddressType,
+  BitcoinConcentrationLevel,
+  BitcoinFragmentationLevel,
+  BitcoinHygieneIssueType,
+  BitcoinHygieneRecordInput,
+  BitcoinUtxoSummaryInput,
+  BitcoinWalletHydratedSnapshot,
+  BitcoinWalletScanEvaluation,
+  BitcoinWalletScanEvaluationInput,
+  BitcoinWalletSignals,
+  NormalizedBitcoinAddressSummary,
+  NormalizedBitcoinHygieneRecord,
+  NormalizedBitcoinUtxoSummary,
+  NormalizedBitcoinWalletSnapshot,
+} from "./wallet/bitcoin/types.js";
 export type {
   EvmApprovalAmountKind,
   EvmApprovalKind,
