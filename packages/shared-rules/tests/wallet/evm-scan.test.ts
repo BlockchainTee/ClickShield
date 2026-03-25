@@ -90,12 +90,20 @@ function createInput(overrides?: {
   readonly spenders?: readonly EvmSpenderRiskInput[];
   readonly contractExposures?: readonly EvmContractExposureInput[];
   readonly scanMode?: WalletScanRequest["scanMode"];
+  readonly requestWalletAddress?: WalletScanRequest["walletAddress"];
+  readonly snapshotWalletAddress?: WalletScanSnapshot["walletAddress"];
 }): EvmWalletScanEvaluationInput {
-  const request = createRequest(overrides?.scanMode);
+  const request = {
+    ...createRequest(overrides?.scanMode),
+    walletAddress: overrides?.requestWalletAddress ?? WALLET_ADDRESS,
+  };
 
   return {
     request,
-    snapshot: createSnapshot(request),
+    snapshot: {
+      ...createSnapshot(request),
+      walletAddress: overrides?.snapshotWalletAddress ?? request.walletAddress,
+    },
     hydratedSnapshot: {
       approvals: overrides?.approvals ?? [],
       spenders: overrides?.spenders ?? [],
@@ -115,6 +123,30 @@ function listFindingCodes(
 }
 
 describe("Layer 4 Phase 4B EVM scan foundation", () => {
+  it("rejects malformed request wallet addresses at normalize time", () => {
+    expect(() =>
+      evaluateEvmWalletScan(
+        createInput({
+          requestWalletAddress: "0x1234",
+        })
+      )
+    ).toThrowError(
+      "EVM wallet evaluation requires request.walletAddress to be a valid EVM address."
+    );
+  });
+
+  it("rejects malformed snapshot wallet addresses at normalize time", () => {
+    expect(() =>
+      evaluateEvmWalletScan(
+        createInput({
+          snapshotWalletAddress: "not-an-evm-address",
+        })
+      )
+    ).toThrowError(
+      "EVM wallet evaluation requires snapshot.walletAddress to be a valid EVM address."
+    );
+  });
+
   it("preserves both supported EVM scan modes in the final report", () => {
     const fullEvaluation = evaluateEvmWalletScan(createInput({ scanMode: "full" }));
     const basicEvaluation = evaluateEvmWalletScan(createInput({ scanMode: "basic" }));

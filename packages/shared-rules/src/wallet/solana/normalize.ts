@@ -1,4 +1,4 @@
-import { normalizeSolAddress } from "../../normalize/address.js";
+import { isValidSolAddress, normalizeSolAddress } from "../../normalize/address.js";
 import {
   SOLANA_BROAD_PERMISSION_SCOPES,
   SOLANA_CONNECTION_STALE_DAYS,
@@ -278,19 +278,89 @@ function normalizeProgramExposure(
   };
 }
 
-/**
- * Normalizes a fully hydrated Solana wallet snapshot into stable evaluation state.
- */
-export function normalizeSolanaWalletSnapshot(
+function assertNonEmptyString(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+
+  return trimmed;
+}
+
+function assertSolanaRequestSnapshotParity(
   input: SolanaWalletScanEvaluationInput
-): NormalizedSolanaWalletSnapshot {
+): { readonly walletAddress: string; readonly networkId: string } {
   if (input.request.walletChain !== "solana" || input.snapshot.walletChain !== "solana") {
     throw new Error(
       "Phase 4D Solana evaluation requires solana request and snapshot contracts."
     );
   }
 
-  const walletAddress = normalizeSolAddress(input.request.walletAddress);
+  const requestId = assertNonEmptyString(
+    input.request.requestId,
+    "Solana request.requestId"
+  );
+  const snapshotRequestId = assertNonEmptyString(
+    input.snapshot.requestId,
+    "Solana snapshot.requestId"
+  );
+  if (requestId !== snapshotRequestId) {
+    throw new Error(
+      "Solana wallet evaluation requires request and snapshot requestId values to match."
+    );
+  }
+
+  const requestNetworkId = assertNonEmptyString(
+    input.request.networkId,
+    "Solana request.networkId"
+  );
+  const snapshotNetworkId = assertNonEmptyString(
+    input.snapshot.networkId,
+    "Solana snapshot.networkId"
+  );
+  if (requestNetworkId !== snapshotNetworkId) {
+    throw new Error(
+      "Solana wallet evaluation requires request and snapshot networkId values to match."
+    );
+  }
+
+  const requestWallet = normalizeSolAddress(
+    assertNonEmptyString(input.request.walletAddress, "Solana request.walletAddress")
+  );
+  if (!isValidSolAddress(requestWallet)) {
+    throw new Error(
+      "Solana wallet evaluation requires request.walletAddress to be a valid Solana address."
+    );
+  }
+
+  const snapshotWallet = normalizeSolAddress(
+    assertNonEmptyString(input.snapshot.walletAddress, "Solana snapshot.walletAddress")
+  );
+  if (!isValidSolAddress(snapshotWallet)) {
+    throw new Error(
+      "Solana wallet evaluation requires snapshot.walletAddress to be a valid Solana address."
+    );
+  }
+
+  if (requestWallet !== snapshotWallet) {
+    throw new Error(
+      "Solana wallet evaluation requires request and snapshot walletAddress values to match."
+    );
+  }
+
+  return {
+    walletAddress: requestWallet,
+    networkId: requestNetworkId,
+  };
+}
+
+/**
+ * Normalizes a fully hydrated Solana wallet snapshot into stable evaluation state.
+ */
+export function normalizeSolanaWalletSnapshot(
+  input: SolanaWalletScanEvaluationInput
+): NormalizedSolanaWalletSnapshot {
+  const { walletAddress, networkId } = assertSolanaRequestSnapshotParity(input);
   const tokenSectionIds = findSectionIds(input, ["token", "account"]);
   const authoritySectionIds = findSectionIds(input, ["authorit"]);
   const connectionSectionIds = findSectionIds(input, ["connection", "permission", "app"]);
@@ -336,7 +406,7 @@ export function normalizeSolanaWalletSnapshot(
 
   return {
     walletAddress,
-    networkId: input.request.networkId,
+    networkId,
     capturedAt: input.snapshot.capturedAt,
     tokenAccounts,
     authorityAssignments,

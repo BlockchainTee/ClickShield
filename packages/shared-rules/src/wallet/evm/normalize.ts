@@ -1,4 +1,4 @@
-import { normalizeEvmAddress } from "../../normalize/address.js";
+import { isValidEvmAddress, normalizeEvmAddress } from "../../normalize/address.js";
 import {
   EVM_APPROVAL_STALE_DAYS,
 } from "./constants.js";
@@ -278,6 +278,18 @@ export function normalizeEvmWalletSnapshot(
 ): NormalizedEvmWalletSnapshot {
   if (input.request.walletChain !== "evm" || input.snapshot.walletChain !== "evm") {
     throw new Error("Phase 4B EVM evaluation requires evm request and snapshot contracts.");
+  }
+
+  if (!isValidEvmAddress(input.request.walletAddress)) {
+    throw new Error(
+      "EVM wallet evaluation requires request.walletAddress to be a valid EVM address."
+    );
+  }
+
+  if (!isValidEvmAddress(input.snapshot.walletAddress)) {
+    throw new Error(
+      "EVM wallet evaluation requires snapshot.walletAddress to be a valid EVM address."
+    );
   }
 
   const requestWallet = normalizeEvmAddress(input.request.walletAddress);

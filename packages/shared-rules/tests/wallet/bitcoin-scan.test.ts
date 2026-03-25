@@ -86,10 +86,19 @@ function createInput(overrides?: {
   readonly snapshotWalletChain?: WalletScanSnapshot["walletChain"];
   readonly sections?: readonly WalletSnapshotSection[];
   readonly scanMode?: WalletScanRequest["scanMode"];
+  readonly requestId?: WalletScanRequest["requestId"];
+  readonly snapshotRequestId?: WalletScanSnapshot["requestId"];
+  readonly requestWalletAddress?: WalletScanRequest["walletAddress"];
+  readonly snapshotWalletAddress?: WalletScanSnapshot["walletAddress"];
+  readonly requestNetworkId?: WalletScanRequest["networkId"];
+  readonly snapshotNetworkId?: WalletScanSnapshot["networkId"];
 }): BitcoinWalletScanEvaluationInput {
   const request = {
     ...createRequest(),
     walletChain: overrides?.requestWalletChain ?? "bitcoin",
+    requestId: overrides?.requestId ?? "request_btc_phase4e",
+    walletAddress: overrides?.requestWalletAddress ?? WALLET_ADDRESS,
+    networkId: overrides?.requestNetworkId ?? "bitcoin-mainnet",
     scanMode: overrides?.scanMode ?? "basic",
   };
 
@@ -98,6 +107,9 @@ function createInput(overrides?: {
     snapshot: {
       ...createSnapshot(request),
       walletChain: overrides?.snapshotWalletChain ?? "bitcoin",
+      requestId: overrides?.snapshotRequestId ?? request.requestId,
+      walletAddress: overrides?.snapshotWalletAddress ?? request.walletAddress,
+      networkId: overrides?.snapshotNetworkId ?? request.networkId,
       sections: overrides?.sections ?? createSections(),
     },
     hydratedSnapshot: {
@@ -119,6 +131,80 @@ function listFindingCodes(
 }
 
 describe("Layer 4 Phase 4E Bitcoin scan foundation", () => {
+  it("rejects malformed Bitcoin request wallet addresses fail-safe", () => {
+    expect(() =>
+      evaluateBitcoinWalletScan(
+        createInput({
+          requestWalletAddress: "not-a-bitcoin-address",
+        })
+      )
+    ).toThrowError(
+      "Bitcoin wallet evaluation requires request.walletAddress to be a valid Bitcoin address."
+    );
+  });
+
+  it("rejects request and snapshot requestId mismatches before cleanup planning", () => {
+    expect(() =>
+      evaluateBitcoinWalletScan(
+        createInput({
+          snapshotRequestId: "snapshot_btc_other_request",
+          hygieneRecords: [
+            {
+              issueType: "poor_hygiene",
+              riskLevel: "high",
+              note: "Shared support address remains active.",
+            },
+          ],
+        })
+      )
+    ).toThrowError(
+      "Bitcoin wallet evaluation requires request and snapshot requestId values to match."
+    );
+  });
+
+  it("rejects request and snapshot wallet mismatches before cleanup planning", () => {
+    expect(() =>
+      evaluateBitcoinWalletScan(
+        createInput({
+          snapshotWalletAddress: buildBitcoinAddress(99),
+          addresses: [
+            {
+              address: buildBitcoinAddress(98),
+              addressType: "segwit",
+              role: "receive",
+              receiveCount: 4,
+              reuseCount: 3,
+              exposedPublicly: true,
+              balanceSats: "250000",
+            },
+          ],
+          utxos: [
+            {
+              txid: "9".repeat(64),
+              vout: 0,
+              address: buildBitcoinAddress(98),
+              valueSats: "250000",
+            },
+          ],
+        })
+      )
+    ).toThrowError(
+      "Bitcoin wallet evaluation requires request and snapshot walletAddress values to match."
+    );
+  });
+
+  it("rejects request and snapshot network mismatches fail-safe", () => {
+    expect(() =>
+      evaluateBitcoinWalletScan(
+        createInput({
+          snapshotNetworkId: "bitcoin-testnet",
+        })
+      )
+    ).toThrowError(
+      "Bitcoin wallet evaluation requires request and snapshot networkId values to match."
+    );
+  });
+
   it("coerces unsupported full scan requests to truthful basic scope", () => {
     const coerced = evaluateBitcoinWalletScan(createInput({ scanMode: "full" }));
     const basic = evaluateBitcoinWalletScan(createInput({ scanMode: "basic" }));

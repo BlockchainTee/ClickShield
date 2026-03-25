@@ -13,6 +13,7 @@ import type {
   NormalizedBitcoinWalletSnapshot,
 } from "./types.js";
 import {
+  isValidBitcoinAddress,
   normalizeBitcoinAddress,
   normalizeMetadata,
 } from "./utils.js";
@@ -210,20 +211,102 @@ function normalizeHygieneRecord(
   };
 }
 
+function assertNonEmptyString(value: string, label: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+
+  return trimmed;
+}
+
+function assertBitcoinRequestSnapshotParity(
+  input: BitcoinWalletScanEvaluationInput
+): { readonly walletAddress: string; readonly networkId: string } {
+  if (input.request.walletChain !== "bitcoin") {
+    throw new Error(
+      `Bitcoin wallet evaluation requires request.walletChain to be "bitcoin"; received "${input.request.walletChain}".`
+    );
+  }
+
+  if (input.snapshot.walletChain !== "bitcoin") {
+    throw new Error(
+      `Bitcoin wallet evaluation requires snapshot.walletChain to be "bitcoin"; received "${input.snapshot.walletChain}".`
+    );
+  }
+
+  const requestId = assertNonEmptyString(
+    input.request.requestId,
+    "Bitcoin request.requestId"
+  );
+  const snapshotRequestId = assertNonEmptyString(
+    input.snapshot.requestId,
+    "Bitcoin snapshot.requestId"
+  );
+  if (requestId !== snapshotRequestId) {
+    throw new Error(
+      "Bitcoin wallet evaluation requires request and snapshot requestId values to match."
+    );
+  }
+
+  const requestNetworkId = assertNonEmptyString(
+    input.request.networkId,
+    "Bitcoin request.networkId"
+  );
+  const snapshotNetworkId = assertNonEmptyString(
+    input.snapshot.networkId,
+    "Bitcoin snapshot.networkId"
+  );
+  if (requestNetworkId !== snapshotNetworkId) {
+    throw new Error(
+      "Bitcoin wallet evaluation requires request and snapshot networkId values to match."
+    );
+  }
+
+  const requestWallet = normalizeBitcoinAddress(
+    assertNonEmptyString(input.request.walletAddress, "Bitcoin request.walletAddress")
+  );
+  if (!isValidBitcoinAddress(requestWallet)) {
+    throw new Error(
+      "Bitcoin wallet evaluation requires request.walletAddress to be a valid Bitcoin address."
+    );
+  }
+
+  const snapshotWallet = normalizeBitcoinAddress(
+    assertNonEmptyString(input.snapshot.walletAddress, "Bitcoin snapshot.walletAddress")
+  );
+  if (!isValidBitcoinAddress(snapshotWallet)) {
+    throw new Error(
+      "Bitcoin wallet evaluation requires snapshot.walletAddress to be a valid Bitcoin address."
+    );
+  }
+
+  if (requestWallet !== snapshotWallet) {
+    throw new Error(
+      "Bitcoin wallet evaluation requires request and snapshot walletAddress values to match."
+    );
+  }
+
+  return {
+    walletAddress: requestWallet,
+    networkId: requestNetworkId,
+  };
+}
+
 /**
  * Normalizes a hydrated Bitcoin wallet snapshot into a deterministic Phase 4E state model.
  */
 export function normalizeBitcoinWalletSnapshot(
   input: BitcoinWalletScanEvaluationInput
 ): NormalizedBitcoinWalletSnapshot {
-  const walletAddress = normalizeBitcoinAddress(input.request.walletAddress);
+  const { walletAddress, networkId } = assertBitcoinRequestSnapshotParity(input);
   const addressSectionIds = findSectionIds(input, ["address"]);
   const utxoSectionIds = findSectionIds(input, ["utxo"]);
   const hygieneSectionIds = findSectionIds(input, ["hygiene", "privacy"]);
 
   return {
     walletAddress,
-    networkId: input.request.networkId,
+    networkId,
     capturedAt: input.snapshot.capturedAt,
     addresses: [...input.hydratedSnapshot.addresses]
       .map((address) =>

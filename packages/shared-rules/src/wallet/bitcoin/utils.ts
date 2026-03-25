@@ -40,6 +40,18 @@ export function normalizeBitcoinAddress(address: string): string {
 }
 
 /**
+ * Validate a Bitcoin address format conservatively without requiring checksum IO.
+ */
+export function isValidBitcoinAddress(address: string): boolean {
+  const trimmed = address.trim();
+
+  return (
+    /^(bc1|tb1|bcrt1)[a-z0-9]{11,87}$/i.test(trimmed) ||
+    /^[13mn2][1-9A-HJ-NP-Za-km-z]{25,62}$/.test(trimmed)
+  );
+}
+
+/**
  * Compares two risk levels using the shared severity ladder.
  */
 export function compareRiskLevel(left: RiskLevel, right: RiskLevel): number {

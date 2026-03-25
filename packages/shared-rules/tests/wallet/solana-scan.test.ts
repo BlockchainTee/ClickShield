@@ -94,12 +94,32 @@ function createInput(overrides?: {
   readonly connections?: readonly SolanaConnectionRecordInput[];
   readonly programExposures?: readonly SolanaProgramExposureInput[];
   readonly scanMode?: WalletScanRequest["scanMode"];
+  readonly requestWalletChain?: WalletScanRequest["walletChain"];
+  readonly snapshotWalletChain?: WalletScanSnapshot["walletChain"];
+  readonly requestId?: WalletScanRequest["requestId"];
+  readonly snapshotRequestId?: WalletScanSnapshot["requestId"];
+  readonly requestWalletAddress?: WalletScanRequest["walletAddress"];
+  readonly snapshotWalletAddress?: WalletScanSnapshot["walletAddress"];
+  readonly requestNetworkId?: WalletScanRequest["networkId"];
+  readonly snapshotNetworkId?: WalletScanSnapshot["networkId"];
 }): SolanaWalletScanEvaluationInput {
-  const request = createRequest(overrides?.scanMode);
+  const request = {
+    ...createRequest(overrides?.scanMode),
+    walletChain: overrides?.requestWalletChain ?? "solana",
+    requestId: overrides?.requestId ?? "request_sol_phase4d",
+    walletAddress: overrides?.requestWalletAddress ?? WALLET_ADDRESS,
+    networkId: overrides?.requestNetworkId ?? "mainnet-beta",
+  };
 
   return {
     request,
-    snapshot: createSnapshot(request),
+    snapshot: {
+      ...createSnapshot(request),
+      walletChain: overrides?.snapshotWalletChain ?? "solana",
+      requestId: overrides?.snapshotRequestId ?? request.requestId,
+      walletAddress: overrides?.snapshotWalletAddress ?? request.walletAddress,
+      networkId: overrides?.snapshotNetworkId ?? request.networkId,
+    },
     hydratedSnapshot: {
       tokenAccounts: overrides?.tokenAccounts ?? [],
       authorityAssignments: overrides?.authorityAssignments ?? [],
@@ -120,6 +140,95 @@ function listFindingCodes(
 }
 
 describe("Layer 4 Phase 4D Solana scan foundation", () => {
+  it("rejects non-Solana request chain input before report assembly", () => {
+    expect(() =>
+      evaluateSolanaWalletScan(
+        createInput({
+          requestWalletChain: "bitcoin",
+        })
+      )
+    ).toThrowError(
+      "Phase 4D Solana evaluation requires solana request and snapshot contracts."
+    );
+  });
+
+  it("rejects non-Solana snapshot chain input before report assembly", () => {
+    expect(() =>
+      evaluateSolanaWalletScan(
+        createInput({
+          snapshotWalletChain: "bitcoin",
+        })
+      )
+    ).toThrowError(
+      "Phase 4D Solana evaluation requires solana request and snapshot contracts."
+    );
+  });
+
+  it("rejects malformed Solana request wallet addresses fail-safe", () => {
+    expect(() =>
+      evaluateSolanaWalletScan(
+        createInput({
+          requestWalletAddress: "not-a-solana-address",
+        })
+      )
+    ).toThrowError(
+      "Solana wallet evaluation requires request.walletAddress to be a valid Solana address."
+    );
+  });
+
+  it("rejects request and snapshot identity mismatches before cleanup planning", () => {
+    expect(() =>
+      evaluateSolanaWalletScan(
+        createInput({
+          snapshotRequestId: "snapshot_sol_other_request",
+          tokenAccounts: [
+            {
+              tokenAccountAddress: buildSolAddress(31),
+              mintAddress: buildSolAddress(32),
+              ownerAddress: WALLET_ADDRESS,
+              delegateAddress: buildSolAddress(33),
+              delegateRiskLevel: "high",
+            },
+          ],
+        })
+      )
+    ).toThrowError(
+      "Solana wallet evaluation requires request and snapshot requestId values to match."
+    );
+  });
+
+  it("rejects request and snapshot wallet mismatches before cleanup planning", () => {
+    expect(() =>
+      evaluateSolanaWalletScan(
+        createInput({
+          snapshotWalletAddress: "9xQeWvG816bUx9EPfEZ5n6A8DqV1zp1KimG1HjMATkUM",
+          connections: [
+            {
+              appName: "Risky app",
+              origin: "https://risky.example",
+              permissions: ["sign_transaction"],
+              riskLevel: "high",
+            },
+          ],
+        })
+      )
+    ).toThrowError(
+      "Solana wallet evaluation requires request and snapshot walletAddress values to match."
+    );
+  });
+
+  it("rejects request and snapshot network mismatches fail-safe", () => {
+    expect(() =>
+      evaluateSolanaWalletScan(
+        createInput({
+          snapshotNetworkId: "devnet",
+        })
+      )
+    ).toThrowError(
+      "Solana wallet evaluation requires request and snapshot networkId values to match."
+    );
+  });
+
   it("coerces unsupported full scan requests to truthful basic scope", () => {
     const coerced = evaluateSolanaWalletScan(createInput({ scanMode: "full" }));
     const basic = evaluateSolanaWalletScan(createInput({ scanMode: "basic" }));
