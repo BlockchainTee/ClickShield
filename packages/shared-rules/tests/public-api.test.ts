@@ -15,6 +15,8 @@ import {
   getReasonMessage,
   normalizeTransactionRequest,
   normalizeTypedDataRequest,
+  resolveCanonicalTransactionIntel,
+  validateTransactionLayer2Snapshot,
 } from "../src/index.js";
 import * as SharedRules from "../src/index.js";
 
@@ -55,6 +57,8 @@ describe("root public API", () => {
     expect(typeof classifyTransactionSelector).toBe("function");
     expect(typeof normalizeTransactionRequest).toBe("function");
     expect(typeof normalizeTypedDataRequest).toBe("function");
+    expect(typeof validateTransactionLayer2Snapshot).toBe("function");
+    expect(typeof resolveCanonicalTransactionIntel).toBe("function");
     expect(typeof buildTransactionExplanation).toBe("function");
     expect(typeof buildTransactionSignals).toBe("function");
     expect(typeof evaluateTransaction).toBe("function");

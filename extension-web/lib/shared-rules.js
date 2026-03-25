@@ -3830,6 +3830,554 @@ function sha256Hex(input) {
   return [h0, h1, h2, h3, h4, h5, h6, h7].map((value) => value.toString(16).padStart(8, "0")).join("");
 }
 
+// src/transaction/intel-snapshot.ts
+var ROOT_KEYS = [
+  "version",
+  "generatedAt",
+  "maliciousContracts",
+  "scamSignatures",
+  "sectionStates"
+];
+var MALICIOUS_CONTRACT_KEYS = [
+  "chain",
+  "address",
+  "source",
+  "disposition",
+  "confidence",
+  "reasonCodes"
+];
+var SECTION_STATE_KEYS = ["maliciousContracts", "scamSignatures"];
+var ZERO_EVM_ADDRESS = "0x0000000000000000000000000000000000000000";
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function deepFreeze(value) {
+  if (Array.isArray(value)) {
+    value.forEach((entry) => {
+      deepFreeze(entry);
+    });
+    return Object.freeze(value);
+  }
+  if (isRecord2(value)) {
+    Object.values(value).forEach((entry) => {
+      deepFreeze(entry);
+    });
+    return Object.freeze(value);
+  }
+  return value;
+}
+function isValidUtcTimestamp(value) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value)) {
+    return false;
+  }
+  return !Number.isNaN(Date.parse(value));
+}
+function pushIssue(issues, failureKinds, path, message, kind = "malformed") {
+  issues.push({ path, message });
+  failureKinds.push(kind);
+}
+function assertExactKeys(value, allowedKeys, path, issues, failureKinds) {
+  const allowed = new Set(allowedKeys);
+  Object.keys(value).forEach((key) => {
+    if (!allowed.has(key)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        path === "" ? key : `${path}.${key}`,
+        "Unknown field"
+      );
+    }
+  });
+}
+function readRequiredString(value, key, path, issues, failureKinds) {
+  const candidate = value[key];
+  if (typeof candidate !== "string" || candidate.trim() === "") {
+    pushIssue(
+      issues,
+      failureKinds,
+      path === "" ? key : `${path}.${key}`,
+      "Expected a non-empty string"
+    );
+    return null;
+  }
+  return candidate;
+}
+function readRequiredNumber(value, key, path, issues, failureKinds) {
+  const candidate = value[key];
+  if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
+    pushIssue(
+      issues,
+      failureKinds,
+      path === "" ? key : `${path}.${key}`,
+      "Expected a finite number"
+    );
+    return null;
+  }
+  return candidate;
+}
+function buildSnapshotVersion(snapshotBody) {
+  const digest = sha256Hex(
+    serializeCanonicalJson({
+      maliciousContracts: snapshotBody.maliciousContracts.map((entry) => ({
+        chain: entry.chain,
+        address: entry.address,
+        source: entry.source,
+        disposition: entry.disposition,
+        confidence: entry.confidence,
+        reasonCodes: entry.reasonCodes
+      })),
+      scamSignatures: snapshotBody.scamSignatures,
+      sectionStates: snapshotBody.sectionStates
+    })
+  ).slice(0, 16);
+  return `layer2.${digest}`;
+}
+function parseSectionStates(value, issues, failureKinds) {
+  if (!isRecord2(value)) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "sectionStates",
+      "Expected sectionStates object"
+    );
+    return null;
+  }
+  assertExactKeys(value, SECTION_STATE_KEYS, "sectionStates", issues, failureKinds);
+  const maliciousContracts = readRequiredString(
+    value,
+    "maliciousContracts",
+    "sectionStates",
+    issues,
+    failureKinds
+  );
+  const scamSignatures = readRequiredString(
+    value,
+    "scamSignatures",
+    "sectionStates",
+    issues,
+    failureKinds
+  );
+  if (maliciousContracts === null || scamSignatures === null) {
+    return null;
+  }
+  if (maliciousContracts !== "ready" && maliciousContracts !== "stale" && maliciousContracts !== "missing") {
+    pushIssue(
+      issues,
+      failureKinds,
+      "sectionStates.maliciousContracts",
+      "Unsupported maliciousContracts state",
+      "incompatible"
+    );
+  }
+  if (scamSignatures !== "missing") {
+    pushIssue(
+      issues,
+      failureKinds,
+      "sectionStates.scamSignatures",
+      "Unsupported scamSignatures state for this snapshot schema",
+      "incompatible"
+    );
+  }
+  return {
+    maliciousContracts: maliciousContracts === "ready" || maliciousContracts === "stale" || maliciousContracts === "missing" ? maliciousContracts : "missing",
+    scamSignatures: "missing"
+  };
+}
+function parseMaliciousContracts(value, issues, failureKinds) {
+  if (!Array.isArray(value)) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "maliciousContracts",
+      "Expected maliciousContracts array"
+    );
+    return null;
+  }
+  const parsed = [];
+  const seenKeys = /* @__PURE__ */ new Set();
+  let previousAddress = "";
+  value.forEach((rawEntry, index) => {
+    const entryPath = `maliciousContracts[${index}]`;
+    if (!isRecord2(rawEntry)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        entryPath,
+        "Expected malicious contract entry object"
+      );
+      return;
+    }
+    assertExactKeys(
+      rawEntry,
+      MALICIOUS_CONTRACT_KEYS,
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const chain = readRequiredString(
+      rawEntry,
+      "chain",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const address = readRequiredString(
+      rawEntry,
+      "address",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const source = readRequiredString(
+      rawEntry,
+      "source",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const disposition = readRequiredString(
+      rawEntry,
+      "disposition",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const confidence = readRequiredNumber(
+      rawEntry,
+      "confidence",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const reasonCodesRaw = rawEntry.reasonCodes;
+    if (chain === null || address === null || source === null || disposition === null || confidence === null) {
+      return;
+    }
+    if (chain !== "evm") {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.chain`,
+        "Unsupported chain in transaction snapshot",
+        "incompatible"
+      );
+    }
+    if (!isValidEvmAddress(address)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.address`,
+        "Expected a canonical EVM address",
+        "incompatible"
+      );
+    }
+    if (address !== normalizeEvmAddress(address)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.address`,
+        "Expected a lowercase canonical EVM address",
+        "incompatible"
+      );
+    }
+    if (address === ZERO_EVM_ADDRESS) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.address`,
+        "Zero address is not allowed in transaction snapshot",
+        "incompatible"
+      );
+    }
+    if (source !== "ofac" && source !== "chainabuse") {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.source`,
+        "Unsupported malicious contract source",
+        "incompatible"
+      );
+    }
+    if (disposition !== "block" && disposition !== "warn") {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.disposition`,
+        "Unsupported malicious contract disposition",
+        "incompatible"
+      );
+    }
+    if (confidence < 0 || confidence > 1) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.confidence`,
+        "Expected confidence to be between 0 and 1"
+      );
+    }
+    if (!Array.isArray(reasonCodesRaw)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.reasonCodes`,
+        "Expected reasonCodes array"
+      );
+      return;
+    }
+    const reasonCodes = reasonCodesRaw.map((reasonCode, reasonIndex) => {
+      if (typeof reasonCode !== "string" || reasonCode.trim() === "") {
+        pushIssue(
+          issues,
+          failureKinds,
+          `${entryPath}.reasonCodes[${reasonIndex}]`,
+          "Expected a non-empty reason code string"
+        );
+        return "";
+      }
+      return reasonCode;
+    });
+    if (reasonCodes.length === 0) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.reasonCodes`,
+        "Expected at least one reason code"
+      );
+    }
+    const dedupeKey = `${chain}:${address}`;
+    if (seenKeys.has(dedupeKey)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        entryPath,
+        "Duplicate malicious contract entry",
+        "incompatible"
+      );
+    } else {
+      seenKeys.add(dedupeKey);
+    }
+    if (address < previousAddress) {
+      pushIssue(
+        issues,
+        failureKinds,
+        entryPath,
+        "maliciousContracts entries must be sorted by address",
+        "incompatible"
+      );
+    }
+    previousAddress = address;
+    parsed.push({
+      chain: "evm",
+      address,
+      source: source === "ofac" ? "ofac" : "chainabuse",
+      disposition: disposition === "block" ? "block" : "warn",
+      confidence,
+      reasonCodes
+    });
+  });
+  return parsed;
+}
+function parseScamSignatures(value, issues, failureKinds) {
+  if (!Array.isArray(value)) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "scamSignatures",
+      "Expected scamSignatures array"
+    );
+    return null;
+  }
+  if (value.length > 0) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "scamSignatures",
+      "Unsupported non-empty scamSignatures section for this snapshot schema",
+      "incompatible"
+    );
+  }
+  return [];
+}
+function toFailureStatus(failureKinds) {
+  return failureKinds.includes("incompatible") ? "incompatible" : "malformed";
+}
+function mapSnapshotSectionState(state) {
+  switch (state) {
+    case "ready":
+      return "fresh";
+    case "stale":
+      return "stale";
+    default:
+      return "missing";
+  }
+}
+function validateTransactionLayer2Snapshot(input) {
+  const issues = [];
+  const failureKinds = [];
+  if (!isRecord2(input)) {
+    pushIssue(issues, failureKinds, "", "Expected snapshot object");
+    return {
+      ok: false,
+      status: "malformed",
+      issues
+    };
+  }
+  assertExactKeys(input, ROOT_KEYS, "", issues, failureKinds);
+  const version = readRequiredString(input, "version", "", issues, failureKinds);
+  const generatedAt = readRequiredString(
+    input,
+    "generatedAt",
+    "",
+    issues,
+    failureKinds
+  );
+  const maliciousContracts = parseMaliciousContracts(
+    input.maliciousContracts,
+    issues,
+    failureKinds
+  );
+  const scamSignatures = parseScamSignatures(
+    input.scamSignatures,
+    issues,
+    failureKinds
+  );
+  const sectionStates = parseSectionStates(
+    input.sectionStates,
+    issues,
+    failureKinds
+  );
+  if (generatedAt !== null && !isValidUtcTimestamp(generatedAt)) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "generatedAt",
+      "Expected an ISO-8601 UTC timestamp"
+    );
+  }
+  if (version !== null && !/^layer2\.[0-9a-f]{16}$/.test(version)) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "version",
+      "Unsupported snapshot version format",
+      "incompatible"
+    );
+  }
+  if (maliciousContracts === null || scamSignatures === null || sectionStates === null || version === null || generatedAt === null) {
+    return {
+      ok: false,
+      status: toFailureStatus(failureKinds),
+      issues
+    };
+  }
+  if (maliciousContracts.length === 0 && sectionStates.maliciousContracts !== "missing") {
+    pushIssue(
+      issues,
+      failureKinds,
+      "sectionStates.maliciousContracts",
+      "Empty maliciousContracts snapshots must declare a missing section",
+      "incompatible"
+    );
+  }
+  if (maliciousContracts.length > 0 && sectionStates.maliciousContracts === "missing") {
+    pushIssue(
+      issues,
+      failureKinds,
+      "sectionStates.maliciousContracts",
+      "maliciousContracts section cannot be missing when entries are present",
+      "incompatible"
+    );
+  }
+  const snapshotBody = {
+    generatedAt,
+    maliciousContracts,
+    scamSignatures,
+    sectionStates
+  };
+  const expectedVersion = buildSnapshotVersion(snapshotBody);
+  if (version !== expectedVersion) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "version",
+      `Snapshot version does not match canonical content hash (${expectedVersion})`,
+      "incompatible"
+    );
+  }
+  if (issues.length > 0) {
+    return {
+      ok: false,
+      status: toFailureStatus(failureKinds),
+      issues
+    };
+  }
+  const maliciousContractIndex = maliciousContracts.reduce((accumulator, entry) => {
+    accumulator[`${entry.chain}:${entry.address}`] = entry;
+    return accumulator;
+  }, {});
+  const snapshot = deepFreeze({
+    version,
+    generatedAt,
+    maliciousContracts,
+    scamSignatures,
+    sectionStates,
+    maliciousContractIndex
+  });
+  return {
+    ok: true,
+    status: maliciousContracts.length === 0 ? "empty" : "valid",
+    snapshot,
+    issues
+  };
+}
+function normalizeLookupAddress(value) {
+  if (value === null || !isValidEvmAddress(value)) {
+    return null;
+  }
+  const normalized = normalizeEvmAddress(value);
+  return normalized === ZERO_EVM_ADDRESS ? null : normalized;
+}
+function resolveCanonicalTransactionIntel(snapshot, lookup, trustedOriginIntel) {
+  const defaultSectionStates = {
+    maliciousContracts: "missing",
+    scamSignatures: "missing",
+    allowlists: trustedOriginIntel.allowlistsState
+  };
+  if (snapshot === null) {
+    return {
+      contractDisposition: "unavailable",
+      contractFeedVersion: null,
+      allowlistFeedVersion: trustedOriginIntel.allowlistFeedVersion,
+      signatureDisposition: "unavailable",
+      signatureFeedVersion: null,
+      originDisposition: trustedOriginIntel.originDisposition,
+      sectionStates: defaultSectionStates
+    };
+  }
+  const targetAddress = normalizeLookupAddress(lookup.targetAddress);
+  const maliciousContractsState = mapSnapshotSectionState(
+    snapshot.sectionStates.maliciousContracts
+  );
+  const scamSignaturesState = mapSnapshotSectionState(
+    snapshot.sectionStates.scamSignatures
+  );
+  const contractDisposition = snapshot.sectionStates.maliciousContracts === "missing" ? "unavailable" : targetAddress !== null && snapshot.maliciousContractIndex[`evm:${targetAddress}`] !== void 0 ? "malicious" : "no_match";
+  const signatureDisposition = snapshot.sectionStates.scamSignatures === "missing" ? "unavailable" : "no_match";
+  return {
+    contractDisposition,
+    contractFeedVersion: snapshot.sectionStates.maliciousContracts === "missing" ? null : snapshot.version,
+    allowlistFeedVersion: trustedOriginIntel.allowlistFeedVersion,
+    signatureDisposition,
+    signatureFeedVersion: snapshot.sectionStates.scamSignatures === "missing" ? null : snapshot.version,
+    originDisposition: trustedOriginIntel.originDisposition,
+    sectionStates: {
+      maliciousContracts: maliciousContractsState,
+      scamSignatures: scamSignaturesState,
+      allowlists: trustedOriginIntel.allowlistsState
+    }
+  };
+}
+
 // node_modules/.pnpm/tldts-core@7.0.27/node_modules/tldts-core/dist/es6/src/domain.js
 function shareSameDomainSuffix(hostname, vhost) {
   if (hostname.endsWith(vhost)) {
@@ -4414,72 +4962,72 @@ var ALLOWLIST_ITEM_KEYS = [
   "scope",
   "justification"
 ];
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-function pushIssue(issues, path, message) {
+function pushIssue2(issues, path, message) {
   issues.push({ path, message });
 }
-function assertExactKeys(value, allowedKeys, path, issues) {
+function assertExactKeys2(value, allowedKeys, path, issues) {
   const allowed = new Set(allowedKeys);
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) {
-      pushIssue(issues, `${path}.${key}`, "Unknown field");
+      pushIssue2(issues, `${path}.${key}`, "Unknown field");
     }
   }
 }
-function readRequiredString(value, key, path, issues) {
+function readRequiredString2(value, key, path, issues) {
   const candidate = value[key];
   if (typeof candidate !== "string" || candidate.trim() === "") {
-    pushIssue(issues, `${path}.${key}`, "Expected a non-empty string");
+    pushIssue2(issues, `${path}.${key}`, "Expected a non-empty string");
     return null;
   }
   return candidate;
 }
-function readRequiredNumber(value, key, path, issues) {
+function readRequiredNumber2(value, key, path, issues) {
   const candidate = value[key];
   if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
-    pushIssue(issues, `${path}.${key}`, "Expected a finite number");
+    pushIssue2(issues, `${path}.${key}`, "Expected a finite number");
     return null;
   }
   return candidate;
 }
-function isValidUtcTimestamp(value) {
+function isValidUtcTimestamp2(value) {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value)) {
     return false;
   }
   return !Number.isNaN(Date.parse(value));
 }
 function readRequiredTimestamp(value, key, path, issues) {
-  const candidate = readRequiredString(value, key, path, issues);
+  const candidate = readRequiredString2(value, key, path, issues);
   if (candidate === null) {
     return null;
   }
-  if (!isValidUtcTimestamp(candidate)) {
-    pushIssue(issues, `${path}.${key}`, "Expected an ISO-8601 UTC timestamp");
+  if (!isValidUtcTimestamp2(candidate)) {
+    pushIssue2(issues, `${path}.${key}`, "Expected an ISO-8601 UTC timestamp");
     return null;
   }
   return candidate;
 }
 function readMetadata(value, path, issues) {
-  if (!isRecord2(value)) {
-    pushIssue(issues, path, "Expected section metadata object");
+  if (!isRecord3(value)) {
+    pushIssue2(issues, path, "Expected section metadata object");
     return null;
   }
-  assertExactKeys(value, SECTION_METADATA_KEYS, path, issues);
-  const feedVersion = readRequiredString(value, "feedVersion", path, issues);
-  const itemCount = readRequiredNumber(value, "itemCount", path, issues);
-  const sha256 = readRequiredString(value, "sha256", path, issues);
+  assertExactKeys2(value, SECTION_METADATA_KEYS, path, issues);
+  const feedVersion = readRequiredString2(value, "feedVersion", path, issues);
+  const itemCount = readRequiredNumber2(value, "itemCount", path, issues);
+  const sha256 = readRequiredString2(value, "sha256", path, issues);
   const staleAfter = readRequiredTimestamp(value, "staleAfter", path, issues);
   const expiresAt = readRequiredTimestamp(value, "expiresAt", path, issues);
   if (feedVersion === null || itemCount === null || sha256 === null || staleAfter === null || expiresAt === null) {
     return null;
   }
   if (!Number.isInteger(itemCount) || itemCount < 0) {
-    pushIssue(issues, `${path}.itemCount`, "Expected a non-negative integer");
+    pushIssue2(issues, `${path}.itemCount`, "Expected a non-negative integer");
   }
   if (Date.parse(staleAfter) >= Date.parse(expiresAt)) {
-    pushIssue(issues, path, "Expected staleAfter to be earlier than expiresAt");
+    pushIssue2(issues, path, "Expected staleAfter to be earlier than expiresAt");
   }
   return {
     feedVersion,
@@ -4492,17 +5040,17 @@ function readMetadata(value, path, issues) {
 function parseSchemaVersion(value, issues) {
   const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value);
   if (!match) {
-    pushIssue(issues, "schemaVersion", "Expected semantic version format");
+    pushIssue2(issues, "schemaVersion", "Expected semantic version format");
     return;
   }
   if (match[1] !== "1") {
-    pushIssue(issues, "schemaVersion", "Unsupported schema major version");
+    pushIssue2(issues, "schemaVersion", "Unsupported schema major version");
   }
 }
 function parseEnvelope(bundle, options) {
   const issues = [];
-  if (!isRecord2(bundle)) {
-    pushIssue(issues, "", "Expected bundle object");
+  if (!isRecord3(bundle)) {
+    pushIssue2(issues, "", "Expected bundle object");
     return {
       metadata: {
         schemaVersion: "",
@@ -4525,15 +5073,15 @@ function parseEnvelope(bundle, options) {
       }
     };
   }
-  assertExactKeys(bundle, ENVELOPE_KEYS, "", issues);
-  const schemaVersion = readRequiredString(bundle, "schemaVersion", "", issues);
-  const bundleVersion = readRequiredString(bundle, "bundleVersion", "", issues);
+  assertExactKeys2(bundle, ENVELOPE_KEYS, "", issues);
+  const schemaVersion = readRequiredString2(bundle, "schemaVersion", "", issues);
+  const bundleVersion = readRequiredString2(bundle, "bundleVersion", "", issues);
   const generatedAt = readRequiredTimestamp(bundle, "generatedAt", "", issues);
-  const publisher = readRequiredString(bundle, "publisher", "", issues);
-  const signingKeyId = readRequiredString(bundle, "signingKeyId", "", issues);
-  const signature = readRequiredString(bundle, "signature", "", issues);
+  const publisher = readRequiredString2(bundle, "publisher", "", issues);
+  const signingKeyId = readRequiredString2(bundle, "signingKeyId", "", issues);
+  const signature = readRequiredString2(bundle, "signature", "", issues);
   if (typeof options.signatureVerifier !== "function") {
-    pushIssue(
+    pushIssue2(
       issues,
       "signatureVerifier",
       "Signature verification function is required"
@@ -4544,14 +5092,14 @@ function parseEnvelope(bundle, options) {
   }
   const rawSections = bundle.sections;
   const sections = {};
-  if (!isRecord2(rawSections)) {
-    pushIssue(issues, "sections", "Expected sections metadata object");
+  if (!isRecord3(rawSections)) {
+    pushIssue2(issues, "sections", "Expected sections metadata object");
   } else {
     const allowedSections = [
       "maliciousDomains",
       "allowlists"
     ];
-    assertExactKeys(rawSections, allowedSections, "sections", issues);
+    assertExactKeys2(rawSections, allowedSections, "sections", issues);
     for (const sectionName of allowedSections) {
       const metadata = rawSections[sectionName];
       if (metadata === void 0) {
@@ -4576,7 +5124,7 @@ function parseEnvelope(bundle, options) {
     sections,
     signature
   })) {
-    pushIssue(issues, "signature", "Signature verification failed");
+    pushIssue2(issues, "signature", "Signature verification failed");
   }
   return {
     metadata: {
@@ -4595,7 +5143,7 @@ function parseEnvelope(bundle, options) {
 function readItemsArray(value, path, issues) {
   const items = value.items;
   if (!Array.isArray(items)) {
-    pushIssue(issues, `${path}.items`, "Expected items array");
+    pushIssue2(issues, `${path}.items`, "Expected items array");
     return null;
   }
   return items;
@@ -4646,28 +5194,28 @@ function canonicalAllowlistSection(section) {
   });
 }
 function validateSectionHeader(section, metadata, path, issues) {
-  const feedVersion = readRequiredString(section, "feedVersion", path, issues);
-  const itemCount = readRequiredNumber(section, "itemCount", path, issues);
-  const sha256 = readRequiredString(section, "sha256", path, issues);
+  const feedVersion = readRequiredString2(section, "feedVersion", path, issues);
+  const itemCount = readRequiredNumber2(section, "itemCount", path, issues);
+  const sha256 = readRequiredString2(section, "sha256", path, issues);
   const staleAfter = readRequiredTimestamp(section, "staleAfter", path, issues);
   const expiresAt = readRequiredTimestamp(section, "expiresAt", path, issues);
   if (feedVersion === null || itemCount === null || sha256 === null || staleAfter === null || expiresAt === null) {
     return null;
   }
   if (feedVersion !== metadata.feedVersion) {
-    pushIssue(issues, `${path}.feedVersion`, "Section feedVersion does not match bundle metadata");
+    pushIssue2(issues, `${path}.feedVersion`, "Section feedVersion does not match bundle metadata");
   }
   if (itemCount !== metadata.itemCount) {
-    pushIssue(issues, `${path}.itemCount`, "Section itemCount does not match bundle metadata");
+    pushIssue2(issues, `${path}.itemCount`, "Section itemCount does not match bundle metadata");
   }
   if (sha256 !== metadata.sha256) {
-    pushIssue(issues, `${path}.sha256`, "Section sha256 does not match bundle metadata");
+    pushIssue2(issues, `${path}.sha256`, "Section sha256 does not match bundle metadata");
   }
   if (staleAfter !== metadata.staleAfter) {
-    pushIssue(issues, `${path}.staleAfter`, "Section staleAfter does not match bundle metadata");
+    pushIssue2(issues, `${path}.staleAfter`, "Section staleAfter does not match bundle metadata");
   }
   if (expiresAt !== metadata.expiresAt) {
-    pushIssue(issues, `${path}.expiresAt`, "Section expiresAt does not match bundle metadata");
+    pushIssue2(issues, `${path}.expiresAt`, "Section expiresAt does not match bundle metadata");
   }
   return {
     feedVersion,
@@ -4683,66 +5231,66 @@ function parseMaliciousItems(rawItems, path, issues) {
   const seenIdentities = /* @__PURE__ */ new Set();
   rawItems.forEach((rawItem, index) => {
     const itemPath = `${path}.items[${index}]`;
-    if (!isRecord2(rawItem)) {
-      pushIssue(issues, itemPath, "Expected malicious-domain item object");
+    if (!isRecord3(rawItem)) {
+      pushIssue2(issues, itemPath, "Expected malicious-domain item object");
       return;
     }
-    assertExactKeys(rawItem, MALICIOUS_ITEM_KEYS, itemPath, issues);
-    const id = readRequiredString(rawItem, "id", itemPath, issues);
-    const type = readRequiredString(rawItem, "type", itemPath, issues);
-    const identity = readRequiredString(rawItem, "identity", itemPath, issues);
-    const source = readRequiredString(rawItem, "source", itemPath, issues);
-    const reasonCode = readRequiredString(rawItem, "reasonCode", itemPath, issues);
-    const confidence = readRequiredNumber(rawItem, "confidence", itemPath, issues);
+    assertExactKeys2(rawItem, MALICIOUS_ITEM_KEYS, itemPath, issues);
+    const id = readRequiredString2(rawItem, "id", itemPath, issues);
+    const type = readRequiredString2(rawItem, "type", itemPath, issues);
+    const identity = readRequiredString2(rawItem, "identity", itemPath, issues);
+    const source = readRequiredString2(rawItem, "source", itemPath, issues);
+    const reasonCode = readRequiredString2(rawItem, "reasonCode", itemPath, issues);
+    const confidence = readRequiredNumber2(rawItem, "confidence", itemPath, issues);
     const firstSeenAt = readRequiredTimestamp(rawItem, "firstSeenAt", itemPath, issues);
     const lastSeenAt = readRequiredTimestamp(rawItem, "lastSeenAt", itemPath, issues);
-    const domain = readRequiredString(rawItem, "domain", itemPath, issues);
-    const scope = readRequiredString(rawItem, "scope", itemPath, issues);
-    const classification = readRequiredString(rawItem, "classification", itemPath, issues);
+    const domain = readRequiredString2(rawItem, "domain", itemPath, issues);
+    const scope = readRequiredString2(rawItem, "scope", itemPath, issues);
+    const classification = readRequiredString2(rawItem, "classification", itemPath, issues);
     if (id === null || type === null || identity === null || source === null || reasonCode === null || confidence === null || firstSeenAt === null || lastSeenAt === null || domain === null || scope === null || classification === null) {
       return;
     }
     if (confidence < 0 || confidence > 1) {
-      pushIssue(issues, `${itemPath}.confidence`, "Expected confidence within [0, 1]");
+      pushIssue2(issues, `${itemPath}.confidence`, "Expected confidence within [0, 1]");
     }
     if (Date.parse(firstSeenAt) > Date.parse(lastSeenAt)) {
-      pushIssue(issues, itemPath, "Expected firstSeenAt to be earlier than or equal to lastSeenAt");
+      pushIssue2(issues, itemPath, "Expected firstSeenAt to be earlier than or equal to lastSeenAt");
     }
     if (type !== "exact_host" && type !== "registrable_domain") {
-      pushIssue(issues, `${itemPath}.type`, "Unsupported malicious-domain item type");
+      pushIssue2(issues, `${itemPath}.type`, "Unsupported malicious-domain item type");
       return;
     }
     if (scope !== type) {
-      pushIssue(issues, `${itemPath}.scope`, "Scope must match malicious-domain type");
+      pushIssue2(issues, `${itemPath}.scope`, "Scope must match malicious-domain type");
       return;
     }
     const normalizedDomain = normalizeIntelDomain(domain);
     if (!normalizedDomain) {
-      pushIssue(issues, `${itemPath}.domain`, "Expected a valid normalized hostname");
+      pushIssue2(issues, `${itemPath}.domain`, "Expected a valid normalized hostname");
       return;
     }
     const registrableDomain = toRegistrableIntelDomain(normalizedDomain);
     if (!registrableDomain) {
-      pushIssue(issues, `${itemPath}.domain`, "Could not derive registrable domain");
+      pushIssue2(issues, `${itemPath}.domain`, "Could not derive registrable domain");
       return;
     }
     const canonicalDomain = type === "registrable_domain" ? registrableDomain : normalizedDomain;
     const canonicalIdentity = buildMaliciousDomainIdentity(type, canonicalDomain);
     if (type === "registrable_domain" && normalizedDomain !== registrableDomain) {
-      pushIssue(
+      pushIssue2(
         issues,
         `${itemPath}.domain`,
         "Registrable-domain indicators must store the registrable domain"
       );
     }
     if (identity !== canonicalIdentity) {
-      pushIssue(issues, `${itemPath}.identity`, "Identity does not match canonical malicious-domain identity");
+      pushIssue2(issues, `${itemPath}.identity`, "Identity does not match canonical malicious-domain identity");
     }
     if (seenIds.has(id)) {
-      pushIssue(issues, `${itemPath}.id`, "Duplicate item id");
+      pushIssue2(issues, `${itemPath}.id`, "Duplicate item id");
     }
     if (seenIdentities.has(canonicalIdentity)) {
-      pushIssue(issues, `${itemPath}.identity`, "Duplicate malicious-domain identity");
+      pushIssue2(issues, `${itemPath}.identity`, "Duplicate malicious-domain identity");
     }
     seenIds.add(id);
     seenIdentities.add(canonicalIdentity);
@@ -4769,44 +5317,44 @@ function parseAllowlistItems(rawItems, path, issues) {
   const seenIdentities = /* @__PURE__ */ new Set();
   rawItems.forEach((rawItem, index) => {
     const itemPath = `${path}.items[${index}]`;
-    if (!isRecord2(rawItem)) {
-      pushIssue(issues, itemPath, "Expected allowlist item object");
+    if (!isRecord3(rawItem)) {
+      pushIssue2(issues, itemPath, "Expected allowlist item object");
       return;
     }
-    assertExactKeys(rawItem, ALLOWLIST_ITEM_KEYS, itemPath, issues);
-    const id = readRequiredString(rawItem, "id", itemPath, issues);
-    const type = readRequiredString(rawItem, "type", itemPath, issues);
-    const identity = readRequiredString(rawItem, "identity", itemPath, issues);
-    const source = readRequiredString(rawItem, "source", itemPath, issues);
-    const reasonCode = readRequiredString(rawItem, "reasonCode", itemPath, issues);
-    const confidence = readRequiredNumber(rawItem, "confidence", itemPath, issues);
+    assertExactKeys2(rawItem, ALLOWLIST_ITEM_KEYS, itemPath, issues);
+    const id = readRequiredString2(rawItem, "id", itemPath, issues);
+    const type = readRequiredString2(rawItem, "type", itemPath, issues);
+    const identity = readRequiredString2(rawItem, "identity", itemPath, issues);
+    const source = readRequiredString2(rawItem, "source", itemPath, issues);
+    const reasonCode = readRequiredString2(rawItem, "reasonCode", itemPath, issues);
+    const confidence = readRequiredNumber2(rawItem, "confidence", itemPath, issues);
     const firstSeenAt = readRequiredTimestamp(rawItem, "firstSeenAt", itemPath, issues);
     const lastSeenAt = readRequiredTimestamp(rawItem, "lastSeenAt", itemPath, issues);
-    const targetKind = readRequiredString(rawItem, "targetKind", itemPath, issues);
-    const target = readRequiredString(rawItem, "target", itemPath, issues);
-    const scope = readRequiredString(rawItem, "scope", itemPath, issues);
-    const justification = readRequiredString(rawItem, "justification", itemPath, issues);
+    const targetKind = readRequiredString2(rawItem, "targetKind", itemPath, issues);
+    const target = readRequiredString2(rawItem, "target", itemPath, issues);
+    const scope = readRequiredString2(rawItem, "scope", itemPath, issues);
+    const justification = readRequiredString2(rawItem, "justification", itemPath, issues);
     if (id === null || type === null || identity === null || source === null || reasonCode === null || confidence === null || firstSeenAt === null || lastSeenAt === null || targetKind === null || target === null || scope === null || justification === null) {
       return;
     }
     if (confidence < 0 || confidence > 1) {
-      pushIssue(issues, `${itemPath}.confidence`, "Expected confidence within [0, 1]");
+      pushIssue2(issues, `${itemPath}.confidence`, "Expected confidence within [0, 1]");
     }
     if (Date.parse(firstSeenAt) > Date.parse(lastSeenAt)) {
-      pushIssue(issues, itemPath, "Expected firstSeenAt to be earlier than or equal to lastSeenAt");
+      pushIssue2(issues, itemPath, "Expected firstSeenAt to be earlier than or equal to lastSeenAt");
     }
     if (targetKind !== "domain") {
-      pushIssue(issues, `${itemPath}.targetKind`, "Phase A allowlists only support domain targets");
+      pushIssue2(issues, `${itemPath}.targetKind`, "Phase A allowlists only support domain targets");
       return;
     }
     const normalizedTarget = normalizeIntelDomain(target);
     if (!normalizedTarget) {
-      pushIssue(issues, `${itemPath}.target`, "Expected a valid normalized hostname");
+      pushIssue2(issues, `${itemPath}.target`, "Expected a valid normalized hostname");
       return;
     }
     const registrableDomain = toRegistrableIntelDomain(normalizedTarget);
     if (!registrableDomain) {
-      pushIssue(issues, `${itemPath}.target`, "Could not derive registrable domain");
+      pushIssue2(issues, `${itemPath}.target`, "Could not derive registrable domain");
       return;
     }
     let canonicalScope;
@@ -4815,12 +5363,12 @@ function parseAllowlistItems(rawItems, path, issues) {
     } else if (type === "domain_registrable_domain" && scope === "registrable_domain") {
       canonicalScope = "registrable_domain";
     } else {
-      pushIssue(issues, `${itemPath}.type`, "Allowlist type and scope must align");
+      pushIssue2(issues, `${itemPath}.type`, "Allowlist type and scope must align");
       return;
     }
     const canonicalTarget = canonicalScope === "registrable_domain" ? registrableDomain : normalizedTarget;
     if (canonicalScope === "registrable_domain" && normalizedTarget !== registrableDomain) {
-      pushIssue(
+      pushIssue2(
         issues,
         `${itemPath}.target`,
         "Registrable-domain allowlists must store the registrable domain"
@@ -4831,13 +5379,13 @@ function parseAllowlistItems(rawItems, path, issues) {
       canonicalTarget
     );
     if (identity !== canonicalIdentity) {
-      pushIssue(issues, `${itemPath}.identity`, "Identity does not match canonical allowlist identity");
+      pushIssue2(issues, `${itemPath}.identity`, "Identity does not match canonical allowlist identity");
     }
     if (seenIds.has(id)) {
-      pushIssue(issues, `${itemPath}.id`, "Duplicate item id");
+      pushIssue2(issues, `${itemPath}.id`, "Duplicate item id");
     }
     if (seenIdentities.has(canonicalIdentity)) {
-      pushIssue(issues, `${itemPath}.identity`, "Duplicate allowlist identity");
+      pushIssue2(issues, `${itemPath}.identity`, "Duplicate allowlist identity");
     }
     seenIds.add(id);
     seenIdentities.add(canonicalIdentity);
@@ -4868,7 +5416,7 @@ function parseMaliciousDomainsSection(bundle, metadata) {
     return { state: "missing", items: [], issues };
   }
   if (!sectionMetadata && section) {
-    pushIssue(issues, path, "Section payload exists without bundle metadata");
+    pushIssue2(issues, path, "Section payload exists without bundle metadata");
     return { state: "invalid", items: [], issues };
   }
   if (sectionMetadata && !section) {
@@ -4879,18 +5427,18 @@ function parseMaliciousDomainsSection(bundle, metadata) {
       issues: [{ path, message: "Section metadata exists but payload is missing" }]
     };
   }
-  if (!isRecord2(section)) {
-    pushIssue(issues, path, "Expected maliciousDomains section object");
+  if (!isRecord3(section)) {
+    pushIssue2(issues, path, "Expected maliciousDomains section object");
     return { state: "invalid", metadata: sectionMetadata, items: [], issues };
   }
   if (!sectionMetadata) {
-    pushIssue(issues, path, "Missing section metadata");
+    pushIssue2(issues, path, "Missing section metadata");
     return { state: "invalid", items: [], issues };
   }
-  assertExactKeys(section, MALICIOUS_SECTION_KEYS, path, issues);
-  const feedType = readRequiredString(section, "feedType", path, issues);
+  assertExactKeys2(section, MALICIOUS_SECTION_KEYS, path, issues);
+  const feedType = readRequiredString2(section, "feedType", path, issues);
   if (feedType !== "maliciousDomains") {
-    pushIssue(issues, `${path}.feedType`, "Expected feedType to equal maliciousDomains");
+    pushIssue2(issues, `${path}.feedType`, "Expected feedType to equal maliciousDomains");
   }
   const header = validateSectionHeader(section, sectionMetadata, path, issues);
   const items = readItemsArray(section, path, issues);
@@ -4902,7 +5450,7 @@ function parseMaliciousDomainsSection(bundle, metadata) {
     return { state: "invalid", metadata: sectionMetadata, items: [], issues };
   }
   if (header.itemCount !== parsedItems.length) {
-    pushIssue(issues, `${path}.itemCount`, "itemCount does not match actual item count");
+    pushIssue2(issues, `${path}.itemCount`, "itemCount does not match actual item count");
   }
   const canonicalSha = sha256Hex(
     canonicalMaliciousSection({
@@ -4915,7 +5463,7 @@ function parseMaliciousDomainsSection(bundle, metadata) {
     })
   );
   if (header.sha256 !== canonicalSha) {
-    pushIssue(issues, `${path}.sha256`, "sha256 does not match canonical serialized content");
+    pushIssue2(issues, `${path}.sha256`, "sha256 does not match canonical serialized content");
   }
   return issues.length > 0 ? { state: "invalid", metadata: sectionMetadata, items: [], issues } : { state: "valid", metadata: sectionMetadata, items: parsedItems, issues };
 }
@@ -4928,7 +5476,7 @@ function parseAllowlistsSection(bundle, metadata) {
     return { state: "missing", items: [], issues };
   }
   if (!sectionMetadata && section) {
-    pushIssue(issues, path, "Section payload exists without bundle metadata");
+    pushIssue2(issues, path, "Section payload exists without bundle metadata");
     return { state: "invalid", items: [], issues };
   }
   if (sectionMetadata && !section) {
@@ -4939,18 +5487,18 @@ function parseAllowlistsSection(bundle, metadata) {
       issues: [{ path, message: "Section metadata exists but payload is missing" }]
     };
   }
-  if (!isRecord2(section)) {
-    pushIssue(issues, path, "Expected allowlists section object");
+  if (!isRecord3(section)) {
+    pushIssue2(issues, path, "Expected allowlists section object");
     return { state: "invalid", metadata: sectionMetadata, items: [], issues };
   }
   if (!sectionMetadata) {
-    pushIssue(issues, path, "Missing section metadata");
+    pushIssue2(issues, path, "Missing section metadata");
     return { state: "invalid", items: [], issues };
   }
-  assertExactKeys(section, ALLOWLIST_SECTION_KEYS, path, issues);
-  const feedType = readRequiredString(section, "feedType", path, issues);
+  assertExactKeys2(section, ALLOWLIST_SECTION_KEYS, path, issues);
+  const feedType = readRequiredString2(section, "feedType", path, issues);
   if (feedType !== "allowlists") {
-    pushIssue(issues, `${path}.feedType`, "Expected feedType to equal allowlists");
+    pushIssue2(issues, `${path}.feedType`, "Expected feedType to equal allowlists");
   }
   const header = validateSectionHeader(section, sectionMetadata, path, issues);
   const items = readItemsArray(section, path, issues);
@@ -4962,7 +5510,7 @@ function parseAllowlistsSection(bundle, metadata) {
     return { state: "invalid", metadata: sectionMetadata, items: [], issues };
   }
   if (header.itemCount !== parsedItems.length) {
-    pushIssue(issues, `${path}.itemCount`, "itemCount does not match actual item count");
+    pushIssue2(issues, `${path}.itemCount`, "itemCount does not match actual item count");
   }
   const canonicalSha = sha256Hex(
     canonicalAllowlistSection({
@@ -4975,7 +5523,7 @@ function parseAllowlistsSection(bundle, metadata) {
     })
   );
   if (header.sha256 !== canonicalSha) {
-    pushIssue(issues, `${path}.sha256`, "sha256 does not match canonical serialized content");
+    pushIssue2(issues, `${path}.sha256`, "sha256 does not match canonical serialized content");
   }
   return issues.length > 0 ? { state: "invalid", metadata: sectionMetadata, items: [], issues } : { state: "valid", metadata: sectionMetadata, items: parsedItems, issues };
 }
@@ -9385,8 +9933,10 @@ export {
   prepareEvmCleanupExecutionRequest,
   prepareEvmCleanupTransaction,
   reconcileEvmCleanupPlanResults,
+  resolveCanonicalTransactionIntel,
   resolveDomainIntel,
   riskBadgeLabel,
-  validateDomainIntelBundle
+  validateDomainIntelBundle,
+  validateTransactionLayer2Snapshot
 };
 //# sourceMappingURL=index.js.map

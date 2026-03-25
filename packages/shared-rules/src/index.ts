@@ -72,6 +72,10 @@ export {
   normalizeTransactionRequest,
   normalizeTypedDataRequest,
 } from "./transaction/decode.js";
+export {
+  resolveCanonicalTransactionIntel,
+  validateTransactionLayer2Snapshot,
+} from "./transaction/intel-snapshot.js";
 export { normalizeTypedData, classifyPermitKind } from "./transaction/typed-data.js";
 export { buildTransactionExplanation } from "./transaction/explain.js";
 export { buildTransactionSignals } from "./signals/transaction-signals.js";
@@ -109,6 +113,18 @@ export type {
   TypedDataValue,
   WalletProviderMetadata,
 } from "./transaction/types.js";
+export type {
+  CanonicalTransactionIntelLookup,
+  CanonicalTransactionSnapshotSectionState,
+  TrustedTransactionOriginIntel,
+  TransactionLayer2MaliciousContract,
+  TransactionLayer2Snapshot,
+  TransactionLayer2SnapshotValidationIssue,
+  ValidateTransactionLayer2SnapshotFailure,
+  ValidateTransactionLayer2SnapshotResult,
+  ValidateTransactionLayer2SnapshotSuccess,
+  ValidatedTransactionLayer2Snapshot,
+} from "./transaction/intel-snapshot.js";
 
 // ── Policy Codes ──
 export { PHISHING_CODES } from "./policies/phishing/codes.js";
