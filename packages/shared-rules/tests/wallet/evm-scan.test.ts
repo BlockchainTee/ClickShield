@@ -148,13 +148,61 @@ describe("Layer 4 Phase 4B EVM scan foundation", () => {
   });
 
   it("preserves both supported EVM scan modes in the final report", () => {
-    const fullEvaluation = evaluateEvmWalletScan(createInput({ scanMode: "full" }));
-    const basicEvaluation = evaluateEvmWalletScan(createInput({ scanMode: "basic" }));
+    const fullEvaluation = evaluateEvmWalletScan(
+      createInput({
+        scanMode: "full",
+        approvals: [
+          {
+            tokenStandard: "erc20",
+            tokenAddress: buildAddress(250),
+            spenderAddress: buildAddress(251),
+            amount: MAX_UINT256,
+            approvedAt: "2026-03-22T12:00:00.000Z",
+          },
+        ],
+      })
+    );
+    const basicEvaluation = evaluateEvmWalletScan(
+      createInput({
+        scanMode: "basic",
+        approvals: [
+          {
+            tokenStandard: "erc20",
+            tokenAddress: buildAddress(250),
+            spenderAddress: buildAddress(251),
+            amount: MAX_UINT256,
+            approvedAt: "2026-03-22T12:00:00.000Z",
+          },
+        ],
+      })
+    );
 
     expect(fullEvaluation.summary.scanMode).toBe("full");
+    expect(fullEvaluation.report.summary.scanMode).toBe("full");
     expect(fullEvaluation.report.request.scanMode).toBe("full");
     expect(basicEvaluation.summary.scanMode).toBe("basic");
     expect(basicEvaluation.report.request.scanMode).toBe("basic");
+    expect(fullEvaluation.report.result.cleanupPlan?.actions[0]?.supportStatus).toBe(
+      "supported"
+    );
+    expect(fullEvaluation.report.result.cleanupPlan?.actions[0]?.executionType).toBe(
+      "wallet_signature"
+    );
+    expect(fullEvaluation.report.result.capabilityBoundaries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          area: "cleanup_plan",
+          capabilityKey: "deterministic_evm_cleanup_plan",
+          status: "supported",
+        }),
+        expect.objectContaining({
+          area: "cleanup_execution",
+          capabilityKey: "evm_cleanup_execution",
+          status: "partial",
+        }),
+      ])
+    );
+    expect(fullEvaluation.report.reportId).not.toBe(basicEvaluation.report.reportId);
   });
 
   it("returns a clean result for a safe wallet snapshot", () => {

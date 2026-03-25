@@ -230,12 +230,82 @@ describe("Layer 4 Phase 4D Solana scan foundation", () => {
   });
 
   it("coerces unsupported full scan requests to truthful basic scope", () => {
-    const coerced = evaluateSolanaWalletScan(createInput({ scanMode: "full" }));
-    const basic = evaluateSolanaWalletScan(createInput({ scanMode: "basic" }));
+    const coerced = evaluateSolanaWalletScan(
+      createInput({
+        scanMode: "full",
+        tokenAccounts: [
+          {
+            tokenAccountAddress: buildSolAddress(41),
+            mintAddress: buildSolAddress(42),
+            ownerAddress: WALLET_ADDRESS,
+            delegateAddress: buildSolAddress(43),
+            delegateRiskLevel: "high",
+          },
+        ],
+        connections: [
+          {
+            appName: "Broad app",
+            origin: "https://broad-solana.example",
+            permissions: ["sign_all_transactions", "account_access_all"],
+            permissionLevel: "broad",
+          },
+        ],
+      })
+    );
+    const basic = evaluateSolanaWalletScan(
+      createInput({
+        scanMode: "basic",
+        tokenAccounts: [
+          {
+            tokenAccountAddress: buildSolAddress(41),
+            mintAddress: buildSolAddress(42),
+            ownerAddress: WALLET_ADDRESS,
+            delegateAddress: buildSolAddress(43),
+            delegateRiskLevel: "high",
+          },
+        ],
+        connections: [
+          {
+            appName: "Broad app",
+            origin: "https://broad-solana.example",
+            permissions: ["sign_all_transactions", "account_access_all"],
+            permissionLevel: "broad",
+          },
+        ],
+      })
+    );
 
     expect(coerced.summary.scanMode).toBe("basic");
     expect(coerced.report.summary.scanMode).toBe("basic");
     expect(coerced.report.request.scanMode).toBe("basic");
+    expect(coerced.report.request).toEqual(basic.report.request);
+    expect(coerced.report.result).toEqual(basic.report.result);
+    expect(coerced.report.summary).toEqual(basic.report.summary);
+    expect(coerced.report.cleanupExecution).toBeNull();
+    expect(coerced.report.result.capabilityBoundaries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          area: "cleanup_plan",
+          capabilityKey: "deterministic_solana_cleanup_guidance",
+          status: "supported",
+        }),
+        expect.objectContaining({
+          area: "cleanup_execution",
+          capabilityKey: "solana_cleanup_execution",
+          status: "not_supported",
+        }),
+      ])
+    );
+    expect(
+      coerced.report.result.cleanupPlan?.actions.every(
+        (action) =>
+          action.supportStatus === "partial" &&
+          action.executionMode === "guided" &&
+          action.executionType === "manual_review" &&
+          action.status === "planned" &&
+          action.supportDetail.includes("does not build transactions")
+      )
+    ).toBe(true);
     expect(coerced.report.reportId).toBe(basic.report.reportId);
   });
 

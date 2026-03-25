@@ -485,4 +485,24 @@ describe("buildWalletReportId", () => {
 
     expect(buildWalletReportId(changed)).not.toBe(buildWalletReportId(base));
   });
+
+  it("changes the ID when declared capability boundaries change", () => {
+    const base = createReportIdInput();
+    const changed = cloneReportIdInput(base);
+
+    changed.result = {
+      ...changed.result,
+      capabilityBoundaries: changed.result.capabilityBoundaries.map((boundary) =>
+        boundary.area === "cleanup_execution"
+          ? {
+              ...boundary,
+              status: "supported",
+              detail: "Changed cleanup execution support claim for report ID coverage.",
+            }
+          : boundary
+      ),
+    };
+
+    expect(buildWalletReportId(changed)).not.toBe(buildWalletReportId(base));
+  });
 });

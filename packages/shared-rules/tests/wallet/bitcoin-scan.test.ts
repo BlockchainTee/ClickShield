@@ -206,12 +206,101 @@ describe("Layer 4 Phase 4E Bitcoin scan foundation", () => {
   });
 
   it("coerces unsupported full scan requests to truthful basic scope", () => {
-    const coerced = evaluateBitcoinWalletScan(createInput({ scanMode: "full" }));
-    const basic = evaluateBitcoinWalletScan(createInput({ scanMode: "basic" }));
+    const coerced = evaluateBitcoinWalletScan(
+      createInput({
+        scanMode: "full",
+        addresses: [
+          {
+            address: buildBitcoinAddress(71),
+            addressType: "segwit",
+            role: "receive",
+            receiveCount: 4,
+            reuseCount: 3,
+            exposedPublicly: true,
+            balanceSats: "300000",
+          },
+        ],
+        utxos: [
+          {
+            txid: "7".repeat(64),
+            vout: 0,
+            address: buildBitcoinAddress(71),
+            valueSats: "300000",
+          },
+        ],
+        hygieneRecords: [
+          {
+            issueType: "poor_hygiene",
+            riskLevel: "medium",
+            note: "Legacy receive address remains in routine use.",
+          },
+        ],
+      })
+    );
+    const basic = evaluateBitcoinWalletScan(
+      createInput({
+        scanMode: "basic",
+        addresses: [
+          {
+            address: buildBitcoinAddress(71),
+            addressType: "segwit",
+            role: "receive",
+            receiveCount: 4,
+            reuseCount: 3,
+            exposedPublicly: true,
+            balanceSats: "300000",
+          },
+        ],
+        utxos: [
+          {
+            txid: "7".repeat(64),
+            vout: 0,
+            address: buildBitcoinAddress(71),
+            valueSats: "300000",
+          },
+        ],
+        hygieneRecords: [
+          {
+            issueType: "poor_hygiene",
+            riskLevel: "medium",
+            note: "Legacy receive address remains in routine use.",
+          },
+        ],
+      })
+    );
 
     expect(coerced.summary.scanMode).toBe("basic");
     expect(coerced.report.summary.scanMode).toBe("basic");
     expect(coerced.report.request.scanMode).toBe("basic");
+    expect(coerced.report.request).toEqual(basic.report.request);
+    expect(coerced.report.result).toEqual(basic.report.result);
+    expect(coerced.report.summary).toEqual(basic.report.summary);
+    expect(coerced.report.cleanupExecution).toBeNull();
+    expect(coerced.report.result.capabilityBoundaries).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          area: "cleanup_plan",
+          capabilityKey: "deterministic_bitcoin_guidance",
+          status: "supported",
+        }),
+        expect.objectContaining({
+          area: "cleanup_execution",
+          capabilityKey: "bitcoin_cleanup_execution",
+          status: "not_supported",
+        }),
+      ])
+    );
+    expect(
+      coerced.report.result.cleanupPlan?.actions.every(
+        (action) =>
+          action.supportStatus === "partial" &&
+          action.executionMode === "manual" &&
+          action.executionType === "manual_review" &&
+          action.status === "planned" &&
+          action.kind !== "revoke_authorization" &&
+          action.supportDetail.includes("does not construct transactions")
+      )
+    ).toBe(true);
     expect(coerced.report.reportId).toBe(basic.report.reportId);
   });
 
