@@ -18,6 +18,7 @@ import type {
   SolanaWalletScanEvaluation,
   SolanaWalletSignals,
 } from "./types.js";
+import { enforceWalletScanMode } from "../scan-mode.js";
 
 function buildCapabilityBoundaries(): readonly WalletCapabilityBoundary[] {
   return [
@@ -116,6 +117,7 @@ export function assembleSolanaWalletEvaluation(input: {
   const normalizedRequest: WalletScanRequest = {
     ...input.request,
     walletAddress: input.normalizedSnapshot.walletAddress,
+    scanMode: enforceWalletScanMode("solana", input.request.scanMode),
   };
   const normalizedSnapshotContract: WalletScanSnapshot = {
     ...input.snapshot,

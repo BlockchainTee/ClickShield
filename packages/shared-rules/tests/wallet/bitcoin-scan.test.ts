@@ -85,10 +85,12 @@ function createInput(overrides?: {
   readonly requestWalletChain?: WalletScanRequest["walletChain"];
   readonly snapshotWalletChain?: WalletScanSnapshot["walletChain"];
   readonly sections?: readonly WalletSnapshotSection[];
+  readonly scanMode?: WalletScanRequest["scanMode"];
 }): BitcoinWalletScanEvaluationInput {
   const request = {
     ...createRequest(),
     walletChain: overrides?.requestWalletChain ?? "bitcoin",
+    scanMode: overrides?.scanMode ?? "basic",
   };
 
   return {
@@ -117,6 +119,16 @@ function listFindingCodes(
 }
 
 describe("Layer 4 Phase 4E Bitcoin scan foundation", () => {
+  it("coerces unsupported full scan requests to truthful basic scope", () => {
+    const coerced = evaluateBitcoinWalletScan(createInput({ scanMode: "full" }));
+    const basic = evaluateBitcoinWalletScan(createInput({ scanMode: "basic" }));
+
+    expect(coerced.summary.scanMode).toBe("basic");
+    expect(coerced.report.summary.scanMode).toBe("basic");
+    expect(coerced.report.request.scanMode).toBe("basic");
+    expect(coerced.report.reportId).toBe(basic.report.reportId);
+  });
+
   it("rejects non-Bitcoin request chain input before report assembly", () => {
     expect(() =>
       evaluateBitcoinWalletScan(

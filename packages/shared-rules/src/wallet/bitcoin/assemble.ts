@@ -18,6 +18,7 @@ import type {
   BitcoinWalletSignals,
   NormalizedBitcoinWalletSnapshot,
 } from "./types.js";
+import { enforceWalletScanMode } from "../scan-mode.js";
 
 function buildCapabilityBoundaries(): readonly WalletCapabilityBoundary[] {
   return [
@@ -117,6 +118,7 @@ export function assembleBitcoinWalletEvaluation(input: {
     ...input.request,
     walletChain: "bitcoin",
     walletAddress: input.normalizedSnapshot.walletAddress,
+    scanMode: enforceWalletScanMode("bitcoin", input.request.scanMode),
   };
   const normalizedSnapshotContract: WalletScanSnapshot = {
     ...input.snapshot,

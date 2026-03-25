@@ -57,13 +57,15 @@ function createSections(): readonly WalletSnapshotSection[] {
   ];
 }
 
-function createRequest(): WalletScanRequest {
+function createRequest(
+  scanMode: WalletScanRequest["scanMode"] = "basic"
+): WalletScanRequest {
   return {
     requestId: "request_sol_phase4d",
     walletChain: "solana",
     walletAddress: WALLET_ADDRESS,
     networkId: "mainnet-beta",
-    scanMode: "full",
+    scanMode,
     requestedAt: CAPTURED_AT,
     metadata: {
       source: "test",
@@ -91,8 +93,9 @@ function createInput(overrides?: {
   readonly authorityAssignments?: readonly SolanaAuthorityAssignmentInput[];
   readonly connections?: readonly SolanaConnectionRecordInput[];
   readonly programExposures?: readonly SolanaProgramExposureInput[];
+  readonly scanMode?: WalletScanRequest["scanMode"];
 }): SolanaWalletScanEvaluationInput {
-  const request = createRequest();
+  const request = createRequest(overrides?.scanMode);
 
   return {
     request,
@@ -117,6 +120,16 @@ function listFindingCodes(
 }
 
 describe("Layer 4 Phase 4D Solana scan foundation", () => {
+  it("coerces unsupported full scan requests to truthful basic scope", () => {
+    const coerced = evaluateSolanaWalletScan(createInput({ scanMode: "full" }));
+    const basic = evaluateSolanaWalletScan(createInput({ scanMode: "basic" }));
+
+    expect(coerced.summary.scanMode).toBe("basic");
+    expect(coerced.report.summary.scanMode).toBe("basic");
+    expect(coerced.report.request.scanMode).toBe("basic");
+    expect(coerced.report.reportId).toBe(basic.report.reportId);
+  });
+
   it("returns a clean result for a safe Solana wallet snapshot", () => {
     const evaluation = evaluateSolanaWalletScan(
       createInput({

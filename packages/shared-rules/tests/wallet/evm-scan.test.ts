@@ -54,13 +54,15 @@ function createSections(): readonly WalletSnapshotSection[] {
   ];
 }
 
-function createRequest(): WalletScanRequest {
+function createRequest(
+  scanMode: WalletScanRequest["scanMode"] = "full"
+): WalletScanRequest {
   return {
     requestId: "request_evm_phase4b",
     walletChain: "evm",
     walletAddress: WALLET_ADDRESS,
     networkId: "1",
-    scanMode: "full",
+    scanMode,
     requestedAt: "2026-03-23T12:00:00.000Z",
     metadata: {
       source: "test",
@@ -87,8 +89,9 @@ function createInput(overrides?: {
   readonly approvals?: readonly EvmApprovalRecordInput[];
   readonly spenders?: readonly EvmSpenderRiskInput[];
   readonly contractExposures?: readonly EvmContractExposureInput[];
+  readonly scanMode?: WalletScanRequest["scanMode"];
 }): EvmWalletScanEvaluationInput {
-  const request = createRequest();
+  const request = createRequest(overrides?.scanMode);
 
   return {
     request,
@@ -112,6 +115,16 @@ function listFindingCodes(
 }
 
 describe("Layer 4 Phase 4B EVM scan foundation", () => {
+  it("preserves both supported EVM scan modes in the final report", () => {
+    const fullEvaluation = evaluateEvmWalletScan(createInput({ scanMode: "full" }));
+    const basicEvaluation = evaluateEvmWalletScan(createInput({ scanMode: "basic" }));
+
+    expect(fullEvaluation.summary.scanMode).toBe("full");
+    expect(fullEvaluation.report.request.scanMode).toBe("full");
+    expect(basicEvaluation.summary.scanMode).toBe("basic");
+    expect(basicEvaluation.report.request.scanMode).toBe("basic");
+  });
+
   it("returns a clean result for a safe wallet snapshot", () => {
     const evaluation = evaluateEvmWalletScan(
       createInput({

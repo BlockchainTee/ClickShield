@@ -1383,6 +1383,403 @@ interface EvmWalletScanEvaluation {
 declare function evaluateEvmWalletScan(input: EvmWalletScanEvaluationInput): EvmWalletScanEvaluation;
 
 /**
+ * Authority kinds that can be represented in a hydrated Solana wallet snapshot.
+ */
+type SolanaAuthorityType = "account_owner" | "close_authority" | "freeze_authority" | "mint_authority" | "stake_staker" | "stake_withdrawer" | "upgrade_authority" | "other";
+/**
+ * Permission breadth labels accepted for Solana connection records.
+ */
+type SolanaPermissionLevel = "limited" | "broad";
+/**
+ * Raw token account exposure supplied to the Phase 4D Solana scanner.
+ */
+interface SolanaTokenAccountInput {
+    readonly tokenAccountAddress: string;
+    readonly mintAddress: string;
+    readonly ownerAddress?: string | null;
+    readonly balanceLamports?: string | null;
+    readonly delegateAddress?: string | null;
+    readonly delegateAmount?: string | null;
+    readonly delegateRiskLevel?: RiskLevel | null;
+    readonly delegateFlags?: readonly string[];
+    readonly delegateLabel?: string | null;
+    readonly closeAuthorityAddress?: string | null;
+    readonly permanentDelegateAddress?: string | null;
+    readonly sourceSectionId?: string | null;
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Raw authority assignment supplied to the Phase 4D Solana scanner.
+ */
+interface SolanaAuthorityAssignmentInput {
+    readonly subjectAddress: string;
+    readonly authorityAddress: string;
+    readonly authorityType: SolanaAuthorityType;
+    readonly programAddress?: string | null;
+    readonly riskLevel?: RiskLevel | null;
+    readonly flags?: readonly string[];
+    readonly label?: string | null;
+    readonly sourceSectionId?: string | null;
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Raw wallet connection or permission record supplied to the Phase 4D Solana scanner.
+ */
+interface SolanaConnectionRecordInput {
+    readonly connectionId?: string | null;
+    readonly appName?: string | null;
+    readonly origin?: string | null;
+    readonly permissions?: readonly string[];
+    readonly permissionLevel?: SolanaPermissionLevel | null;
+    readonly programAddresses?: readonly string[];
+    readonly riskLevel?: RiskLevel | null;
+    readonly flags?: readonly string[];
+    readonly connectedAt?: string | null;
+    readonly lastUsedAt?: string | null;
+    readonly sourceSectionId?: string | null;
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Raw risky-program summary supplied to the Phase 4D Solana scanner.
+ */
+interface SolanaProgramExposureInput {
+    readonly programAddress: string;
+    readonly label?: string | null;
+    readonly riskLevel?: RiskLevel | null;
+    readonly flags?: readonly string[];
+    readonly interactionCount?: number | null;
+    readonly lastInteractedAt?: string | null;
+    readonly sourceSectionId?: string | null;
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Fully hydrated Solana wallet snapshot payload evaluated by Phase 4D.
+ */
+interface SolanaWalletHydratedSnapshot {
+    readonly tokenAccounts: readonly SolanaTokenAccountInput[];
+    readonly authorityAssignments?: readonly SolanaAuthorityAssignmentInput[];
+    readonly connections?: readonly SolanaConnectionRecordInput[];
+    readonly programExposures?: readonly SolanaProgramExposureInput[];
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Normalized Solana token account state used during deterministic evaluation.
+ */
+interface NormalizedSolanaTokenAccountState {
+    readonly resourceId: string;
+    readonly tokenAccountAddress: string;
+    readonly mintAddress: string;
+    readonly ownerAddress: string | null;
+    readonly balanceLamports: string | null;
+    readonly delegateAddress: string | null;
+    readonly delegateAmount: string | null;
+    readonly delegateRiskLevel: RiskLevel | null;
+    readonly delegateFlags: readonly string[];
+    readonly delegateLabel: string | null;
+    readonly hasDelegate: boolean;
+    readonly isRiskyDelegate: boolean;
+    readonly closeAuthorityAddress: string | null;
+    readonly permanentDelegateAddress: string | null;
+    readonly sourceSectionId: string | null;
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Normalized authority assignment used during deterministic evaluation.
+ */
+interface NormalizedSolanaAuthorityAssignment {
+    readonly resourceId: string;
+    readonly subjectAddress: string;
+    readonly authorityAddress: string;
+    readonly authorityType: SolanaAuthorityType;
+    readonly programAddress: string | null;
+    readonly riskLevel: RiskLevel | null;
+    readonly flags: readonly string[];
+    readonly label: string | null;
+    readonly isRisky: boolean;
+    readonly sourceSectionId: string | null;
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Normalized Solana connection record used during deterministic evaluation.
+ */
+interface NormalizedSolanaConnectionRecord {
+    readonly resourceId: string;
+    readonly connectionId: string | null;
+    readonly appName: string | null;
+    readonly origin: string | null;
+    readonly permissions: readonly string[];
+    readonly permissionLevel: SolanaPermissionLevel;
+    readonly programAddresses: readonly string[];
+    readonly riskLevel: RiskLevel | null;
+    readonly flags: readonly string[];
+    readonly connectedAt: string | null;
+    readonly lastUsedAt: string | null;
+    readonly connectedAgeDays: number | null;
+    readonly lastUsedAgeDays: number | null;
+    readonly isBroadPermission: boolean;
+    readonly isRisky: boolean;
+    readonly isStaleRisky: boolean;
+    readonly sourceSectionId: string | null;
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Normalized Solana program exposure used during deterministic evaluation.
+ */
+interface NormalizedSolanaProgramExposure {
+    readonly resourceId: string;
+    readonly programAddress: string;
+    readonly label: string | null;
+    readonly riskLevel: RiskLevel | null;
+    readonly flags: readonly string[];
+    readonly interactionCount: number | null;
+    readonly lastInteractedAt: string | null;
+    readonly isSuspicious: boolean;
+    readonly sourceSectionId: string | null;
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Stable normalized Solana snapshot shape used across Phase 4D evaluation steps.
+ */
+interface NormalizedSolanaWalletSnapshot {
+    readonly walletAddress: string;
+    readonly networkId: string;
+    readonly capturedAt: string;
+    readonly tokenAccounts: readonly NormalizedSolanaTokenAccountState[];
+    readonly authorityAssignments: readonly NormalizedSolanaAuthorityAssignment[];
+    readonly connections: readonly NormalizedSolanaConnectionRecord[];
+    readonly programExposures: readonly NormalizedSolanaProgramExposure[];
+}
+/**
+ * Pure Solana wallet signals derived from a normalized snapshot.
+ */
+interface SolanaWalletSignals {
+    readonly tokenAccountCount: number;
+    readonly delegateCount: number;
+    readonly delegateIds: readonly string[];
+    readonly riskyDelegateCount: number;
+    readonly riskyDelegateIds: readonly string[];
+    readonly authorityAssignmentCount: number;
+    readonly riskyAuthorityAssignmentCount: number;
+    readonly riskyAuthorityAssignmentIds: readonly string[];
+    readonly broadPermissionCount: number;
+    readonly broadPermissionConnectionIds: readonly string[];
+    readonly riskyConnectionCount: number;
+    readonly riskyConnectionIds: readonly string[];
+    readonly staleRiskyConnectionCount: number;
+    readonly staleRiskyConnectionIds: readonly string[];
+    readonly suspiciousProgramCount: number;
+    readonly suspiciousProgramIds: readonly string[];
+}
+/**
+ * High-level input accepted by the exported Phase 4D Solana evaluator.
+ */
+interface SolanaWalletScanEvaluationInput {
+    readonly request: WalletScanRequest;
+    readonly snapshot: WalletScanSnapshot;
+    readonly hydratedSnapshot: SolanaWalletHydratedSnapshot;
+    readonly evaluatedAt: string;
+    readonly reportVersion?: WalletReport["reportVersion"];
+}
+/**
+ * Final deterministic Phase 4D evaluation surface for a Solana wallet snapshot.
+ */
+interface SolanaWalletScanEvaluation {
+    readonly score: number;
+    readonly riskLevel: RiskLevel;
+    readonly normalizedSnapshot: NormalizedSolanaWalletSnapshot;
+    readonly signals: SolanaWalletSignals;
+    readonly result: WalletScanResult;
+    readonly summary: WalletSummary;
+    readonly report: WalletReport;
+}
+
+/**
+ * Evaluates a fully hydrated Solana wallet snapshot into deterministic Phase 4D report output.
+ */
+declare function evaluateSolanaWalletScan(input: SolanaWalletScanEvaluationInput): SolanaWalletScanEvaluation;
+
+/**
+ * Address categories accepted in the hydrated Bitcoin wallet snapshot.
+ */
+type BitcoinAddressType = "legacy" | "nested_segwit" | "segwit" | "taproot" | "script" | "other";
+/**
+ * Wallet address roles accepted in the hydrated Bitcoin wallet snapshot.
+ */
+type BitcoinAddressRole = "receive" | "change" | "mixed" | "external" | "unknown";
+/**
+ * Hygiene issue categories accepted in the hydrated Bitcoin wallet snapshot.
+ */
+type BitcoinHygieneIssueType = "privacy_exposure" | "poor_hygiene" | "repeated_exposed_receive";
+/**
+ * Fragmentation levels emitted by the deterministic Bitcoin signal layer.
+ */
+type BitcoinFragmentationLevel = "low" | "medium" | "high";
+/**
+ * Concentration levels emitted by the deterministic Bitcoin signal layer.
+ */
+type BitcoinConcentrationLevel = "low" | "medium" | "high";
+/**
+ * Raw Bitcoin address summary supplied to the Phase 4E scanner.
+ */
+interface BitcoinAddressSummaryInput {
+    readonly address: string;
+    readonly addressType?: BitcoinAddressType | null;
+    readonly role?: BitcoinAddressRole | null;
+    readonly receivedSats?: string | null;
+    readonly spentSats?: string | null;
+    readonly balanceSats?: string | null;
+    readonly receiveCount?: number | null;
+    readonly spendCount?: number | null;
+    readonly reuseCount?: number | null;
+    readonly exposedPublicly?: boolean | null;
+    readonly lastReceivedAt?: string | null;
+    readonly lastSpentAt?: string | null;
+    readonly sourceSectionId?: string | null;
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Raw Bitcoin UTXO summary supplied to the Phase 4E scanner.
+ */
+interface BitcoinUtxoSummaryInput {
+    readonly txid: string;
+    readonly vout: number;
+    readonly address: string;
+    readonly valueSats: string;
+    readonly confirmations?: number | null;
+    readonly sourceSectionId?: string | null;
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Raw hygiene or privacy observation supplied to the Phase 4E scanner.
+ */
+interface BitcoinHygieneRecordInput {
+    readonly issueType: BitcoinHygieneIssueType;
+    readonly address?: string | null;
+    readonly count?: number | null;
+    readonly riskLevel?: RiskLevel | null;
+    readonly note?: string | null;
+    readonly sourceSectionId?: string | null;
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Fully hydrated Bitcoin snapshot payload evaluated by Phase 4E.
+ */
+interface BitcoinWalletHydratedSnapshot {
+    readonly addresses: readonly BitcoinAddressSummaryInput[];
+    readonly utxos: readonly BitcoinUtxoSummaryInput[];
+    readonly hygieneRecords?: readonly BitcoinHygieneRecordInput[];
+    readonly metadata?: Readonly<Record<string, string>>;
+}
+/**
+ * Normalized Bitcoin address summary used during deterministic evaluation.
+ */
+interface NormalizedBitcoinAddressSummary {
+    readonly resourceId: string;
+    readonly address: string;
+    readonly addressType: BitcoinAddressType;
+    readonly role: BitcoinAddressRole;
+    readonly receivedSats: string | null;
+    readonly spentSats: string | null;
+    readonly balanceSats: string | null;
+    readonly receiveCount: number;
+    readonly spendCount: number;
+    readonly reuseCount: number;
+    readonly exposedPublicly: boolean;
+    readonly hasReuse: boolean;
+    readonly lastReceivedAt: string | null;
+    readonly lastSpentAt: string | null;
+    readonly sourceSectionId: string | null;
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Normalized Bitcoin UTXO summary used during deterministic evaluation.
+ */
+interface NormalizedBitcoinUtxoSummary {
+    readonly resourceId: string;
+    readonly txid: string;
+    readonly vout: number;
+    readonly address: string;
+    readonly valueSats: string;
+    readonly confirmations: number | null;
+    readonly sourceSectionId: string | null;
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Normalized hygiene observation used during deterministic evaluation.
+ */
+interface NormalizedBitcoinHygieneRecord {
+    readonly resourceId: string;
+    readonly issueType: BitcoinHygieneIssueType;
+    readonly address: string | null;
+    readonly count: number;
+    readonly riskLevel: RiskLevel;
+    readonly note: string | null;
+    readonly sourceSectionId: string | null;
+    readonly metadata: Readonly<Record<string, string>>;
+}
+/**
+ * Stable normalized Bitcoin snapshot shape used across Phase 4E evaluation steps.
+ */
+interface NormalizedBitcoinWalletSnapshot {
+    readonly walletAddress: string;
+    readonly networkId: string;
+    readonly capturedAt: string;
+    readonly addresses: readonly NormalizedBitcoinAddressSummary[];
+    readonly utxos: readonly NormalizedBitcoinUtxoSummary[];
+    readonly hygieneRecords: readonly NormalizedBitcoinHygieneRecord[];
+}
+/**
+ * Pure Bitcoin wallet signals derived from a normalized snapshot.
+ */
+interface BitcoinWalletSignals {
+    readonly addressCount: number;
+    readonly reusedAddressCount: number;
+    readonly reusedAddressIds: readonly string[];
+    readonly publiclyExposedAddressCount: number;
+    readonly publiclyExposedAddressIds: readonly string[];
+    readonly privacyExposureCount: number;
+    readonly privacyExposureIds: readonly string[];
+    readonly totalUtxoCount: number;
+    readonly smallUtxoCount: number;
+    readonly fragmentedUtxoIds: readonly string[];
+    readonly fragmentationLevel: BitcoinFragmentationLevel;
+    readonly concentrationLevel: BitcoinConcentrationLevel;
+    readonly largestUtxoShareBasisPoints: number;
+    readonly largestUtxoId: string | null;
+    readonly poorHygieneCount: number;
+    readonly poorHygieneIds: readonly string[];
+    readonly exposedReceivingPatternCount: number;
+    readonly exposedReceivingPatternIds: readonly string[];
+}
+/**
+ * High-level input accepted by the exported Phase 4E Bitcoin evaluator.
+ */
+interface BitcoinWalletScanEvaluationInput {
+    readonly request: WalletScanRequest;
+    readonly snapshot: WalletScanSnapshot;
+    readonly hydratedSnapshot: BitcoinWalletHydratedSnapshot;
+    readonly evaluatedAt: string;
+    readonly reportVersion?: WalletReport["reportVersion"];
+}
+/**
+ * Final deterministic Phase 4E evaluation surface for a Bitcoin wallet snapshot.
+ */
+interface BitcoinWalletScanEvaluation {
+    readonly score: number;
+    readonly riskLevel: RiskLevel;
+    readonly normalizedSnapshot: NormalizedBitcoinWalletSnapshot;
+    readonly signals: BitcoinWalletSignals;
+    readonly result: WalletScanResult;
+    readonly summary: WalletSummary;
+    readonly report: WalletReport;
+}
+
+/**
+ * Evaluates a fully hydrated Bitcoin wallet snapshot into deterministic Phase 4E report output.
+ */
+declare function evaluateBitcoinWalletScan(input: BitcoinWalletScanEvaluationInput): BitcoinWalletScanEvaluation;
+
+/**
  * Supported revoke methods for deterministic EVM cleanup preparation.
  */
 type EvmCleanupRevocationMethod = "erc20_approve_zero" | "erc721_approve_zero" | "erc721_set_approval_for_all_false" | "erc1155_set_approval_for_all_false";
@@ -1705,4 +2102,4 @@ declare function interpretEvmCleanupExecutionResult(input: {
  */
 declare function reconcileEvmCleanupPlanResults(plan: EvmWalletCleanupPlan, results: readonly EvmCleanupActionExecutionResult[], rescanSnapshot?: EvmCleanupRescanSnapshot | null): EvmCleanupReconciliationSummary;
 
-export { type ApprovalAmountKind, type ApprovalDirection, type ApprovalScope, type BuildContextOptions, type ChainFamily, type CompileDomainIntelSnapshotOptions, type CompiledDomainAllowlistItem, type CompiledDomainAllowlistsSection, type CompiledDomainIntelSnapshot, type CompiledMaliciousDomainItem, type CompiledMaliciousDomainsSection, type DecodedTransactionAction, type DomainAllowlistFeedItem, type DomainAllowlistsSection, type DomainContext, type DomainIntelBundle, type DomainIntelCompileFailure, type DomainIntelCompileResult, type DomainIntelCompileSuccess, type DomainIntelSectionMetadata, type DomainIntelSectionName, type DomainIntelSectionValidationReport, type DomainIntelSignatureEnvelope, type DomainIntelValidationOptions, type DomainIntelValidationReport, type DomainLookupDisposition, type DomainLookupResult, type EngineResult, type EvmApprovalAmountKind, type EvmApprovalKind, type EvmApprovalRecordInput, type EvmCleanupAction, type EvmCleanupActionExecutionResult, type EvmCleanupBatchPlan, type EvmCleanupEligibility, type EvmCleanupExecutionRequest, type EvmCleanupExecutionStatus, type EvmCleanupPackaging, type EvmCleanupReconciliationItem, type EvmCleanupReconciliationSummary, type EvmCleanupRescanSnapshot, type EvmCleanupRescanStatus, type EvmCleanupRevocationMethod, type EvmCleanupSelectionKind, type EvmContractExposureInput, type EvmContractExposureType, type EvmCounterpartyDisposition, type EvmPreparedCleanupArgument, type EvmPreparedCleanupTransaction, type EvmRevocableApprovalTarget, type EvmTokenStandard, type EvmWalletCleanupPlan, type EvmWalletHydratedSnapshot, type EvmWalletScanEvaluation, type EvmWalletScanEvaluationInput, type EvmWalletSignals, type IntelValidationIssue, KNOWN_PROTOCOL_DOMAINS, type Layer2SectionState, type Layer3RpcMethod, type MaliciousDomainFeedItem, type MaliciousDomainsSection, type NavigationContext, type NavigationInput, type NormalizedEvmApprovalState, type NormalizedEvmContractExposure, type NormalizedEvmSpenderRisk, type NormalizedEvmWalletSnapshot, type NormalizedTransactionContext, type NormalizedTypedData, PHISHING_CODES, type PermitKind, type PhishingCode, RULE_SET_VERSION, type RawSignatureRequest, type RawTransactionRequest, type RawTypedDataPayload, type ReasonMessage, type RiskLevel, type RuleOutcome, SUSPICIOUS_TLDS, type SignatureInput, type SignatureRpcMethod, TRANSACTION_SELECTOR_REGISTRY, type TransactionActionType, type TransactionBatchContext, type TransactionCounterpartyContext, type TransactionEvaluationResult, type TransactionEventKind, type TransactionExplanation, type TransactionInput, type TransactionIntelContext, type TransactionIntelDisposition, type TransactionIntelVersions, type Layer2SectionState$1 as TransactionLayer2SectionState, type Layer3RpcMethod as TransactionLayer3RpcMethod, type TransactionMeta, type TransactionOverrideLevel, type TransactionParamValue, type TransactionProviderContext, type TransactionRpcMethod, type TransactionSelectorDefinition, type TransactionSignals, type TransactionVerdict, type TransactionVerdictStatus, type TypedDataField, type TypedDataNormalizationState, type TypedDataTypes, type TypedDataValue, type Verdict, type WalletCapabilityArea, type WalletCapabilityBoundary, type WalletCapabilityStatus, type WalletChain, type WalletCleanupAction, type WalletCleanupActionExecutionStatus, type WalletCleanupActionKind, type WalletCleanupActionResult, type WalletCleanupActionStatus, type WalletCleanupExecutionMode, type WalletCleanupExecutionResult, type WalletCleanupExecutionStatus, type WalletCleanupExecutionType, type WalletCleanupPlan, type WalletCleanupTarget, type WalletCleanupTargetKind, type WalletEvidenceRef, type WalletExposureCategory, type WalletFinding, type WalletFindingStatus, type WalletProviderMetadata, type WalletReport, type WalletReportIdInput, type WalletRiskFactor, type WalletScanMode, type WalletScanRequest, type WalletScanResult, type WalletScanSnapshot, type WalletScoreBreakdown, type WalletScoreComponent, type WalletSnapshotSection, type WalletSummary, buildEvmCleanupPlan, buildNavigationContext, buildTransactionExplanation, buildTransactionSignals, buildWalletReportId, classifyPermitKind, classifyTransactionSelector, compileDomainIntelSnapshot, containsAirdropKeyword, containsMintKeyword, containsWalletConnectPattern, contextToInput, decodeTransactionCalldata, deconfuseHostname, domainSimilarityScore, evaluate, evaluateEvmWalletScan, evaluateTransaction, extractHostname, extractRegistrableDomain, extractTld, getEvmCleanupEligibility, getReasonMessage, getTransactionSelectorDefinition, getVerdictTitle, hasHomoglyphs, hasSuspiciousTld, interpretEvmCleanupExecutionResult, isIpHost, isKnownMaliciousDomain, isNewDomain, isValidUrl, listTransactionSelectors, looksLikeProtocolImpersonation, matchedLureKeywords, normalizeTransactionRequest, normalizeTypedData, normalizeTypedDataRequest, normalizeUrl, prepareEvmCleanupExecutionRequest, prepareEvmCleanupTransaction, reconcileEvmCleanupPlanResults, resolveDomainIntel, riskBadgeLabel, validateDomainIntelBundle };
+export { type ApprovalAmountKind, type ApprovalDirection, type ApprovalScope, type BitcoinAddressRole, type BitcoinAddressSummaryInput, type BitcoinAddressType, type BitcoinConcentrationLevel, type BitcoinFragmentationLevel, type BitcoinHygieneIssueType, type BitcoinHygieneRecordInput, type BitcoinUtxoSummaryInput, type BitcoinWalletHydratedSnapshot, type BitcoinWalletScanEvaluation, type BitcoinWalletScanEvaluationInput, type BitcoinWalletSignals, type BuildContextOptions, type ChainFamily, type CompileDomainIntelSnapshotOptions, type CompiledDomainAllowlistItem, type CompiledDomainAllowlistsSection, type CompiledDomainIntelSnapshot, type CompiledMaliciousDomainItem, type CompiledMaliciousDomainsSection, type DecodedTransactionAction, type DomainAllowlistFeedItem, type DomainAllowlistsSection, type DomainContext, type DomainIntelBundle, type DomainIntelCompileFailure, type DomainIntelCompileResult, type DomainIntelCompileSuccess, type DomainIntelSectionMetadata, type DomainIntelSectionName, type DomainIntelSectionValidationReport, type DomainIntelSignatureEnvelope, type DomainIntelValidationOptions, type DomainIntelValidationReport, type DomainLookupDisposition, type DomainLookupResult, type EngineResult, type EvmApprovalAmountKind, type EvmApprovalKind, type EvmApprovalRecordInput, type EvmCleanupAction, type EvmCleanupActionExecutionResult, type EvmCleanupBatchPlan, type EvmCleanupEligibility, type EvmCleanupExecutionRequest, type EvmCleanupExecutionStatus, type EvmCleanupPackaging, type EvmCleanupReconciliationItem, type EvmCleanupReconciliationSummary, type EvmCleanupRescanSnapshot, type EvmCleanupRescanStatus, type EvmCleanupRevocationMethod, type EvmCleanupSelectionKind, type EvmContractExposureInput, type EvmContractExposureType, type EvmCounterpartyDisposition, type EvmPreparedCleanupArgument, type EvmPreparedCleanupTransaction, type EvmRevocableApprovalTarget, type EvmTokenStandard, type EvmWalletCleanupPlan, type EvmWalletHydratedSnapshot, type EvmWalletScanEvaluation, type EvmWalletScanEvaluationInput, type EvmWalletSignals, type IntelValidationIssue, KNOWN_PROTOCOL_DOMAINS, type Layer2SectionState, type Layer3RpcMethod, type MaliciousDomainFeedItem, type MaliciousDomainsSection, type NavigationContext, type NavigationInput, type NormalizedBitcoinAddressSummary, type NormalizedBitcoinHygieneRecord, type NormalizedBitcoinUtxoSummary, type NormalizedBitcoinWalletSnapshot, type NormalizedEvmApprovalState, type NormalizedEvmContractExposure, type NormalizedEvmSpenderRisk, type NormalizedEvmWalletSnapshot, type NormalizedSolanaAuthorityAssignment, type NormalizedSolanaConnectionRecord, type NormalizedSolanaProgramExposure, type NormalizedSolanaTokenAccountState, type NormalizedSolanaWalletSnapshot, type NormalizedTransactionContext, type NormalizedTypedData, PHISHING_CODES, type PermitKind, type PhishingCode, RULE_SET_VERSION, type RawSignatureRequest, type RawTransactionRequest, type RawTypedDataPayload, type ReasonMessage, type RiskLevel, type RuleOutcome, SUSPICIOUS_TLDS, type SignatureInput, type SignatureRpcMethod, type SolanaAuthorityAssignmentInput, type SolanaAuthorityType, type SolanaConnectionRecordInput, type SolanaPermissionLevel, type SolanaProgramExposureInput, type SolanaTokenAccountInput, type SolanaWalletHydratedSnapshot, type SolanaWalletScanEvaluation, type SolanaWalletScanEvaluationInput, type SolanaWalletSignals, TRANSACTION_SELECTOR_REGISTRY, type TransactionActionType, type TransactionBatchContext, type TransactionCounterpartyContext, type TransactionEvaluationResult, type TransactionEventKind, type TransactionExplanation, type TransactionInput, type TransactionIntelContext, type TransactionIntelDisposition, type TransactionIntelVersions, type Layer2SectionState$1 as TransactionLayer2SectionState, type Layer3RpcMethod as TransactionLayer3RpcMethod, type TransactionMeta, type TransactionOverrideLevel, type TransactionParamValue, type TransactionProviderContext, type TransactionRpcMethod, type TransactionSelectorDefinition, type TransactionSignals, type TransactionVerdict, type TransactionVerdictStatus, type TypedDataField, type TypedDataNormalizationState, type TypedDataTypes, type TypedDataValue, type Verdict, type WalletCapabilityArea, type WalletCapabilityBoundary, type WalletCapabilityStatus, type WalletChain, type WalletCleanupAction, type WalletCleanupActionExecutionStatus, type WalletCleanupActionKind, type WalletCleanupActionResult, type WalletCleanupActionStatus, type WalletCleanupExecutionMode, type WalletCleanupExecutionResult, type WalletCleanupExecutionStatus, type WalletCleanupExecutionType, type WalletCleanupPlan, type WalletCleanupTarget, type WalletCleanupTargetKind, type WalletEvidenceRef, type WalletExposureCategory, type WalletFinding, type WalletFindingStatus, type WalletProviderMetadata, type WalletReport, type WalletReportIdInput, type WalletRiskFactor, type WalletScanMode, type WalletScanRequest, type WalletScanResult, type WalletScanSnapshot, type WalletScoreBreakdown, type WalletScoreComponent, type WalletSnapshotSection, type WalletSummary, buildEvmCleanupPlan, buildNavigationContext, buildTransactionExplanation, buildTransactionSignals, buildWalletReportId, classifyPermitKind, classifyTransactionSelector, compileDomainIntelSnapshot, containsAirdropKeyword, containsMintKeyword, containsWalletConnectPattern, contextToInput, decodeTransactionCalldata, deconfuseHostname, domainSimilarityScore, evaluate, evaluateBitcoinWalletScan, evaluateEvmWalletScan, evaluateSolanaWalletScan, evaluateTransaction, extractHostname, extractRegistrableDomain, extractTld, getEvmCleanupEligibility, getReasonMessage, getTransactionSelectorDefinition, getVerdictTitle, hasHomoglyphs, hasSuspiciousTld, interpretEvmCleanupExecutionResult, isIpHost, isKnownMaliciousDomain, isNewDomain, isValidUrl, listTransactionSelectors, looksLikeProtocolImpersonation, matchedLureKeywords, normalizeTransactionRequest, normalizeTypedData, normalizeTypedDataRequest, normalizeUrl, prepareEvmCleanupExecutionRequest, prepareEvmCleanupTransaction, reconcileEvmCleanupPlanResults, resolveDomainIntel, riskBadgeLabel, validateDomainIntelBundle };
