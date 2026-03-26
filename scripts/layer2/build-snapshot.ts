@@ -26,6 +26,7 @@ function buildSnapshotVersion(snapshotBody: Omit<Layer2Snapshot, "version">): st
         {
           maliciousContracts: snapshotBody.maliciousContracts,
           scamSignatures: snapshotBody.scamSignatures,
+          metadata: snapshotBody.metadata,
           sectionStates: snapshotBody.sectionStates,
         } as unknown as JsonValue
       )
@@ -55,6 +56,10 @@ export function buildLayer2Snapshot(
     generatedAt: options.generatedAt,
     maliciousContracts: normalized.records,
     scamSignatures: [],
+    metadata: {
+      generatedAt: options.generatedAt,
+      sources: normalized.sources,
+    },
     sectionStates: {
       maliciousContracts: maliciousContractsState,
       scamSignatures: "missing",

@@ -35,10 +35,10 @@ export interface TransactionLayer2SnapshotValidationIssue {
  * source: "ofac"
  * confidence: "high"
  *
- * Maps to:
- * - maliciousContracts ONLY
+ * Currently populated by Layer 2 compiler into:
+ * - maliciousContracts only
  *
- * No scamSignatures from OFAC
+ * OFAC does not populate scamSignatures in the current compiler path.
  */
 /**
  * Chainabuse -> Snapshot Mapping
@@ -49,19 +49,22 @@ export interface TransactionLayer2SnapshotValidationIssue {
  * - multiple reports -> "medium"
  * - single report -> "low"
  *
- * Maps to:
- * - maliciousContracts
- * - scamSignatures
+ * Currently populated by Layer 2 compiler into:
+ * - maliciousContracts only
+ *
+ * scamSignatures may be present in validated snapshots from other producers,
+ * but the current Layer 2 compiler does not populate them from Chainabuse.
  */
 /**
- * Internal Hotfix Mapping
+ * Internal Snapshot Entries
  *
  * source: "internal"
  * confidence: "high"
  *
- * Can map to both:
- * - maliciousContracts
- * - scamSignatures
+ * This source is accepted by the validation schema for compatibility with
+ * validated snapshots, including scamSignatures when present.
+ *
+ * It is not populated by the current Layer 2 compiler path.
  */
 export interface TransactionLayer2MaliciousContract {
   readonly chain: TransactionMaliciousContractChain;
@@ -98,10 +101,18 @@ export interface TransactionLayer2Snapshot {
    */
   readonly generatedAt: string;
   readonly maliciousContracts: readonly TransactionLayer2MaliciousContractEntry[];
+  /**
+   * Currently populated by validated snapshots when available.
+   * The current Layer 2 compiler may leave this empty and mark the section
+   * state as "missing".
+   */
   readonly scamSignatures: readonly TransactionLayer2ScamSignature[];
   readonly metadata: TransactionLayer2SnapshotMetadata;
   readonly sectionStates: {
     readonly maliciousContracts: CanonicalTransactionSnapshotSectionState;
+    /**
+     * Provider treats "missing" as unavailable rather than no_match.
+     */
     readonly scamSignatures: CanonicalTransactionSnapshotSectionState;
   };
 }
@@ -129,6 +140,7 @@ export type ValidateTransactionLayer2SnapshotResult =
 export interface CanonicalTransactionIntelLookup {
   readonly eventKind: TransactionEventKind;
   readonly targetAddress: string | null;
+  readonly signatureHash: string | null;
 }
 
 export interface TrustedTransactionOriginIntel {
@@ -136,6 +148,9 @@ export interface TrustedTransactionOriginIntel {
   readonly allowlistFeedVersion: string | null;
   readonly allowlistsState: TransactionLayer2SectionState;
 }
+
+const EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT =
+  "1970-01-01T00:00:00.000Z";
 
 const ROOT_KEYS = [
   "version",
@@ -1141,4 +1156,30 @@ export function validateTransactionLayer2Snapshot(
     snapshot,
     issues,
   };
+}
+
+export function buildEmptyValidatedTransactionLayer2Snapshot(
+  generatedAt: string = EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT
+): ValidatedTransactionLayer2Snapshot {
+  const canonicalGeneratedAt = isValidUtcTimestamp(generatedAt)
+    ? generatedAt
+    : EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT;
+  const snapshotBody: Omit<TransactionLayer2Snapshot, "version"> = {
+    generatedAt: canonicalGeneratedAt,
+    maliciousContracts: [],
+    scamSignatures: [],
+    metadata: {
+      generatedAt: canonicalGeneratedAt,
+      sources: [],
+    },
+    sectionStates: {
+      maliciousContracts: "missing",
+      scamSignatures: "missing",
+    },
+  };
+
+  return deepFreeze({
+    version: buildSnapshotVersion(snapshotBody),
+    ...snapshotBody,
+  });
 }

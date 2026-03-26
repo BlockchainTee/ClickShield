@@ -217,16 +217,16 @@ describe("transaction intel provider", () => {
     expect(firstCanonicalLookup).toMatchObject({
       maliciousContract: {
         matched: false,
-        disposition: "no_match",
-        feedVersion: provider.snapshotVersion,
+        disposition: "unavailable",
+        feedVersion: null,
         sectionState: "missing",
         record: null,
       },
       scamSignature: {
         lookupFamily: "scam_signature",
         matched: false,
-        disposition: "no_match",
-        feedVersion: provider.snapshotVersion,
+        disposition: "unavailable",
+        feedVersion: null,
         sectionState: "missing",
         record: null,
       },
@@ -378,8 +378,8 @@ describe("transaction intel provider", () => {
         sectionState: "stale",
       },
       scamSignature: {
-        disposition: "no_match",
-        feedVersion: provider.snapshotVersion,
+        disposition: "unavailable",
+        feedVersion: null,
         sectionState: "missing",
         record: null,
       },

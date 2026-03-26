@@ -3,11 +3,11 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
-  buildEmptyValidatedTransactionLayer2Snapshot,
   createTransactionIntelProvider,
   resolveCanonicalTransactionIntel,
   validateTransactionLayer2Snapshot,
 } from "../../src/index.js";
+import { buildEmptyValidatedTransactionLayer2Snapshot } from "../../src/transaction/intel-snapshot.js";
 
 function serializeCanonicalJson(value: unknown): string {
   if (value === null) {

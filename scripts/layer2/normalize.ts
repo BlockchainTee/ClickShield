@@ -30,12 +30,16 @@ export interface ChainabuseRecord {
   readonly reasonCodes: readonly ["CHAINABUSE_CHECKED_REPORT"];
 }
 
+export type Layer2CompilerSource = "chainabuse" | "ofac";
+export type Layer2CanonicalConfidence = "high" | "medium" | "low";
+
 export interface Layer2MaliciousContract {
   readonly chain: "evm";
   readonly address: string;
-  readonly source: "ofac" | "chainabuse";
+  readonly source: Layer2CompilerSource;
   readonly disposition: "block" | "warn";
-  readonly confidence: number;
+  readonly confidence: Layer2CanonicalConfidence;
+  readonly reason: string;
   readonly reasonCodes: readonly string[];
 }
 
@@ -44,6 +48,10 @@ export interface Layer2Snapshot {
   readonly generatedAt: string;
   readonly maliciousContracts: readonly Layer2MaliciousContract[];
   readonly scamSignatures: readonly [];
+  readonly metadata: {
+    readonly generatedAt: string;
+    readonly sources: readonly Layer2CompilerSource[];
+  };
   readonly sectionStates: {
     readonly maliciousContracts: Layer2SectionState;
     readonly scamSignatures: "missing";
@@ -52,7 +60,28 @@ export interface Layer2Snapshot {
 
 export interface NormalizeLayer2RecordsResult {
   readonly records: readonly Layer2MaliciousContract[];
+  readonly sources: readonly Layer2CompilerSource[];
 }
+
+const SOURCE_PRECEDENCE: Readonly<Record<Layer2CompilerSource, number>> =
+  Object.freeze({
+    chainabuse: 1,
+    ofac: 2,
+  });
+
+const DISPOSITION_PRECEDENCE: Readonly<
+  Record<Layer2MaliciousContract["disposition"], number>
+> = Object.freeze({
+  warn: 1,
+  block: 2,
+});
+
+const CONFIDENCE_PRECEDENCE: Readonly<Record<Layer2CanonicalConfidence, number>> =
+  Object.freeze({
+    low: 1,
+    medium: 2,
+    high: 3,
+  });
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -134,46 +163,123 @@ export function readArray(
   return null;
 }
 
+function mapOfacRecordToCanonicalContract(
+  record: OfacRecord
+): Layer2MaliciousContract {
+  // OFAC is limited to sanctioned address/entity intelligence.
+  return {
+    chain: "evm",
+    address: record.address,
+    source: "ofac",
+    disposition: "block",
+    confidence: "high",
+    reason: "OFAC sanctions list match",
+    reasonCodes: [...record.reasonCodes],
+  };
+}
+
+function mapChainabuseConfidence(
+  record: ChainabuseRecord
+): Layer2CanonicalConfidence {
+  return record.reportCount > 1 ? "medium" : "low";
+}
+
+function mapChainabuseRecordToCanonicalContract(
+  record: ChainabuseRecord
+): Layer2MaliciousContract {
+  // Chainabuse is limited to scam/suspicious-address intelligence.
+  return {
+    chain: "evm",
+    address: record.address,
+    source: "chainabuse",
+    disposition: "warn",
+    confidence: mapChainabuseConfidence(record),
+    reason:
+      record.reportCount > 1
+        ? "Chainabuse checked reports indicate suspicious activity"
+        : "Chainabuse checked report indicates suspicious activity",
+    reasonCodes: [...record.reasonCodes],
+  };
+}
+
+function compareReasonCodes(
+  left: readonly string[],
+  right: readonly string[]
+): number {
+  return left.join("\u0000").localeCompare(right.join("\u0000"));
+}
+
+function compareMaliciousContractPrecedence(
+  left: Layer2MaliciousContract,
+  right: Layer2MaliciousContract
+): number {
+  const sourceDelta = SOURCE_PRECEDENCE[left.source] - SOURCE_PRECEDENCE[right.source];
+  if (sourceDelta !== 0) {
+    return sourceDelta;
+  }
+
+  const dispositionDelta =
+    DISPOSITION_PRECEDENCE[left.disposition] -
+    DISPOSITION_PRECEDENCE[right.disposition];
+  if (dispositionDelta !== 0) {
+    return dispositionDelta;
+  }
+
+  const confidenceDelta =
+    CONFIDENCE_PRECEDENCE[left.confidence] -
+    CONFIDENCE_PRECEDENCE[right.confidence];
+  if (confidenceDelta !== 0) {
+    return confidenceDelta;
+  }
+
+  const reasonDelta = left.reason.localeCompare(right.reason);
+  if (reasonDelta !== 0) {
+    return reasonDelta;
+  }
+
+  return compareReasonCodes(left.reasonCodes, right.reasonCodes);
+}
+
 export function normalizeLayer2Records(input: {
   readonly ofacRecords: readonly OfacRecord[];
   readonly chainabuseRecords: readonly ChainabuseRecord[];
 }): NormalizeLayer2RecordsResult {
   const ordered = new Map<string, Layer2MaliciousContract>();
+  const sources = new Set<Layer2CompilerSource>();
 
   for (const record of [...input.ofacRecords].sort((left, right) =>
     left.address.localeCompare(right.address)
   )) {
-    ordered.set(record.address, {
-      chain: "evm",
-      address: record.address,
-      source: record.source,
-      disposition: record.disposition,
-      confidence: record.confidence,
-      reasonCodes: [...record.reasonCodes],
-    });
+    const mapped = mapOfacRecordToCanonicalContract(record);
+    sources.add(mapped.source);
+    const current = ordered.get(mapped.address);
+    if (
+      current === undefined ||
+      compareMaliciousContractPrecedence(mapped, current) > 0
+    ) {
+      ordered.set(mapped.address, mapped);
+    }
   }
 
   for (const record of [...input.chainabuseRecords].sort((left, right) =>
     left.address.localeCompare(right.address)
   )) {
-    if (ordered.has(record.address)) {
-      continue;
+    const mapped = mapChainabuseRecordToCanonicalContract(record);
+    sources.add(mapped.source);
+    const current = ordered.get(mapped.address);
+    if (
+      current === undefined ||
+      compareMaliciousContractPrecedence(mapped, current) > 0
+    ) {
+      ordered.set(mapped.address, mapped);
     }
-
-    ordered.set(record.address, {
-      chain: "evm",
-      address: record.address,
-      source: record.source,
-      disposition: record.disposition,
-      confidence: record.confidence,
-      reasonCodes: [...record.reasonCodes],
-    });
   }
 
   return {
     records: [...ordered.values()].sort((left, right) =>
       left.address.localeCompare(right.address)
     ),
+    sources: [...sources].sort(),
   };
 }
 

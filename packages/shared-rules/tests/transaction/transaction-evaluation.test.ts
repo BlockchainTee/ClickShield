@@ -766,7 +766,7 @@ describe("Layer 3 Phase B transaction evaluation", () => {
     expect(context.signature.canonicalJson).toBe(
       baselineContext.signature.canonicalJson
     );
-    expect(context.intel.contractDisposition).toBe("no_match");
+    expect(context.intel.contractDisposition).toBe("unavailable");
     expect(context.intel.signatureDisposition).toBe("malicious");
     expect(context.intel.signatureFeedVersion).toBe(
       validatedSnapshot.snapshot.version
@@ -851,7 +851,7 @@ describe("Layer 3 Phase B transaction evaluation", () => {
     expect(result.verdict.status).toBe("BLOCK");
   });
 
-  it("does not default populated provider lookups to unavailable", () => {
+  it("keeps ready sections queryable without weakening missing-section fail-safe behavior", () => {
     const context = normalizeTransactionRequest(
       {
         eventKind: "transaction",
@@ -875,7 +875,7 @@ describe("Layer 3 Phase B transaction evaluation", () => {
     );
 
     expect(context.intel.contractDisposition).toBe("no_match");
-    expect(context.intel.signatureDisposition).toBe("no_match");
+    expect(context.intel.signatureDisposition).toBe("unavailable");
     expect(context.intel.sectionStates.maliciousContracts).toBe("fresh");
   });
 

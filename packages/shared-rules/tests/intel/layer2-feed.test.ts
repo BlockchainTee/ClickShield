@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { validateTransactionLayer2Snapshot } from "../../src/index.js";
 import {
   parseChainabuseRecords,
 } from "../../../../scripts/layer2/fetch-chainabuse";
@@ -17,6 +18,7 @@ import {
   serializeLayer2Snapshot,
   writeLayer2Snapshot,
 } from "../../../../scripts/layer2/build-snapshot";
+import { normalizeLayer2Records } from "../../../../scripts/layer2/normalize";
 
 const GENERATED_AT = "2026-03-24T12:00:00.000Z";
 const tempDirs: string[] = [];
@@ -90,6 +92,14 @@ describe("Layer 2 feed builder", () => {
     expect(serializeLayer2Snapshot(firstSnapshot)).toBe(
       serializeLayer2Snapshot(secondSnapshot)
     );
+    expect(validateTransactionLayer2Snapshot(firstSnapshot)).toMatchObject({
+      ok: true,
+      status: "valid",
+    });
+    expect(firstSnapshot.metadata).toEqual({
+      generatedAt: GENERATED_AT,
+      sources: ["chainabuse", "ofac"],
+    });
     expect(firstSnapshot.sectionStates.maliciousContracts).toBe("ready");
     expect(firstSnapshot.maliciousContracts).toEqual([
       {
@@ -97,7 +107,8 @@ describe("Layer 2 feed builder", () => {
         address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
         source: "ofac",
         disposition: "block",
-        confidence: 1,
+        confidence: "high",
+        reason: "OFAC sanctions list match",
         reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
       },
       {
@@ -105,7 +116,8 @@ describe("Layer 2 feed builder", () => {
         address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
         source: "chainabuse",
         disposition: "warn",
-        confidence: 0.92,
+        confidence: "medium",
+        reason: "Chainabuse checked reports indicate suspicious activity",
         reasonCodes: ["CHAINABUSE_CHECKED_REPORT"],
       },
     ]);
@@ -154,7 +166,8 @@ describe("Layer 2 feed builder", () => {
         address: "0xcccccccccccccccccccccccccccccccccccccccc",
         source: "ofac",
         disposition: "block",
-        confidence: 1,
+        confidence: "high",
+        reason: "OFAC sanctions list match",
         reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
       },
       {
@@ -162,10 +175,152 @@ describe("Layer 2 feed builder", () => {
         address: "0xdddddddddddddddddddddddddddddddddddddddd",
         source: "chainabuse",
         disposition: "warn",
-        confidence: 0.95,
+        confidence: "medium",
+        reason: "Chainabuse checked reports indicate suspicious activity",
         reasonCodes: ["CHAINABUSE_CHECKED_REPORT"],
       },
     ]);
+  });
+
+  it("uses explicit source precedence so weaker feeds cannot erase malicious entries", () => {
+    const normalized = normalizeLayer2Records({
+      ofacRecords: parseOfacRecordsFromText(
+        "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      ),
+      chainabuseRecords: [
+        {
+          address: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+          source: "chainabuse",
+          confidence: 0.99,
+          disposition: "warn",
+          reportCount: 3,
+          reasonCodes: ["CHAINABUSE_CHECKED_REPORT"],
+        },
+      ],
+    });
+
+    expect(normalized.sources).toEqual(["chainabuse", "ofac"]);
+    expect(normalized.records).toEqual([
+      {
+        chain: "evm",
+        address: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        source: "ofac",
+        disposition: "block",
+        confidence: "high",
+        reason: "OFAC sanctions list match",
+        reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
+      },
+    ]);
+  });
+
+  it("produces the same canonical snapshot across reordered compiler inputs", () => {
+    const first = buildLayer2Snapshot({
+      generatedAt: GENERATED_AT,
+      ofacRecords: [
+        {
+          address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          source: "ofac",
+          disposition: "block",
+          confidence: 1,
+          reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
+        },
+        {
+          address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          source: "ofac",
+          disposition: "block",
+          confidence: 1,
+          reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
+        },
+      ],
+      chainabuseRecords: [
+        {
+          address: "0xcccccccccccccccccccccccccccccccccccccccc",
+          source: "chainabuse",
+          confidence: 0.91,
+          disposition: "warn",
+          reportCount: 2,
+          reasonCodes: ["CHAINABUSE_CHECKED_REPORT"],
+        },
+        {
+          address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          source: "chainabuse",
+          confidence: 0.99,
+          disposition: "warn",
+          reportCount: 5,
+          reasonCodes: ["CHAINABUSE_CHECKED_REPORT"],
+        },
+      ],
+    });
+    const second = buildLayer2Snapshot({
+      generatedAt: GENERATED_AT,
+      ofacRecords: [
+        {
+          address: "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          source: "ofac",
+          disposition: "block",
+          confidence: 1,
+          reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
+        },
+        {
+          address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          source: "ofac",
+          disposition: "block",
+          confidence: 1,
+          reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
+        },
+      ],
+      chainabuseRecords: [
+        {
+          address: "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          source: "chainabuse",
+          confidence: 0.99,
+          disposition: "warn",
+          reportCount: 5,
+          reasonCodes: ["CHAINABUSE_CHECKED_REPORT"],
+        },
+        {
+          address: "0xcccccccccccccccccccccccccccccccccccccccc",
+          source: "chainabuse",
+          confidence: 0.91,
+          disposition: "warn",
+          reportCount: 2,
+          reasonCodes: ["CHAINABUSE_CHECKED_REPORT"],
+        },
+      ],
+    });
+
+    expect(second).toEqual(first);
+  });
+
+  it("maps Chainabuse only into suspicious-address intelligence and never scam signatures", () => {
+    const snapshot = buildLayer2Snapshot({
+      generatedAt: GENERATED_AT,
+      ofacRecords: [],
+      chainabuseRecords: [
+        {
+          address: "0xffffffffffffffffffffffffffffffffffffffff",
+          source: "chainabuse",
+          confidence: 0.91,
+          disposition: "warn",
+          reportCount: 1,
+          reasonCodes: ["CHAINABUSE_CHECKED_REPORT"],
+        },
+      ],
+    });
+
+    expect(snapshot.maliciousContracts).toEqual([
+      {
+        chain: "evm",
+        address: "0xffffffffffffffffffffffffffffffffffffffff",
+        source: "chainabuse",
+        disposition: "warn",
+        confidence: "low",
+        reason: "Chainabuse checked report indicates suspicious activity",
+        reasonCodes: ["CHAINABUSE_CHECKED_REPORT"],
+      },
+    ]);
+    expect(snapshot.scamSignatures).toEqual([]);
+    expect(snapshot.sectionStates.scamSignatures).toBe("missing");
   });
 
   it("fails safe to a missing snapshot when malformed data cannot be normalized", () => {
@@ -180,6 +335,10 @@ describe("Layer 2 feed builder", () => {
       generatedAt: GENERATED_AT,
       maliciousContracts: [],
       scamSignatures: [],
+      metadata: {
+        generatedAt: GENERATED_AT,
+        sources: [],
+      },
       sectionStates: {
         maliciousContracts: "missing",
         scamSignatures: "missing",

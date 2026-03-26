@@ -1,12 +1,15 @@
 import { classifyTransactionRisk } from "../signals/transaction-risk.js";
 import canonicalTransactionSnapshot from "../intel/generated/layer2-snapshot.json";
+import { sha256Hex } from "../intel/hash.js";
 import { buildTransactionSignals } from "../signals/transaction-signals.js";
 import {
   createTransactionIntelProvider,
   resolveCanonicalTransactionIntel,
 } from "./intel-provider.js";
 import {
+  buildEmptyValidatedTransactionLayer2Snapshot,
   validateTransactionLayer2Snapshot,
+  type TransactionLayer2SnapshotValidationIssue,
   type ValidatedTransactionLayer2Snapshot,
 } from "./intel-snapshot.js";
 import type {
@@ -22,18 +25,83 @@ const UNAVAILABLE_ORIGIN_INTEL: Pick<
   allowlistFeedVersion: null,
   originDisposition: "unavailable",
 });
+const EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT =
+  "1970-01-01T00:00:00.000Z";
 
-function loadCanonicalTransactionSnapshot():
-  | ValidatedTransactionLayer2Snapshot
-  | null {
-  const result = validateTransactionLayer2Snapshot(canonicalTransactionSnapshot);
-  return result.ok ? result.snapshot : null;
+interface CanonicalTransactionSnapshotActivation {
+  readonly state: "valid" | "empty" | "rejected";
+  readonly rejectionStatus: "malformed" | "incompatible" | null;
+  readonly issues: readonly TransactionLayer2SnapshotValidationIssue[];
+  readonly snapshot: ValidatedTransactionLayer2Snapshot;
+  readonly provider: TransactionIntelProvider;
 }
 
-const CANONICAL_TRANSACTION_SNAPSHOT = loadCanonicalTransactionSnapshot();
-const CANONICAL_TRANSACTION_INTEL_PROVIDER = createTransactionIntelProvider(
-  CANONICAL_TRANSACTION_SNAPSHOT
-);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isValidUtcTimestamp(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value)) {
+    return false;
+  }
+
+  return !Number.isNaN(Date.parse(value));
+}
+
+function readFallbackGeneratedAt(value: unknown): string {
+  if (!isRecord(value) || typeof value.generatedAt !== "string") {
+    return EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT;
+  }
+
+  return isValidUtcTimestamp(value.generatedAt)
+    ? value.generatedAt
+    : EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT;
+}
+
+function activateCanonicalTransactionSnapshot(
+  snapshotSource: unknown
+): CanonicalTransactionSnapshotActivation {
+  const validation = validateTransactionLayer2Snapshot(snapshotSource);
+  if (validation.ok) {
+    const provider = createTransactionIntelProvider(validation.snapshot);
+
+    return Object.freeze({
+      state: validation.status === "empty" ? "empty" : "valid",
+      rejectionStatus: null,
+      issues: validation.issues,
+      snapshot: validation.snapshot,
+      provider,
+    });
+  }
+
+  const fallbackSnapshot = buildEmptyValidatedTransactionLayer2Snapshot(
+    readFallbackGeneratedAt(snapshotSource)
+  );
+  const provider = createTransactionIntelProvider(fallbackSnapshot);
+
+  return Object.freeze({
+    state: "rejected",
+    rejectionStatus: validation.status,
+    issues: validation.issues,
+    snapshot: fallbackSnapshot,
+    provider,
+  });
+}
+
+function buildCanonicalSignatureHash(
+  input: NormalizedTransactionContext
+): string | null {
+  if (input.eventKind !== "signature" || input.signature.isTypedData !== true) {
+    return null;
+  }
+
+  return `0x${sha256Hex(input.signature.canonicalJson)}`;
+}
+
+const CANONICAL_TRANSACTION_SNAPSHOT_ACTIVATION =
+  activateCanonicalTransactionSnapshot(canonicalTransactionSnapshot);
+const CANONICAL_TRANSACTION_INTEL_PROVIDER =
+  CANONICAL_TRANSACTION_SNAPSHOT_ACTIVATION.provider;
 
 function isTransactionIntelProvider(provider: unknown): provider is TransactionIntelProvider {
   return (
@@ -68,6 +136,7 @@ function buildHydratedIntel(
     eventKind: input.eventKind,
     targetAddress:
       input.eventKind === "signature" ? input.signature.verifyingContract : input.to,
+    signatureHash: buildCanonicalSignatureHash(input),
   } as const;
   const resolved = resolveCanonicalTransactionIntel(
     getLookupProvider(provider),

@@ -14,7 +14,6 @@ import {
   evaluateEvmWalletScan,
   evaluateSolanaWalletScan,
   evaluateTransaction,
-  getCanonicalTransactionSnapshotActivation,
   getDefaultTransactionIntelProvider,
   getTransactionSignals,
   getTransactionSelectorDefinition,
@@ -57,6 +56,10 @@ describe("root public API", () => {
     expect("DomainIntelFeedManager" in SharedRules).toBe(false);
     expect("DomainIntelFeedStorage" in SharedRules).toBe(false);
     expect("DomainIntelFeedStorageMetadata" in SharedRules).toBe(false);
+    expect("getCanonicalTransactionSnapshotActivation" in SharedRules).toBe(false);
+    expect(
+      "buildEmptyValidatedTransactionLayer2Snapshot" in SharedRules
+    ).toBe(false);
   });
 
   it("exports Layer 3 Phase A transaction foundation helpers through the root import", () => {
@@ -67,7 +70,6 @@ describe("root public API", () => {
     expect(typeof validateTransactionLayer2Snapshot).toBe("function");
     expect(typeof createTransactionIntelProvider).toBe("function");
     expect(typeof getDefaultTransactionIntelProvider).toBe("function");
-    expect(typeof getCanonicalTransactionSnapshotActivation).toBe("function");
     expect(typeof resolveCanonicalTransactionIntel).toBe("function");
     expect(typeof explainTransaction).toBe("function");
     expect(typeof createAuditRecord).toBe("function");
@@ -160,15 +162,5 @@ describe("root public API", () => {
     const second = getDefaultTransactionIntelProvider();
 
     expect(second).toBe(first);
-  });
-
-  it("exposes one explicit canonical transaction snapshot activation state", () => {
-    const first = getCanonicalTransactionSnapshotActivation();
-    const second = getCanonicalTransactionSnapshotActivation();
-
-    expect(second).toBe(first);
-    expect(first.provider).toBe(getDefaultTransactionIntelProvider());
-    expect(first.state).toBe("empty");
-    expect(first.rejectionStatus).toBeNull();
   });
 });

@@ -6,6 +6,7 @@ import type {
   CanonicalTransactionIntelLookup,
   CanonicalTransactionSnapshotSectionState,
   TransactionLayer2MaliciousContract,
+  TransactionLayer2ScamSignature,
   ValidatedTransactionLayer2Snapshot,
 } from "./intel-snapshot.js";
 import type {
@@ -47,6 +48,7 @@ export interface TransactionScamSignatureLookupResult {
   readonly matchedSection?: "scamSignatures";
   readonly feedVersion: string | null;
   readonly sectionState: TransactionLayer2SectionState;
+  readonly record?: TransactionLayer2ScamSignature | null;
 }
 
 export interface CanonicalTransactionIntelLookupResult {
@@ -129,6 +131,7 @@ function createUnavailableScamSignatureResult(
     disposition: "unavailable",
     feedVersion: null,
     sectionState,
+    record: null,
   });
 }
 
@@ -156,6 +159,28 @@ function createNoMatchScamSignatureResult(
     disposition: "no_match",
     feedVersion,
     sectionState,
+    record: null,
+  });
+}
+
+function createMatchedScamSignatureResult(
+  entry: TransactionLayer2ScamSignature,
+  feedVersion: string,
+  sectionState: TransactionLayer2SectionState
+): TransactionScamSignatureLookupResult {
+  return freezeObject({
+    lookupFamily: "scam_signature",
+    matched: true,
+    disposition: "malicious",
+    matchedSection: "scamSignatures",
+    feedVersion,
+    sectionState,
+    record: freezeObject({
+      signatureHash: entry.signatureHash,
+      source: entry.source,
+      confidence: entry.confidence,
+      reason: entry.reason,
+    }),
   });
 }
 
@@ -187,9 +212,18 @@ function createCanonicalTransactionIntelLookupResult(
 
 function canonicalLookupCacheKey(
   eventKind: TransactionEventKind,
-  targetAddress: string | null
+  targetAddress: string | null,
+  signatureHash: string | null
 ): string {
-  return `${eventKind}:${targetAddress ?? "null"}`;
+  return `${eventKind}:${targetAddress ?? "null"}:${signatureHash ?? "null"}`;
+}
+
+function normalizeScamSignatureKey(value: string | null): string | null {
+  if (value === null || !/^0x[0-9a-f]{64}$/.test(value)) {
+    return null;
+  }
+
+  return value;
 }
 
 export function createTransactionIntelProvider(
@@ -267,6 +301,18 @@ export function createTransactionIntelProvider(
         };
       })();
 
+  const scamSignatureResults = new Map<string, TransactionScamSignatureLookupResult>();
+  snapshot.scamSignatures.forEach((entry) => {
+    scamSignatureResults.set(
+      entry.signatureHash,
+      createMatchedScamSignatureResult(
+        entry,
+        snapshot.version,
+        scamSignaturesState
+      )
+    );
+  });
+
   const lookupScamSignature = scamSignaturesMissing
     ? (() => {
         const unavailableResult =
@@ -283,8 +329,12 @@ export function createTransactionIntelProvider(
         return (
           lookup: TransactionScamSignatureLookup
         ): TransactionScamSignatureLookupResult => {
-          void lookup;
-          return noMatchResult;
+          const normalizedKey = normalizeScamSignatureKey(lookup.normalizedKey);
+          if (normalizedKey === null) {
+            return noMatchResult;
+          }
+
+          return scamSignatureResults.get(normalizedKey) ?? noMatchResult;
         };
       })();
 
@@ -296,7 +346,12 @@ export function createTransactionIntelProvider(
     lookup: CanonicalTransactionIntelLookup
   ): CanonicalTransactionIntelLookupResult => {
     const normalizedAddress = normalizeMaliciousContractAddress(lookup.targetAddress);
-    const cacheKey = canonicalLookupCacheKey(lookup.eventKind, normalizedAddress);
+    const normalizedSignatureHash = normalizeScamSignatureKey(lookup.signatureHash);
+    const cacheKey = canonicalLookupCacheKey(
+      lookup.eventKind,
+      normalizedAddress,
+      normalizedSignatureHash
+    );
     const cached = canonicalLookupResults.get(cacheKey);
     if (cached !== undefined) {
       return cached;
@@ -308,7 +363,7 @@ export function createTransactionIntelProvider(
         address: lookup.targetAddress,
       }),
       lookupScamSignature({
-        normalizedKey: null,
+        normalizedKey: normalizedSignatureHash,
       })
     );
     canonicalLookupResults.set(cacheKey, canonicalResult);
