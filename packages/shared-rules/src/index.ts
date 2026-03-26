@@ -88,9 +88,15 @@ export { explainTransaction } from "./transaction/explain.js";
 export { createAuditRecord } from "./transaction/audit.js";
 export { analyzeTransactions } from "./transaction/analytics.js";
 export { deriveUserProtectionProfile } from "./transaction/protection.js";
+export {
+  buildTransactionDecisionPackage,
+} from "./transaction/orchestration.js";
 export type { TransactionAuditRecord } from "./transaction/audit.js";
 export type { TransactionAnalytics } from "./transaction/analytics.js";
 export type { UserProtectionProfile } from "./transaction/protection.js";
+export type {
+  TransactionDecisionPackage,
+} from "./transaction/orchestration.js";
 export {
   classifyTransactionRisk,
 } from "./signals/transaction-risk.js";

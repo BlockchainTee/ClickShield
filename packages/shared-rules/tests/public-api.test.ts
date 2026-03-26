@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   RULE_SET_VERSION,
   buildNavigationContext,
+  buildTransactionDecisionPackage,
   classifyTransactionRisk,
   buildTransactionSignals,
   classifyTransactionSelector,
@@ -68,6 +69,7 @@ describe("root public API", () => {
     expect(typeof resolveCanonicalTransactionIntel).toBe("function");
     expect(typeof explainTransaction).toBe("function");
     expect(typeof createAuditRecord).toBe("function");
+    expect(typeof buildTransactionDecisionPackage).toBe("function");
     expect(typeof classifyTransactionRisk).toBe("function");
     expect(typeof buildTransactionSignals).toBe("function");
     expect(typeof getTransactionSignals).toBe("function");
