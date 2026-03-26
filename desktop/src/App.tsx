@@ -1,4 +1,19 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  buildThreatSystemStatus,
+  mapScansToThreatLogEntries,
+  parseBackendHealthSnapshot,
+  parseEngineStatusSnapshot,
+  parseNavigationManifestSnapshot,
+} from "./dashboard/adapters";
+import type {
+  BackendHealthSnapshot,
+  EngineStatusSnapshot,
+  NavigationManifestSnapshot,
+} from "./dashboard/adapters";
+import { ThreatDashboard } from "./dashboard/components/ThreatDashboard";
+import { buildThreatDashboardViewModel } from "./dashboard/selectors";
+import type { ThreatDashboardFilterState } from "./dashboard/types";
 
 // Prefer env override, fall back to localhost.
 // Example: VITE_BACKEND_BASE=http://127.0.0.1:4000
@@ -65,6 +80,17 @@ type RecentScanEntry = {
   checkedAt: string;
   source: string;
   engine: string;
+  detectedBy?: string | null;
+  detectedByType?: string | null;
+  ruleName?: string | null;
+  ruleReason?: string | null;
+  shortAdvice?: string | null;
+  filename?: string | null;
+  mimeType?: string | null;
+  layer?: string | null;
+  decision?: string | null;
+  severity?: string | null;
+  surface?: string | null;
 };
 
 type PersistedState = {
@@ -94,6 +120,14 @@ const RETRY_MAX_MS = 5000;
 const RETRY_JITTER_RATIO = 0.15;
 const FETCH_TIMEOUT_RECENT_MS = 3500;
 const FETCH_TIMEOUT_HEALTH_MS = 2000;
+
+const DEFAULT_THREAT_DASHBOARD_FILTERS: ThreatDashboardFilterState = {
+  layer: "all",
+  severity: "all",
+  decision: "all",
+  timeWindow: "24h",
+  surface: "all",
+};
 
 type UrlScanCacheEntry = {
   url: string;
@@ -268,6 +302,17 @@ function normalizeScanEntry(anyEntry: any): RecentScanEntry | null {
     checkedAt: normalizeCheckedAt(e.checkedAt ?? e.createdAt ?? e.timestamp),
     source: typeof e.source === "string" ? e.source : "desktop",
     engine: typeof e.engine === "string" ? e.engine : "rules",
+    detectedBy: typeof e.detectedBy === "string" ? e.detectedBy : null,
+    detectedByType: typeof e.detectedByType === "string" ? e.detectedByType : null,
+    ruleName: typeof e.ruleName === "string" ? e.ruleName : null,
+    ruleReason: typeof e.ruleReason === "string" ? e.ruleReason : null,
+    shortAdvice: typeof e.shortAdvice === "string" ? e.shortAdvice : null,
+    filename: typeof e.filename === "string" ? e.filename : null,
+    mimeType: typeof e.mimeType === "string" ? e.mimeType : null,
+    layer: typeof e.layer === "string" ? e.layer : null,
+    decision: typeof e.decision === "string" ? e.decision : null,
+    severity: typeof e.severity === "string" ? e.severity : null,
+    surface: typeof e.surface === "string" ? e.surface : null,
   };
 }
 
@@ -528,10 +573,18 @@ const App: React.FC = () => {
   const [recentLoading, setRecentLoading] = useState(false);
   const [recentError, setRecentError] = useState<string | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
+  const [dashboardFilters, setDashboardFilters] = useState<ThreatDashboardFilterState>(
+    DEFAULT_THREAT_DASHBOARD_FILTERS
+  );
+  const [selectedThreatId, setSelectedThreatId] = useState<string | null>(null);
+  const [backendHealthSnapshot, setBackendHealthSnapshot] = useState<BackendHealthSnapshot | null>(null);
+  const [engineStatusSnapshot, setEngineStatusSnapshot] = useState<EngineStatusSnapshot | null>(null);
+  const [navigationManifestSnapshot, setNavigationManifestSnapshot] =
+    useState<NavigationManifestSnapshot | null>(null);
+  const [dashboardStatusLoading, setDashboardStatusLoading] = useState(false);
 
   // quick actions state
   const [rescanLoadingId, setRescanLoadingId] = useState<string | null>(null);
-  const [selectedScan, setSelectedScan] = useState<RecentScanEntry | null>(null);
 
   // local “hide row” persistence
   const [hiddenIds, setHiddenIds] = useState<string[]>([]);
@@ -566,6 +619,7 @@ const App: React.FC = () => {
   // ✅ prevent overlapping network calls (keeps UI responsive when backend is down)
   const healthInFlightRef = useRef(false);
   const recentInFlightRef = useRef(false);
+  const dashboardStatusInFlightRef = useRef(false);
 
   const visibleScans = useMemo(() => {
     if (!hiddenIds.length) return recentScans;
@@ -574,6 +628,65 @@ const App: React.FC = () => {
   }, [recentScans, hiddenIds]);
 
   const metrics = useMemo(() => computeMetrics(visibleScans), [visibleScans]);
+  const dashboardReferenceTime =
+    backendHealthSnapshot?.checkedAt ??
+    lastSyncAt ??
+    engineStatusSnapshot?.checkedAt ??
+    navigationManifestSnapshot?.generatedAt ??
+    null;
+  const dashboardSystemStatus = useMemo(
+    () =>
+      buildThreatSystemStatus({
+        health,
+        healthSnapshot: backendHealthSnapshot,
+        shieldMode,
+        manifest: navigationManifestSnapshot,
+        engine: engineStatusSnapshot,
+        referenceTime: dashboardReferenceTime,
+        isLoading: dashboardStatusLoading,
+      }),
+    [
+      health,
+      backendHealthSnapshot,
+      shieldMode,
+      navigationManifestSnapshot,
+      engineStatusSnapshot,
+      dashboardReferenceTime,
+      dashboardStatusLoading,
+    ]
+  );
+  const dashboardView = useMemo(
+    () =>
+      buildThreatDashboardViewModel({
+        entries: mapScansToThreatLogEntries(visibleScans),
+        filters: dashboardFilters,
+        selectedEntryId: selectedThreatId,
+        referenceTime: dashboardReferenceTime,
+        lastRefresh:
+          lastSyncAt ??
+          navigationManifestSnapshot?.generatedAt ??
+          engineStatusSnapshot?.checkedAt ??
+          backendHealthSnapshot?.checkedAt ??
+          null,
+        isLoading: recentLoading || dashboardStatusLoading,
+      }),
+    [
+      visibleScans,
+      dashboardFilters,
+      selectedThreatId,
+      dashboardReferenceTime,
+      lastSyncAt,
+      navigationManifestSnapshot,
+      engineStatusSnapshot,
+      backendHealthSnapshot,
+      recentLoading,
+      dashboardStatusLoading,
+    ]
+  );
+  const selectedThreatScan = useMemo(
+    () => visibleScans.find((scan) => scan.id === dashboardView.selectedEntryId) ?? null,
+    [visibleScans, dashboardView.selectedEntryId]
+  );
 
   // =====================================================
   // Persistence
@@ -643,6 +756,53 @@ const App: React.FC = () => {
     }
   }
 
+  async function fetchDashboardStatus() {
+    if (dashboardStatusInFlightRef.current) return;
+    dashboardStatusInFlightRef.current = true;
+
+    if (mountedRef.current) {
+      setDashboardStatusLoading(true);
+    }
+
+    try {
+      const [engineResponse, manifestResponse] = await Promise.allSettled([
+        fetchJsonWithTimeout(`${BACKEND_BASE}/engine/status`, undefined, FETCH_TIMEOUT_HEALTH_MS),
+        fetchJsonWithTimeout(
+          `${BACKEND_BASE}/intel/feeds/navigation/manifest.json`,
+          undefined,
+          FETCH_TIMEOUT_HEALTH_MS
+        ),
+      ]);
+
+      let nextEngineStatus: EngineStatusSnapshot | null = null;
+      if (engineResponse.status === "fulfilled" && engineResponse.value.ok) {
+        const engineJson: unknown = await engineResponse.value.json().catch(() => null);
+        nextEngineStatus = parseEngineStatusSnapshot(engineJson);
+      }
+
+      let nextManifest: NavigationManifestSnapshot | null = null;
+      if (manifestResponse.status === "fulfilled" && manifestResponse.value.ok) {
+        const manifestJson: unknown = await manifestResponse.value.json().catch(() => null);
+        nextManifest = parseNavigationManifestSnapshot(manifestJson);
+      }
+
+      if (mountedRef.current) {
+        setEngineStatusSnapshot(nextEngineStatus);
+        setNavigationManifestSnapshot(nextManifest);
+      }
+    } catch {
+      if (mountedRef.current) {
+        setEngineStatusSnapshot(null);
+        setNavigationManifestSnapshot(null);
+      }
+    } finally {
+      if (mountedRef.current) {
+        setDashboardStatusLoading(false);
+      }
+      dashboardStatusInFlightRef.current = false;
+    }
+  }
+
   function scheduleRetry(fn: () => void) {
     if (retryTimerRef.current != null) return;
 
@@ -669,6 +829,7 @@ const App: React.FC = () => {
       if (healthRef.current !== "ok") {
         checkHealth();
         fetchRecentScans({ preferCache: true });
+        fetchDashboardStatus();
       }
 
       if (healthRef.current !== "ok") {
@@ -690,10 +851,12 @@ const App: React.FC = () => {
       const res = await fetchJsonWithTimeout(`${BACKEND_BASE}/health`, undefined, FETCH_TIMEOUT_HEALTH_MS);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json().catch(() => null);
+      const nextHealthSnapshot = parseBackendHealthSnapshot(data);
 
       const ok = !!(data && data.status === "ok");
       if (mountedRef.current) {
         setHealth(ok ? "ok" : "error");
+        setBackendHealthSnapshot(nextHealthSnapshot);
       }
 
       if (ok) stopPolling();
@@ -701,7 +864,10 @@ const App: React.FC = () => {
 
       return ok;
     } catch {
-      if (mountedRef.current) setHealth("error");
+      if (mountedRef.current) {
+        setHealth("error");
+        setBackendHealthSnapshot(null);
+      }
       startPolling();
       return false;
     } finally {
@@ -793,6 +959,7 @@ const App: React.FC = () => {
     // kick once, then poll if needed
     checkHealth();
     fetchRecentScans({ preferCache: true });
+    fetchDashboardStatus();
     pushShieldModeToBackend(shieldMode);
 
     const onOnline = () => {
@@ -801,6 +968,7 @@ const App: React.FC = () => {
       clearRetry();
       checkHealth();
       fetchRecentScans({ preferCache: true });
+      fetchDashboardStatus();
     };
     const onOffline = () => {
       if (mountedRef.current) setHealth("error");
@@ -1124,10 +1292,6 @@ const App: React.FC = () => {
   // =====================================================
   // Recent scan actions
   // =====================================================
-  function handleExpand(entry: RecentScanEntry) {
-    setSelectedScan(entry);
-  }
-
   function handleHideLocal(entry: RecentScanEntry) {
     setHiddenIds((prev) => Array.from(new Set([...prev, entry.id])));
   }
@@ -1239,6 +1403,21 @@ const App: React.FC = () => {
     await handleRescanUrl(entry.url, entry.id);
   }
 
+  async function handleRescanSelectedThreat() {
+    if (!selectedThreatScan) return;
+    await handleRescan(selectedThreatScan);
+  }
+
+  function handlePinSelectedThreat() {
+    if (!selectedThreatScan) return;
+    addToRescanTray(selectedThreatScan);
+  }
+
+  function handleHideSelectedThreat() {
+    if (!selectedThreatScan) return;
+    handleHideLocal(selectedThreatScan);
+  }
+
   async function handleRescanTrayAll() {
     for (const item of rescanTray) {
       // eslint-disable-next-line no-await-in-loop
@@ -1318,6 +1497,7 @@ const App: React.FC = () => {
               onClick={() => {
                 checkHealth();
                 fetchRecentScans({ preferCache: true });
+                fetchDashboardStatus();
               }}
               className="text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800"
               title="Force refresh"
@@ -1355,7 +1535,10 @@ const App: React.FC = () => {
                 </button>
               )}
               <button
-                onClick={() => fetchRecentScans({ preferCache: true })}
+                onClick={() => {
+                  fetchRecentScans({ preferCache: true });
+                  fetchDashboardStatus();
+                }}
                 disabled={recentLoading}
                 className="text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-60"
               >
@@ -1705,187 +1888,26 @@ const App: React.FC = () => {
 
         </div>
 
-        {/* Recent Scans mini-dashboard with quick actions */}
-        <section className="rounded-2xl border border-slate-800 bg-slate-900/60 p-4 shadow-lg shadow-black/40">
-          <div className="flex items-center justify-between mb-2">
-            <h2 className="text-sm font-semibold tracking-tight">Recent Scans (restored history)</h2>
-            <button
-              onClick={() => fetchRecentScans({ preferCache: true })}
-              disabled={recentLoading}
-              className="text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-60"
-            >
-              {recentLoading ? "Refreshing…" : "Refresh"}
-            </button>
-          </div>
-
-          <p className="text-xs text-slate-400 mb-3">
-            Actions:
-            <span className="ml-2">🔄 re-scan URL</span>
-            <span className="ml-2">📌 pin to tray</span>
-            <span className="ml-2">📄 view details</span>
-            <span className="ml-2">🙈 hide row (persistent)</span>
-          </p>
-
-          {visibleScans.length === 0 && !recentLoading && !recentError && (
-            <p className="text-xs text-slate-500">
-              No scans to show. If you had scans before a restore, they’ll appear as soon as the backend is reachable,
-              or after you run a new scan (we also cache locally).
-            </p>
-          )}
-
-          {visibleScans.length > 0 && (
-            <div className="overflow-hidden rounded-xl border border-slate-800 bg-slate-950/60">
-              <table className="w-full text-xs">
-                <thead className="bg-slate-900/80 text-slate-300">
-                  <tr>
-                    <th className="px-3 py-2 text-left font-medium">When</th>
-                    <th className="px-3 py-2 text-left font-medium">Source</th>
-                    <th className="px-3 py-2 text-left font-medium">Risk</th>
-                    <th className="px-3 py-2 text-left font-medium">URL / Document</th>
-                    <th className="px-3 py-2 text-right font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {visibleScans.map((scan) => {
-                    const isDocument = !scan.url || scan.url === "(document)";
-                    return (
-                      <tr key={scan.id} className="border-t border-slate-800/80 hover:bg-slate-900/60">
-                        <td className="px-3 py-2 align-top text-slate-300">{formatDate(scan.checkedAt)}</td>
-                        <td className="px-3 py-2 align-top text-slate-400">
-                          <span className="font-mono text-[11px]">{scan.source || "api"}</span>
-                          <div className="text-[10px] text-slate-500">{scan.userEmail || "unknown"}</div>
-                        </td>
-                        <td className="px-3 py-2 align-top">
-                          <div className="flex flex-col gap-1">
-                            {renderRiskPill(scan.riskLevel)}
-                            <span className="text-[10px] text-slate-400">
-                              {scan.threatType} • {clampRiskScore(scan.riskScore)}
-                            </span>
-                          </div>
-                        </td>
-                        <td className="px-3 py-2 align-top max-w-xs">
-                          <div className="text-[11px] text-slate-200 truncate font-mono">
-                            {isDocument ? "(document)" : scan.url || "(unknown)"}
-                          </div>
-                        </td>
-                        <td className="px-3 py-2 align-top">
-                          <div className="flex items-center justify-end gap-2">
-                            <button
-                              title={isDocument ? "Re-scan only supported for URL entries" : "Re-scan this URL"}
-                              disabled={isDocument || rescanLoadingId === scan.id}
-                              onClick={() => handleRescan(scan)}
-                              className="h-7 w-7 inline-flex items-center justify-center rounded-lg border border-slate-700 bg-slate-900/80 hover:bg-slate-800 disabled:opacity-40 text-sm"
-                            >
-                              {rescanLoadingId === scan.id ? "…" : "🔄"}
-                            </button>
-
-                            <button
-                              title="Pin URL into rescan tray"
-                              disabled={isDocument}
-                              onClick={() => addToRescanTray(scan)}
-                              className="h-7 w-7 inline-flex items-center justify-center rounded-lg border border-slate-700 bg-slate-900/80 hover:bg-slate-800 disabled:opacity-40 text-sm"
-                            >
-                              📌
-                            </button>
-
-                            <button
-                              title="View details"
-                              onClick={() => handleExpand(scan)}
-                              className="h-7 w-7 inline-flex items-center justify-center rounded-lg border border-slate-700 bg-slate-900/80 hover:bg-slate-800 text-sm"
-                            >
-                              📄
-                            </button>
-
-                            <button
-                              title="Hide from this list (persistent, local only)"
-                              onClick={() => handleHideLocal(scan)}
-                              className="h-7 w-7 inline-flex items-center justify-center rounded-lg border border-slate-700 bg-slate-950/40 hover:bg-slate-800 text-sm"
-                            >
-                              🙈
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-
-        {/* Details modal */}
-        {selectedScan && (
-          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-            <div className="w-full max-w-lg rounded-2xl bg-slate-950 border border-slate-700 shadow-2xl shadow-black/60 p-4 space-y-3">
-              <div className="flex items-center justify-between mb-1">
-                <div className="space-y-1">
-                  <h3 className="text-sm font-semibold tracking-tight">Scan details</h3>
-                  <div className="text-[11px] text-slate-400">{formatDate(selectedScan.checkedAt)}</div>
-                </div>
-                <button
-                  onClick={() => setSelectedScan(null)}
-                  className="text-xs px-2 py-1 rounded-lg border border-slate-600 text-slate-200 hover:bg-slate-800"
-                >
-                  Close
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between">
-                {renderRiskPill(selectedScan.riskLevel)}
-                <span className="text-[11px] text-slate-400">
-                  Score: {clampRiskScore(selectedScan.riskScore)} • {selectedScan.threatType}
-                </span>
-              </div>
-
-              <div className="space-y-1 text-xs">
-                <div className="text-slate-400">URL / Document</div>
-                <div className="font-mono text-[11px] text-slate-100 break-all">
-                  {selectedScan.url || "(document)"}
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-3 text-[11px]">
-                <div className="space-y-1">
-                  <div className="text-slate-400">User</div>
-                  <div className="text-slate-100">{selectedScan.userEmail || "unknown"}</div>
-                  <div className="text-slate-500">{selectedScan.userType || "consumer"}</div>
-                </div>
-                <div className="space-y-1">
-                  <div className="text-slate-400">Context</div>
-                  <div className="text-slate-100">{selectedScan.orgName || "Personal / N/A"}</div>
-                  <div className="text-slate-500">Device: {selectedScan.deviceId || "unknown"}</div>
-                </div>
-              </div>
-
-              <div className="space-y-1 text-[11px]">
-                <div className="text-slate-400">Engine</div>
-                <div className="text-slate-100">{selectedScan.engine}</div>
-              </div>
-
-              <div className="pt-2 border-t border-slate-800 flex items-center justify-between">
-                <button
-                  onClick={() => {
-                    if (selectedScan.url && selectedScan.url !== "(document)") addToRescanTray(selectedScan);
-                  }}
-                  disabled={!selectedScan.url || selectedScan.url === "(document)"}
-                  className="text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800 disabled:opacity-60"
-                >
-                  Pin to rescan tray
-                </button>
-                <button
-                  onClick={() => {
-                    handleHideLocal(selectedScan);
-                    setSelectedScan(null);
-                  }}
-                  className="text-[11px] px-2 py-1 rounded-lg border border-slate-700 text-slate-200 hover:bg-slate-800"
-                >
-                  Hide row
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        <ThreatDashboard
+          entries={dashboardView.entries}
+          filteredEntries={dashboardView.filteredEntries}
+          filters={dashboardFilters}
+          summary={dashboardView.summary}
+          systemStatus={dashboardSystemStatus}
+          selectedEntryId={dashboardView.selectedEntryId}
+          selectedDetails={dashboardView.selectedDetails}
+          isLoading={recentLoading || dashboardStatusLoading}
+          feedEmptyState={dashboardView.feedEmptyState}
+          detailsEmptyState={dashboardView.detailsEmptyState}
+          onFiltersChange={setDashboardFilters}
+          onSelectEntry={setSelectedThreatId}
+          onClearFilters={() => setDashboardFilters(DEFAULT_THREAT_DASHBOARD_FILTERS)}
+          onPinSelected={selectedThreatScan && selectedThreatScan.url !== "(document)" ? handlePinSelectedThreat : undefined}
+          onHideSelected={selectedThreatScan ? handleHideSelectedThreat : undefined}
+          onRescanSelected={
+            selectedThreatScan && selectedThreatScan.url !== "(document)" ? handleRescanSelectedThreat : undefined
+          }
+        />
       </div>
     </div>
   );
