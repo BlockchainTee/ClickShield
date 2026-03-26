@@ -13,6 +13,7 @@ export type {
   TransactionEvaluationResult,
   TransactionInput,
   TransactionIntelVersions,
+  TransactionMatchedReason,
   TransactionOverrideLevel,
   TransactionVerdict,
   TransactionVerdictStatus,

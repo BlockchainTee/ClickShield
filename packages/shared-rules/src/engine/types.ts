@@ -57,7 +57,10 @@ export interface Rule<TContext> {
  * The final verdict after all rules have been evaluated.
  */
 export interface Verdict {
-  /** Action determined by the strongest-priority matched rule (lowest numeric value wins). */
+  /**
+   * Action determined by centralized verdict ordering over all matches:
+   * outcome precedence, then severity, then rule priority, then stable rule ID tie-break.
+   */
   readonly status: RuleOutcome;
   /** Highest severity among all matched rules. */
   readonly riskLevel: RiskLevel;
@@ -188,12 +191,23 @@ export interface TransactionIntelVersions {
   readonly signatureFeedVersion: string | null;
 }
 
+export interface TransactionMatchedReason {
+  readonly ruleId: string;
+  readonly outcome: RuleOutcome;
+  readonly severity: RiskLevel;
+  readonly priority: number;
+  readonly reasonCodes: readonly string[];
+  readonly evidence: Readonly<Record<string, unknown>>;
+}
+
 export interface TransactionVerdict {
   readonly status: TransactionVerdictStatus;
   readonly riskLevel: RiskLevel;
   readonly reasonCodes: string[];
   readonly matchedRules: string[];
   readonly primaryRuleId: string | null;
+  readonly primaryReason: TransactionMatchedReason | null;
+  readonly secondaryReasons: readonly TransactionMatchedReason[];
   readonly evidence: Record<string, unknown>;
   readonly explanation: TransactionExplanation;
   readonly ruleSetVersion: string;
