@@ -122,6 +122,11 @@ export type {
 export type {
   CanonicalTransactionIntelLookup,
   CanonicalTransactionSnapshotSectionState,
+  TransactionIntelConfidence,
+  TransactionIntelSource,
+  TransactionLayer2MaliciousContractEntry,
+  TransactionLayer2ScamSignature,
+  TransactionLayer2SnapshotMetadata,
   TrustedTransactionOriginIntel,
   TransactionLayer2MaliciousContract,
   TransactionLayer2Snapshot,

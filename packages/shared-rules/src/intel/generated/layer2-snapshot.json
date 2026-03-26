@@ -2,9 +2,13 @@
   "generatedAt": "2026-03-24T00:00:00.000Z",
   "maliciousContracts": [],
   "scamSignatures": [],
+  "metadata": {
+    "generatedAt": "2026-03-24T00:00:00.000Z",
+    "sources": []
+  },
   "sectionStates": {
     "maliciousContracts": "missing",
     "scamSignatures": "missing"
   },
-  "version": "layer2.f0f054496c4fda37"
+  "version": "layer2.0678fea2fb9bed9a"
 }

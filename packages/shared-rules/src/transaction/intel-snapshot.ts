@@ -15,28 +15,94 @@ export type CanonicalTransactionSnapshotSectionState =
   | "stale"
   | "missing";
 
+export type TransactionIntelSource = "ofac" | "chainabuse" | "internal";
+
+export type TransactionIntelConfidence = "high" | "medium" | "low";
+
+export type TransactionMaliciousContractChain =
+  | "evm"
+  | "solana"
+  | "bitcoin";
+
 export interface TransactionLayer2SnapshotValidationIssue {
   readonly path: string;
   readonly message: string;
 }
 
+/**
+ * OFAC -> Snapshot Mapping
+ *
+ * source: "ofac"
+ * confidence: "high"
+ *
+ * Maps to:
+ * - maliciousContracts ONLY
+ *
+ * No scamSignatures from OFAC
+ */
+/**
+ * Chainabuse -> Snapshot Mapping
+ *
+ * source: "chainabuse"
+ *
+ * confidence rules:
+ * - multiple reports -> "medium"
+ * - single report -> "low"
+ *
+ * Maps to:
+ * - maliciousContracts
+ * - scamSignatures
+ */
+/**
+ * Internal Hotfix Mapping
+ *
+ * source: "internal"
+ * confidence: "high"
+ *
+ * Can map to both:
+ * - maliciousContracts
+ * - scamSignatures
+ */
 export interface TransactionLayer2MaliciousContract {
-  readonly chain: "evm";
+  readonly chain: TransactionMaliciousContractChain;
   readonly address: string;
-  readonly source: "ofac" | "chainabuse";
+  readonly source: TransactionIntelSource;
   readonly disposition: "block" | "warn";
-  readonly confidence: number;
+  readonly confidence: TransactionIntelConfidence;
   readonly reasonCodes: readonly string[];
+  readonly reason?: string;
+}
+
+export interface TransactionLayer2MaliciousContractEntry
+  extends TransactionLayer2MaliciousContract {
+  readonly reason: string;
+}
+
+export interface TransactionLayer2ScamSignature {
+  readonly signatureHash: string;
+  readonly source: Extract<TransactionIntelSource, "chainabuse" | "internal">;
+  readonly confidence: TransactionIntelConfidence;
+  readonly reason: string;
+}
+
+export interface TransactionLayer2SnapshotMetadata {
+  readonly generatedAt: string;
+  readonly sources: readonly TransactionIntelSource[];
 }
 
 export interface TransactionLayer2Snapshot {
   readonly version: string;
+  /**
+   * Compatibility alias for the current provider surface.
+   * metadata.generatedAt is the canonical schema field.
+   */
   readonly generatedAt: string;
-  readonly maliciousContracts: readonly TransactionLayer2MaliciousContract[];
-  readonly scamSignatures: readonly [];
+  readonly maliciousContracts: readonly TransactionLayer2MaliciousContractEntry[];
+  readonly scamSignatures: readonly TransactionLayer2ScamSignature[];
+  readonly metadata: TransactionLayer2SnapshotMetadata;
   readonly sectionStates: {
     readonly maliciousContracts: CanonicalTransactionSnapshotSectionState;
-    readonly scamSignatures: "missing";
+    readonly scamSignatures: CanonicalTransactionSnapshotSectionState;
   };
 }
 
@@ -76,6 +142,7 @@ const ROOT_KEYS = [
   "generatedAt",
   "maliciousContracts",
   "scamSignatures",
+  "metadata",
   "sectionStates",
 ] as const;
 
@@ -85,11 +152,27 @@ const MALICIOUS_CONTRACT_KEYS = [
   "source",
   "disposition",
   "confidence",
+  "reason",
   "reasonCodes",
 ] as const;
 
+const SCAM_SIGNATURE_KEYS = [
+  "signatureHash",
+  "source",
+  "confidence",
+  "reason",
+] as const;
+
+const METADATA_KEYS = ["generatedAt", "sources"] as const;
 const SECTION_STATE_KEYS = ["maliciousContracts", "scamSignatures"] as const;
 const ZERO_EVM_ADDRESS = "0x0000000000000000000000000000000000000000";
+const TRANSACTION_INTEL_SOURCES = ["chainabuse", "internal", "ofac"] as const;
+const TRANSACTION_INTEL_CONFIDENCES = ["high", "low", "medium"] as const;
+const MALICIOUS_CONTRACT_CHAINS = ["bitcoin", "evm", "solana"] as const;
+const SCAM_SIGNATURE_SOURCE_SET = new Set<TransactionIntelSource>([
+  "chainabuse",
+  "internal",
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -175,26 +258,103 @@ function readRequiredString(
   return candidate;
 }
 
-function readRequiredNumber(
+function readRequiredStringArray(
   value: Record<string, unknown>,
   key: string,
   path: string,
   issues: TransactionLayer2SnapshotValidationIssue[],
   failureKinds: Array<"malformed" | "incompatible">
-): number | null {
+): readonly string[] | null {
   const candidate = value[key];
 
-  if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
+  if (!Array.isArray(candidate)) {
     pushIssue(
       issues,
       failureKinds,
       path === "" ? key : `${path}.${key}`,
-      "Expected a finite number"
+      "Expected array of non-empty strings"
     );
     return null;
   }
 
-  return candidate;
+  const parsed = candidate.map((entry, index) => {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${path === "" ? key : `${path}.${key}`}[${index}]`,
+        "Expected a non-empty string"
+      );
+      return "";
+    }
+
+    return entry;
+  });
+
+  return parsed;
+}
+
+function isSortedUnique(values: readonly string[]): boolean {
+  for (let index = 1; index < values.length; index += 1) {
+    if (values[index - 1] >= values[index]) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isTransactionIntelSource(
+  value: string
+): value is TransactionIntelSource {
+  return (TRANSACTION_INTEL_SOURCES as readonly string[]).includes(value);
+}
+
+function isTransactionIntelConfidence(
+  value: string
+): value is TransactionIntelConfidence {
+  return (TRANSACTION_INTEL_CONFIDENCES as readonly string[]).includes(value);
+}
+
+function isTransactionMaliciousContractChain(
+  value: string
+): value is TransactionMaliciousContractChain {
+  return (MALICIOUS_CONTRACT_CHAINS as readonly string[]).includes(value);
+}
+
+function validateConfidenceForSource(
+  source: TransactionIntelSource,
+  confidence: TransactionIntelConfidence,
+  path: string,
+  issues: TransactionLayer2SnapshotValidationIssue[],
+  failureKinds: Array<"malformed" | "incompatible">
+): void {
+  if (
+    (source === "ofac" || source === "internal") &&
+    confidence !== "high"
+  ) {
+    pushIssue(
+      issues,
+      failureKinds,
+      path,
+      `${source} entries must use high confidence`,
+      "incompatible"
+    );
+  }
+
+  if (source === "chainabuse" && confidence === "high") {
+    pushIssue(
+      issues,
+      failureKinds,
+      path,
+      "chainabuse entries must use low or medium confidence",
+      "incompatible"
+    );
+  }
+}
+
+function isValidSignatureHash(value: string): boolean {
+  return /^0x[0-9a-f]{64}$/.test(value);
 }
 
 function buildSnapshotVersion(
@@ -208,9 +368,19 @@ function buildSnapshotVersion(
         source: entry.source,
         disposition: entry.disposition,
         confidence: entry.confidence,
+        reason: entry.reason,
         reasonCodes: entry.reasonCodes,
       })),
-      scamSignatures: snapshotBody.scamSignatures,
+      scamSignatures: snapshotBody.scamSignatures.map((entry) => ({
+        signatureHash: entry.signatureHash,
+        source: entry.source,
+        confidence: entry.confidence,
+        reason: entry.reason,
+      })),
+      metadata: {
+        generatedAt: snapshotBody.metadata.generatedAt,
+        sources: snapshotBody.metadata.sources,
+      },
       sectionStates: snapshotBody.sectionStates,
     })
   ).slice(0, 16);
@@ -268,12 +438,16 @@ function parseSectionStates(
     );
   }
 
-  if (scamSignatures !== "missing") {
+  if (
+    scamSignatures !== "ready" &&
+    scamSignatures !== "stale" &&
+    scamSignatures !== "missing"
+  ) {
     pushIssue(
       issues,
       failureKinds,
       "sectionStates.scamSignatures",
-      "Unsupported scamSignatures state for this snapshot schema",
+      "Unsupported scamSignatures state",
       "incompatible"
     );
   }
@@ -285,7 +459,85 @@ function parseSectionStates(
       maliciousContracts === "missing"
         ? maliciousContracts
         : "missing",
-    scamSignatures: "missing",
+    scamSignatures:
+      scamSignatures === "ready" ||
+      scamSignatures === "stale" ||
+      scamSignatures === "missing"
+        ? scamSignatures
+        : "missing",
+  };
+}
+
+function parseMetadata(
+  value: unknown,
+  issues: TransactionLayer2SnapshotValidationIssue[],
+  failureKinds: Array<"malformed" | "incompatible">
+): TransactionLayer2SnapshotMetadata | null {
+  if (!isRecord(value)) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "metadata",
+      "Expected metadata object"
+    );
+    return null;
+  }
+
+  assertExactKeys(value, METADATA_KEYS, "metadata", issues, failureKinds);
+
+  const generatedAt = readRequiredString(
+    value,
+    "generatedAt",
+    "metadata",
+    issues,
+    failureKinds
+  );
+  const sources = readRequiredStringArray(
+    value,
+    "sources",
+    "metadata",
+    issues,
+    failureKinds
+  );
+
+  if (generatedAt === null || sources === null) {
+    return null;
+  }
+
+  if (!isValidUtcTimestamp(generatedAt)) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "metadata.generatedAt",
+      "Expected an ISO-8601 UTC timestamp"
+    );
+  }
+
+  sources.forEach((source, index) => {
+    if (!isTransactionIntelSource(source)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `metadata.sources[${index}]`,
+        "Unsupported snapshot source",
+        "incompatible"
+      );
+    }
+  });
+
+  if (!isSortedUnique(sources)) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "metadata.sources",
+      "sources must be sorted and unique",
+      "incompatible"
+    );
+  }
+
+  return {
+    generatedAt,
+    sources: sources.filter(isTransactionIntelSource),
   };
 }
 
@@ -293,7 +545,7 @@ function parseMaliciousContracts(
   value: unknown,
   issues: TransactionLayer2SnapshotValidationIssue[],
   failureKinds: Array<"malformed" | "incompatible">
-): readonly TransactionLayer2MaliciousContract[] | null {
+): readonly TransactionLayer2MaliciousContractEntry[] | null {
   if (!Array.isArray(value)) {
     pushIssue(
       issues,
@@ -304,9 +556,9 @@ function parseMaliciousContracts(
     return null;
   }
 
-  const parsed: TransactionLayer2MaliciousContract[] = [];
+  const parsed: TransactionLayer2MaliciousContractEntry[] = [];
   const seenKeys = new Set<string>();
-  let previousAddress = "";
+  let previousKey = "";
 
   value.forEach((rawEntry, index) => {
     const entryPath = `maliciousContracts[${index}]`;
@@ -357,9 +609,16 @@ function parseMaliciousContracts(
       issues,
       failureKinds
     );
-    const confidence = readRequiredNumber(
+    const confidence = readRequiredString(
       rawEntry,
       "confidence",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const reason = readRequiredString(
+      rawEntry,
+      "reason",
       entryPath,
       issues,
       failureKinds
@@ -371,12 +630,13 @@ function parseMaliciousContracts(
       address === null ||
       source === null ||
       disposition === null ||
-      confidence === null
+      confidence === null ||
+      reason === null
     ) {
       return;
     }
 
-    if (chain !== "evm") {
+    if (!isTransactionMaliciousContractChain(chain)) {
       pushIssue(
         issues,
         failureKinds,
@@ -386,37 +646,39 @@ function parseMaliciousContracts(
       );
     }
 
-    if (!isValidEvmAddress(address)) {
-      pushIssue(
-        issues,
-        failureKinds,
-        `${entryPath}.address`,
-        "Expected a canonical EVM address",
-        "incompatible"
-      );
+    if (chain === "evm") {
+      if (!isValidEvmAddress(address)) {
+        pushIssue(
+          issues,
+          failureKinds,
+          `${entryPath}.address`,
+          "Expected a canonical EVM address",
+          "incompatible"
+        );
+      }
+
+      if (address !== normalizeEvmAddress(address)) {
+        pushIssue(
+          issues,
+          failureKinds,
+          `${entryPath}.address`,
+          "Expected a lowercase canonical EVM address",
+          "incompatible"
+        );
+      }
+
+      if (address === ZERO_EVM_ADDRESS) {
+        pushIssue(
+          issues,
+          failureKinds,
+          `${entryPath}.address`,
+          "Zero address is not allowed in transaction snapshot",
+          "incompatible"
+        );
+      }
     }
 
-    if (address !== normalizeEvmAddress(address)) {
-      pushIssue(
-        issues,
-        failureKinds,
-        `${entryPath}.address`,
-        "Expected a lowercase canonical EVM address",
-        "incompatible"
-      );
-    }
-
-    if (address === ZERO_EVM_ADDRESS) {
-      pushIssue(
-        issues,
-        failureKinds,
-        `${entryPath}.address`,
-        "Zero address is not allowed in transaction snapshot",
-        "incompatible"
-      );
-    }
-
-    if (source !== "ofac" && source !== "chainabuse") {
+    if (!isTransactionIntelSource(source)) {
       pushIssue(
         issues,
         failureKinds,
@@ -436,12 +698,26 @@ function parseMaliciousContracts(
       );
     }
 
-    if (confidence < 0 || confidence > 1) {
+    if (!isTransactionIntelConfidence(confidence)) {
       pushIssue(
         issues,
         failureKinds,
         `${entryPath}.confidence`,
-        "Expected confidence to be between 0 and 1"
+        "Unsupported malicious contract confidence",
+        "incompatible"
+      );
+    }
+
+    if (
+      isTransactionIntelSource(source) &&
+      isTransactionIntelConfidence(confidence)
+    ) {
+      validateConfidenceForSource(
+        source,
+        confidence,
+        `${entryPath}.confidence`,
+        issues,
+        failureKinds
       );
     }
 
@@ -491,23 +767,26 @@ function parseMaliciousContracts(
       seenKeys.add(dedupeKey);
     }
 
-    if (address < previousAddress) {
+    if (dedupeKey < previousKey) {
       pushIssue(
         issues,
         failureKinds,
         entryPath,
-        "maliciousContracts entries must be sorted by address",
+        "maliciousContracts entries must be sorted by chain and address",
         "incompatible"
       );
     }
-    previousAddress = address;
+    previousKey = dedupeKey;
 
     parsed.push({
-      chain: "evm",
+      chain: isTransactionMaliciousContractChain(chain) ? chain : "evm",
       address,
-      source: source === "ofac" ? "ofac" : "chainabuse",
+      source: isTransactionIntelSource(source) ? source : "internal",
       disposition: disposition === "block" ? "block" : "warn",
-      confidence,
+      confidence: isTransactionIntelConfidence(confidence)
+        ? confidence
+        : "low",
+      reason,
       reasonCodes,
     });
   });
@@ -519,7 +798,7 @@ function parseScamSignatures(
   value: unknown,
   issues: TransactionLayer2SnapshotValidationIssue[],
   failureKinds: Array<"malformed" | "incompatible">
-): readonly [] | null {
+): readonly TransactionLayer2ScamSignature[] | null {
   if (!Array.isArray(value)) {
     pushIssue(
       issues,
@@ -530,17 +809,149 @@ function parseScamSignatures(
     return null;
   }
 
-  if (value.length > 0) {
-    pushIssue(
-      issues,
-      failureKinds,
-      "scamSignatures",
-      "Unsupported non-empty scamSignatures section for this snapshot schema",
-      "incompatible"
-    );
-  }
+  const parsed: TransactionLayer2ScamSignature[] = [];
+  const seenHashes = new Set<string>();
+  let previousHash = "";
 
-  return [];
+  value.forEach((rawEntry, index) => {
+    const entryPath = `scamSignatures[${index}]`;
+
+    if (!isRecord(rawEntry)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        entryPath,
+        "Expected scam signature entry object"
+      );
+      return;
+    }
+
+    assertExactKeys(
+      rawEntry,
+      SCAM_SIGNATURE_KEYS,
+      entryPath,
+      issues,
+      failureKinds
+    );
+
+    const signatureHash = readRequiredString(
+      rawEntry,
+      "signatureHash",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const source = readRequiredString(
+      rawEntry,
+      "source",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const confidence = readRequiredString(
+      rawEntry,
+      "confidence",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const reason = readRequiredString(
+      rawEntry,
+      "reason",
+      entryPath,
+      issues,
+      failureKinds
+    );
+
+    if (
+      signatureHash === null ||
+      source === null ||
+      confidence === null ||
+      reason === null
+    ) {
+      return;
+    }
+
+    if (!isValidSignatureHash(signatureHash)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.signatureHash`,
+        "Expected a lowercase 32-byte hex signature hash",
+        "incompatible"
+      );
+    }
+
+    if (!SCAM_SIGNATURE_SOURCE_SET.has(source as TransactionIntelSource)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.source`,
+        "Unsupported scam signature source",
+        "incompatible"
+      );
+    }
+
+    if (!isTransactionIntelConfidence(confidence)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.confidence`,
+        "Unsupported scam signature confidence",
+        "incompatible"
+      );
+    }
+
+    if (
+      SCAM_SIGNATURE_SOURCE_SET.has(source as TransactionIntelSource) &&
+      isTransactionIntelConfidence(confidence)
+    ) {
+      validateConfidenceForSource(
+        source as TransactionIntelSource,
+        confidence,
+        `${entryPath}.confidence`,
+        issues,
+        failureKinds
+      );
+    }
+
+    if (seenHashes.has(signatureHash)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        entryPath,
+        "Duplicate scam signature entry",
+        "incompatible"
+      );
+    } else {
+      seenHashes.add(signatureHash);
+    }
+
+    if (signatureHash < previousHash) {
+      pushIssue(
+        issues,
+        failureKinds,
+        entryPath,
+        "scamSignatures entries must be sorted by signatureHash",
+        "incompatible"
+      );
+    }
+    previousHash = signatureHash;
+
+    parsed.push({
+      signatureHash,
+      source:
+        source === "chainabuse" || source === "internal"
+          ? source
+          : "internal",
+      confidence: isTransactionIntelConfidence(confidence)
+        ? confidence
+        : "low",
+      reason,
+    });
+  });
+
+  return parsed;
 }
 
 function toFailureStatus(
@@ -584,6 +995,7 @@ export function validateTransactionLayer2Snapshot(
     issues,
     failureKinds
   );
+  const metadata = parseMetadata(input.metadata, issues, failureKinds);
   const sectionStates = parseSectionStates(
     input.sectionStates,
     issues,
@@ -612,6 +1024,7 @@ export function validateTransactionLayer2Snapshot(
   if (
     maliciousContracts === null ||
     scamSignatures === null ||
+    metadata === null ||
     sectionStates === null ||
     version === null ||
     generatedAt === null
@@ -623,15 +1036,12 @@ export function validateTransactionLayer2Snapshot(
     };
   }
 
-  if (
-    maliciousContracts.length === 0 &&
-    sectionStates.maliciousContracts !== "missing"
-  ) {
+  if (generatedAt !== metadata.generatedAt) {
     pushIssue(
       issues,
       failureKinds,
-      "sectionStates.maliciousContracts",
-      "Empty maliciousContracts snapshots must declare a missing section",
+      "metadata.generatedAt",
+      "metadata.generatedAt must match root generatedAt",
       "incompatible"
     );
   }
@@ -649,10 +1059,48 @@ export function validateTransactionLayer2Snapshot(
     );
   }
 
+  if (
+    scamSignatures.length > 0 &&
+    sectionStates.scamSignatures === "missing"
+  ) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "sectionStates.scamSignatures",
+      "scamSignatures section cannot be missing when entries are present",
+      "incompatible"
+    );
+  }
+
+  maliciousContracts.forEach((entry, index) => {
+    if (!metadata.sources.includes(entry.source)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `maliciousContracts[${index}].source`,
+        "Entry source must appear in metadata.sources",
+        "incompatible"
+      );
+    }
+  });
+
+  scamSignatures.forEach((entry, index) => {
+    if (!metadata.sources.includes(entry.source)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `scamSignatures[${index}].source`,
+        "Entry source must appear in metadata.sources",
+        "incompatible"
+      );
+    }
+  });
+
   const snapshotBody: Omit<TransactionLayer2Snapshot, "version"> = {
     generatedAt,
     maliciousContracts,
     scamSignatures,
+    metadata,
     sectionStates,
   };
 
@@ -680,12 +1128,16 @@ export function validateTransactionLayer2Snapshot(
     generatedAt,
     maliciousContracts,
     scamSignatures,
+    metadata,
     sectionStates,
   });
 
   return {
     ok: true,
-    status: maliciousContracts.length === 0 ? "empty" : "valid",
+    status:
+      maliciousContracts.length === 0 && scamSignatures.length === 0
+        ? "empty"
+        : "valid",
     snapshot,
     issues,
   };

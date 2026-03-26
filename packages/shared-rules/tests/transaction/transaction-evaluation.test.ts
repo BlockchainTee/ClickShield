@@ -52,6 +52,10 @@ function sha256Hex(input: string): string {
 function buildSnapshotVersion(snapshotBody: {
   readonly maliciousContracts: readonly unknown[];
   readonly scamSignatures: readonly unknown[];
+  readonly metadata: {
+    readonly generatedAt: string;
+    readonly sources: readonly string[];
+  };
   readonly sectionStates: {
     readonly maliciousContracts: string;
     readonly scamSignatures: string;
@@ -61,6 +65,7 @@ function buildSnapshotVersion(snapshotBody: {
     serializeCanonicalJson({
       maliciousContracts: snapshotBody.maliciousContracts,
       scamSignatures: snapshotBody.scamSignatures,
+      metadata: snapshotBody.metadata,
       sectionStates: snapshotBody.sectionStates,
     })
   ).slice(0, 16)}`;
@@ -74,6 +79,21 @@ function buildSnapshot(
     generatedAt: "2026-03-24T00:00:00.000Z",
     maliciousContracts,
     scamSignatures: [],
+    metadata: {
+      generatedAt: "2026-03-24T00:00:00.000Z",
+      sources:
+        maliciousContracts.length === 0
+          ? []
+          : ["chainabuse", "internal", "ofac"].filter((source) =>
+              maliciousContracts.some(
+                (entry) =>
+                  typeof entry === "object" &&
+                  entry !== null &&
+                  "source" in entry &&
+                  entry.source === source
+              )
+            ),
+    } as const,
     sectionStates: {
       maliciousContracts: sectionState,
       scamSignatures: "missing",
@@ -126,7 +146,8 @@ function buildStaticIntelProvider(overrides: {
             address: "0x3333333333333333333333333333333333333333",
             source: "ofac" as const,
             disposition: "block" as const,
-            confidence: 1,
+            confidence: "high" as const,
+            reason: "Known malicious contract",
             reasonCodes: Object.freeze(["OFAC_SANCTIONS_ADDRESS"]),
           })
         : null,
@@ -211,7 +232,8 @@ const POPULATED_PROVIDER = buildValidatedProvider([
     address: "0x9999999999999999999999999999999999999999",
     source: "ofac",
     disposition: "block",
-    confidence: 1,
+    confidence: "high",
+    reason: "OFAC sanctions address",
     reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
   },
 ]);
@@ -846,7 +868,8 @@ describe("Layer 3 Phase B transaction evaluation", () => {
             address: "0x9999999999999999999999999999999999999999",
             source: "ofac",
             disposition: "block",
-            confidence: 1,
+            confidence: "high",
+            reason: "OFAC sanctions address",
             reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
           },
         ],
