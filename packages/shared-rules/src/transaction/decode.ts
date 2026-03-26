@@ -12,6 +12,7 @@ import {
   TRANSFER_FROM_SELECTOR,
   TRANSFER_SELECTOR,
 } from "./selectors.js";
+import { classifyTransactionRisk } from "../signals/transaction-risk.js";
 import { buildTransactionSignals, getTransactionSignals } from "../signals/transaction-signals.js";
 import { hydrateNormalizedTransactionContext } from "./hydrate.js";
 import { normalizeTypedData } from "./typed-data.js";
@@ -464,13 +465,20 @@ export function normalizeTransactionRequest(
         getTransactionSelectorDefinition(methodSelector) !== null,
       typedDataNormalized: false,
     },
-  } satisfies Omit<NormalizedTransactionContext, "signals">;
+  } satisfies Omit<
+    NormalizedTransactionContext,
+    "signals" | "riskClassification"
+  >;
   const signals = getTransactionSignals(normalized);
 
   return hydrateNormalizedTransactionContext(
     {
-    ...normalized,
-    signals,
+      ...normalized,
+      signals,
+      riskClassification: classifyTransactionRisk({
+        ...normalized,
+        signals,
+      }),
     },
     options?.intelProvider
   );
@@ -527,13 +535,20 @@ export function normalizeTypedDataRequest(
       selectorRecognized: false,
       typedDataNormalized: signature.normalizationState === "normalized",
     },
-  } satisfies Omit<NormalizedTransactionContext, "signals">;
+  } satisfies Omit<
+    NormalizedTransactionContext,
+    "signals" | "riskClassification"
+  >;
   const signals = buildTransactionSignals(normalized);
 
   return hydrateNormalizedTransactionContext(
     {
-    ...normalized,
-    signals,
+      ...normalized,
+      signals,
+      riskClassification: classifyTransactionRisk({
+        ...normalized,
+        signals,
+      }),
     },
     options?.intelProvider
   );

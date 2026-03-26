@@ -1,3 +1,4 @@
+import { classifyTransactionRisk } from "../signals/transaction-risk.js";
 import canonicalTransactionSnapshot from "../intel/generated/layer2-snapshot.json";
 import { buildTransactionSignals } from "../signals/transaction-signals.js";
 import {
@@ -95,11 +96,20 @@ export function hydrateNormalizedTransactionContext(
     ...input,
     intel: buildHydratedIntel(input, provider),
   };
-  const { signals: _signals, ...signalInput } = hydrated;
+  const {
+    signals: _signals,
+    riskClassification: _riskClassification,
+    ...signalInput
+  } = hydrated;
+  const signals = buildTransactionSignals(signalInput);
 
   return {
     ...hydrated,
-    signals: buildTransactionSignals(signalInput),
+    signals,
+    riskClassification: classifyTransactionRisk({
+      ...signalInput,
+      signals,
+    }),
   };
 }
 

@@ -11,7 +11,10 @@ import type {
 const HIGH_VALUE_THRESHOLD = 1_000_000_000_000_000_000n;
 const MAX_UINT256_DECIMAL = BigInt(`0x${MAX_UINT256_HEX}`).toString(10);
 
-type TransactionSignalContext = Omit<NormalizedTransactionContext, "signals">;
+type TransactionSignalContext = Omit<
+  NormalizedTransactionContext,
+  "signals" | "riskClassification"
+>;
 type TransactionSignalInput = TransactionSignalContext & {
   readonly eventKind: "transaction";
 };

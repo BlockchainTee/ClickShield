@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   RULE_SET_VERSION,
   buildNavigationContext,
+  classifyTransactionRisk,
   buildTransactionExplanation,
   buildTransactionSignals,
   classifyTransactionSelector,
@@ -65,6 +66,7 @@ describe("root public API", () => {
     expect(typeof getDefaultTransactionIntelProvider).toBe("function");
     expect(typeof resolveCanonicalTransactionIntel).toBe("function");
     expect(typeof buildTransactionExplanation).toBe("function");
+    expect(typeof classifyTransactionRisk).toBe("function");
     expect(typeof buildTransactionSignals).toBe("function");
     expect(typeof getTransactionSignals).toBe("function");
     expect(typeof evaluateTransaction).toBe("function");
@@ -141,8 +143,10 @@ describe("root public API", () => {
     });
 
     expect(tx.actionType).toBe("approve");
+    expect(tx.riskClassification.isApprovalRisk).toBe(true);
     expect(sig.eventKind).toBe("signature");
     expect(sig.signature.normalizationState).toBe("missing_domain_fields");
+    expect(sig.riskClassification.isPermitRisk).toBe(true);
   });
 
   it("reuses one canonical default transaction intel provider across runtime calls", () => {

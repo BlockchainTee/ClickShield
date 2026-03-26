@@ -198,6 +198,7 @@ export interface NormalizedTransactionContext {
   readonly batch: TransactionBatchContext;
   readonly signature: NormalizedTypedData;
   readonly signals: TransactionSignals;
+  readonly riskClassification: TransactionRiskClassification;
   readonly intel: TransactionIntelContext;
   readonly provider: TransactionProviderContext;
   readonly counterparty: TransactionCounterpartyContext;
@@ -242,4 +243,15 @@ export interface TransactionSignals {
   readonly signatureIntelMatch: boolean;
   readonly verifyingContractKnown: boolean;
   readonly hasUnknownInnerCall: boolean;
+}
+
+export interface TransactionRiskClassification {
+  readonly hasMaliciousTarget: boolean;
+  readonly hasKnownScamSignature: boolean;
+  readonly isApprovalRisk: boolean;
+  readonly isUnlimitedApprovalRisk: boolean;
+  readonly isPermitRisk: boolean;
+  readonly isHighValueTransferRisk: boolean;
+  readonly isUnknownMethodRisk: boolean;
+  readonly requiresUserAttention: boolean;
 }

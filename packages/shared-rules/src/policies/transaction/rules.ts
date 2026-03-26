@@ -20,7 +20,7 @@ const BLOCK_MALICIOUS_TRANSACTION_CONTRACT: Rule<TransactionPolicyInput> = {
   outcome: "block",
   priority: 10,
   predicate: (ctx) =>
-    ctx.eventKind === "transaction" && ctx.intel.contractDisposition === "malicious",
+    ctx.eventKind === "transaction" && ctx.riskClassification.hasMaliciousTarget,
   buildReasonCodes: () => [TRANSACTION_CODES.KNOWN_MALICIOUS_CONTRACT],
   buildEvidence: (ctx) => ({
     maliciousContract: {
@@ -39,7 +39,7 @@ const BLOCK_MALICIOUS_SIGNATURE_CONTRACT: Rule<TransactionPolicyInput> = {
   outcome: "block",
   priority: 10,
   predicate: (ctx) =>
-    ctx.eventKind === "signature" && ctx.intel.contractDisposition === "malicious",
+    ctx.eventKind === "signature" && ctx.riskClassification.hasMaliciousTarget,
   buildReasonCodes: (ctx) => {
     const codes: TransactionCode[] = [TRANSACTION_CODES.KNOWN_MALICIOUS_CONTRACT];
     if (ctx.signature.permitKind !== "none") {
@@ -64,7 +64,7 @@ const BLOCK_SCAM_SIGNATURE_MATCH: Rule<TransactionPolicyInput> = {
   outcome: "block",
   priority: 5,
   predicate: (ctx) =>
-    ctx.eventKind === "signature" && ctx.intel.signatureDisposition === "malicious",
+    ctx.eventKind === "signature" && ctx.riskClassification.hasKnownScamSignature,
   buildReasonCodes: (ctx) => {
     const codes: TransactionCode[] = [TRANSACTION_CODES.SCAM_SIGNATURE_MATCH];
     if (ctx.signature.permitKind !== "none") {
@@ -90,14 +90,12 @@ const WARN_UNLIMITED_APPROVAL_UNKNOWN_SPENDER: Rule<TransactionPolicyInput> = {
   outcome: "warn",
   priority: 120,
   predicate: (ctx) => {
-    const signals = ctx.signals;
     return (
       ctx.eventKind === "transaction" &&
-      signals.isApprovalMethod &&
-      signals.isUnlimitedApproval &&
-      signals.approvalDirection === "grant" &&
+      ctx.riskClassification.isApprovalRisk &&
+      ctx.riskClassification.isUnlimitedApprovalRisk &&
       isNonTrustedCounterparty(ctx) &&
-      !signals.targetAllowlisted
+      !ctx.signals.targetAllowlisted
     );
   },
   buildReasonCodes: () => [
@@ -121,13 +119,12 @@ const WARN_SET_APPROVAL_FOR_ALL_UNKNOWN_OPERATOR: Rule<TransactionPolicyInput> =
   outcome: "warn",
   priority: 130,
   predicate: (ctx) => {
-    const signals = ctx.signals;
     return (
       ctx.eventKind === "transaction" &&
-      signals.isSetApprovalForAll &&
-      signals.approvalDirection === "grant" &&
+      ctx.riskClassification.isApprovalRisk &&
+      ctx.actionType === "setApprovalForAll" &&
       isNonTrustedCounterparty(ctx) &&
-      !signals.targetAllowlisted
+      !ctx.signals.targetAllowlisted
     );
   },
   buildReasonCodes: () => [
@@ -150,14 +147,13 @@ const WARN_INCREASE_ALLOWANCE_UNKNOWN_SPENDER: Rule<TransactionPolicyInput> = {
   outcome: "warn",
   priority: 135,
   predicate: (ctx) => {
-    const signals = ctx.signals;
     return (
       ctx.eventKind === "transaction" &&
       ctx.actionType === "increaseAllowance" &&
-      signals.approvalDirection === "grant" &&
-      !signals.isUnlimitedApproval &&
+      ctx.riskClassification.isApprovalRisk &&
+      !ctx.riskClassification.isUnlimitedApprovalRisk &&
       isNonTrustedCounterparty(ctx) &&
-      !signals.targetAllowlisted
+      !ctx.signals.targetAllowlisted
     );
   },
   buildReasonCodes: () => [TRANSACTION_CODES.UNKNOWN_SPENDER],
@@ -179,13 +175,12 @@ const WARN_PERMIT_SIGNATURE_TO_UNTRUSTED_CONTRACT: Rule<TransactionPolicyInput> 
   outcome: "warn",
   priority: 140,
   predicate: (ctx) => {
-    const signals = ctx.signals;
     return (
       ctx.eventKind === "signature" &&
-      signals.isPermitSignature &&
-      !signals.signatureIntelMatch &&
-      !signals.touchesMaliciousContract &&
-      !signals.targetAllowlisted
+      ctx.riskClassification.isPermitRisk &&
+      !ctx.riskClassification.hasKnownScamSignature &&
+      !ctx.riskClassification.hasMaliciousTarget &&
+      !ctx.signals.targetAllowlisted
     );
   },
   buildReasonCodes: () => [TRANSACTION_CODES.PERMIT_SIGNATURE],
@@ -261,11 +256,10 @@ const WARN_UNKNOWN_CONTRACT_INTERACTION_WITH_VALUE: Rule<TransactionPolicyInput>
   outcome: "warn",
   priority: 240,
   predicate: (ctx) => {
-    const signals = ctx.signals;
     return (
       ctx.eventKind === "transaction" &&
-      ctx.actionType === "unknown" &&
-      signals.hasNativeValue &&
+      ctx.riskClassification.isUnknownMethodRisk &&
+      ctx.signals.hasNativeValue &&
       ctx.intel.contractDisposition !== "allowlisted" &&
       ctx.intel.contractDisposition !== "malicious"
     );

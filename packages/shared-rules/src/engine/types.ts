@@ -1,6 +1,7 @@
 import type {
   NormalizedTransactionContext,
   TransactionExplanation,
+  TransactionRiskClassification,
   TransactionSignals,
 } from "../transaction/types.js";
 
@@ -207,6 +208,7 @@ export interface TransactionEvaluationResult {
   readonly reasonCodes: string[];
   readonly evidence: Record<string, unknown>;
   readonly signals: TransactionSignals;
+  readonly riskClassification: TransactionRiskClassification;
 }
 
 // ── NavigationContext — rich client-side context shape ──

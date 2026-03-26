@@ -181,6 +181,7 @@ export function assembleTransactionVerdict(
   const status = toTransactionStatus(base.status);
   const overrideLevel = overrideLevelForStatus(status);
   const signals = input.signals;
+  const riskClassification = input.riskClassification;
   const explanation = buildTransactionExplanation(input);
   const verdict: TransactionVerdict = {
     status,
@@ -206,5 +207,6 @@ export function assembleTransactionVerdict(
     reasonCodes: verdict.reasonCodes,
     evidence: verdict.evidence,
     signals,
+    riskClassification,
   };
 }

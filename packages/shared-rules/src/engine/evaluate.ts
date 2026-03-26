@@ -13,6 +13,28 @@ import {
   collectMatches,
 } from "./verdict.js";
 import { getRulesForEventKind } from "../registry/index.js";
+import { buildTransactionSignals } from "../signals/transaction-signals.js";
+import { classifyTransactionRisk } from "../signals/transaction-risk.js";
+
+function finalizeTransactionEvaluationInput(
+  input: TransactionInput | SignatureInput
+): TransactionInput | SignatureInput {
+  const {
+    signals: _signals,
+    riskClassification: _riskClassification,
+    ...base
+  } = input;
+  const signals = buildTransactionSignals(base);
+
+  return {
+    ...base,
+    signals,
+    riskClassification: classifyTransactionRisk({
+      ...base,
+      signals,
+    }),
+  };
+}
 
 /**
  * Evaluate typed rules against a narrowed input.
@@ -64,15 +86,17 @@ export function evaluate(input: NavigationInput): EngineResult {
 export function evaluateTransaction(
   input: TransactionInput | SignatureInput
 ): TransactionEvaluationResult {
-  if (input.eventKind === "transaction") {
+  const finalizedInput = finalizeTransactionEvaluationInput(input);
+
+  if (finalizedInput.eventKind === "transaction") {
     const rules = getRulesForEventKind("transaction");
     const sorted = sortRules(rules);
-    const matches = collectMatches(sorted, input);
-    return assembleTransactionVerdict(input, matches);
+    const matches = collectMatches(sorted, finalizedInput);
+    return assembleTransactionVerdict(finalizedInput, matches);
   }
 
   const rules = getRulesForEventKind("signature");
   const sorted = sortRules(rules);
-  const matches = collectMatches(sorted, input);
-  return assembleTransactionVerdict(input, matches);
+  const matches = collectMatches(sorted, finalizedInput);
+  return assembleTransactionVerdict(finalizedInput, matches);
 }

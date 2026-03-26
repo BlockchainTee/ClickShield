@@ -85,6 +85,9 @@ export {
 export { normalizeTypedData, classifyPermitKind } from "./transaction/typed-data.js";
 export { buildTransactionExplanation } from "./transaction/explain.js";
 export {
+  classifyTransactionRisk,
+} from "./signals/transaction-risk.js";
+export {
   buildTransactionSignals,
   getTransactionSignals,
 } from "./signals/transaction-signals.js";
@@ -114,6 +117,7 @@ export type {
   TransactionMeta,
   TransactionParamValue,
   TransactionProviderContext,
+  TransactionRiskClassification,
   TransactionRpcMethod,
   TransactionSignals,
   TypedDataField,
