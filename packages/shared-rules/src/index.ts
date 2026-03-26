@@ -84,7 +84,7 @@ export {
   validateTransactionLayer2Snapshot,
 } from "./transaction/intel-snapshot.js";
 export { normalizeTypedData, classifyPermitKind } from "./transaction/typed-data.js";
-export { buildTransactionExplanation } from "./transaction/explain.js";
+export { explainTransaction } from "./transaction/explain.js";
 export {
   classifyTransactionRisk,
 } from "./signals/transaction-risk.js";

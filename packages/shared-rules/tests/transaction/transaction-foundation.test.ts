@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  buildTransactionExplanation,
   buildTransactionSignals,
   getTransactionSelectorDefinition,
   normalizeTransactionRequest,
@@ -148,17 +147,11 @@ describe("Layer 3 transaction foundation", () => {
     });
 
     const signals = buildTransactionSignals(context);
-    const explanation = buildTransactionExplanation(context);
-
     expect(context.decoded.params.approved).toBe(false);
     expect(context.decoded.approvalDirection).toBe("revoke");
     expect(signals.isSetApprovalForAll).toBe(true);
     expect(signals.approvalDirection).toBe("revoke");
     expect(signals.containsApproval).toBe(false);
-    expect(explanation.headline).toBe("NFT collection approval revoked");
-    expect(explanation.summary).toBe(
-      "Remove this contract's permission to transfer NFTs in this collection."
-    );
   });
 
   it("decodes permit transactions", () => {
@@ -227,7 +220,7 @@ describe("Layer 3 transaction foundation", () => {
     expect(context.batch.actions[1]?.actionType).toBe("transferFrom");
   });
 
-  it("builds plain-English approval explanations deterministically", () => {
+  it("extracts deterministic approval signals", () => {
     const context = normalizeTransactionRequest({
       eventKind: "transaction",
       rpcMethod: "eth_sendTransaction",
@@ -247,12 +240,11 @@ describe("Layer 3 transaction foundation", () => {
       walletMetadata: WALLET_METADATA,
     });
 
-    const explanation = buildTransactionExplanation(context);
+    const signals = buildTransactionSignals(context);
 
-    expect(explanation.headline).toBe("Unlimited token approval");
-    expect(explanation.summary).toBe(
-      "Approve unlimited token spending by contract 0xabcabcabcabcabcabcabcabcabcabcabcabcabca"
-    );
+    expect(signals.methodName).toBe("approve");
+    expect(signals.isApprovalMethod).toBe(true);
+    expect(signals.isUnlimitedApproval).toBe(true);
   });
 
   it("normalizes typed-data requests with missing domain fields", () => {
@@ -469,7 +461,7 @@ describe("Layer 3 transaction foundation", () => {
     expect(signals.spenderTrusted).toBeNull();
   });
 
-  it("includes opaque interaction details in unknown interaction explanations", () => {
+  it("marks opaque interactions as contract interactions", () => {
     const context = normalizeTransactionRequest({
       eventKind: "transaction",
       rpcMethod: "eth_sendTransaction",
@@ -484,13 +476,12 @@ describe("Layer 3 transaction foundation", () => {
       walletMetadata: WALLET_METADATA,
     });
 
-    const explanation = buildTransactionExplanation(context);
+    const signals = buildTransactionSignals(context);
 
-    expect(explanation.details).toContain(
-      "Destination contract: 0x2222222222222222222222222222222222222222"
+    expect(signals.isContractInteraction).toBe(true);
+    expect(signals.methodName).toBeUndefined();
+    expect(signals.targetAddress).toBe(
+      "0x2222222222222222222222222222222222222222"
     );
-    expect(explanation.details).toContain("Chain: 1");
-    expect(explanation.details).toContain("Native value: 123");
-    expect(explanation.details).toContain("Malicious-contract intel match: no");
   });
 });

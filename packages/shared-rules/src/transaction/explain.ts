@@ -1,215 +1,197 @@
-import { buildTransactionSignals } from "../signals/transaction-signals.js";
 import type {
   NormalizedTransactionContext,
   TransactionExplanation,
-  TransactionSignals,
 } from "./types.js";
+import { buildTransactionSignals } from "../signals/transaction-signals.js";
+import type {
+  TransactionMatchedReason,
+  TransactionVerdict,
+  Verdict,
+} from "../engine/types.js";
 
-function shortAddress(address: string | null): string {
-  return address ?? "unknown contract";
+type ExplainableTransactionVerdict =
+  | Verdict
+  | Pick<TransactionVerdict, "status" | "primaryReason" | "secondaryReasons">;
+
+const REASON_LABELS: Readonly<Record<string, string>> = Object.freeze({
+  TX_UNLIMITED_APPROVAL: "Unlimited token approval",
+  TX_UNKNOWN_SPENDER: "Unknown spender",
+  TX_SET_APPROVAL_FOR_ALL: "Full NFT collection approval",
+  TX_PERMIT_SIGNATURE: "Permit signature",
+  TX_KNOWN_MALICIOUS_CONTRACT: "Known malicious contract",
+  TX_SCAM_SIGNATURE_MATCH: "Known scam signature match",
+  TX_MULTICALL_APPROVAL_AND_TRANSFER: "Batch approval and transfer",
+  TX_UNKNOWN_CONTRACT_INTERACTION: "Unknown contract interaction",
+  TX_NEW_RECIPIENT: "New recipient",
+});
+
+function humanizeIdentifier(value: string): string {
+  return value
+    .replace(/^TX_/, "")
+    .replace(/_/g, " ")
+    .toLowerCase()
+    .replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function buildTechnicalFacts(
-  context: NormalizedTransactionContext
+function toExplanationStatus(
+  status: Verdict["status"] | TransactionVerdict["status"]
+): TransactionExplanation["status"] {
+  switch (status) {
+    case "BLOCK":
+    case "block":
+      return "block";
+    case "WARN":
+    case "warn":
+      return "warn";
+    case "ALLOW":
+    case "allow":
+      return "allow";
+  }
+}
+
+function summaryForStatus(
+  status: TransactionExplanation["status"]
+): string {
+  switch (status) {
+    case "block":
+      return "This transaction is dangerous and has been blocked";
+    case "warn":
+      return "This transaction may be risky";
+    case "allow":
+      return "This transaction appears safe";
+  }
+}
+
+function explanationRiskLevel(
+  status: TransactionExplanation["status"]
+): TransactionExplanation["riskLevel"] {
+  switch (status) {
+    case "block":
+      return "high";
+    case "warn":
+      return "medium";
+    case "allow":
+      return "low";
+  }
+}
+
+function hasMatchedReasonFields(
+  verdict: ExplainableTransactionVerdict
+): verdict is Pick<TransactionVerdict, "status" | "primaryReason" | "secondaryReasons"> {
+  return "primaryReason" in verdict && "secondaryReasons" in verdict;
+}
+
+function readableReasonLabel(reasonCode: string): string {
+  return REASON_LABELS[reasonCode] ?? humanizeIdentifier(reasonCode);
+}
+
+function readableMatchedReason(reason: TransactionMatchedReason): string {
+  const reasonCode = reason.reasonCodes[0];
+  if (typeof reasonCode === "string" && reasonCode.length > 0) {
+    return readableReasonLabel(reasonCode);
+  }
+
+  return humanizeIdentifier(reason.ruleId);
+}
+
+function primaryReasonForVerdict(
+  verdict: ExplainableTransactionVerdict,
+  status: TransactionExplanation["status"]
+): string {
+  if (hasMatchedReasonFields(verdict) && verdict.primaryReason !== null) {
+    return readableMatchedReason(verdict.primaryReason);
+  }
+
+  switch (status) {
+    case "block":
+      return "Transaction blocked by policy";
+    case "warn":
+      return "Transaction requires review";
+    case "allow":
+      return "No blocking or warning conditions were detected";
+  }
+}
+
+function secondaryReasonsForVerdict(
+  verdict: ExplainableTransactionVerdict
 ): readonly string[] {
-  const technical: string[] = [];
-
-  if (context.methodSelector !== null) {
-    technical.push(`Selector: ${context.methodSelector}`);
+  if (!hasMatchedReasonFields(verdict)) {
+    return [];
   }
 
-  if (context.signature.primaryType !== null) {
-    technical.push(`Primary type: ${context.signature.primaryType}`);
+  const seen = new Set<string>();
+  const readableReasons: string[] = [];
+
+  for (const reason of verdict.secondaryReasons) {
+    const label = readableMatchedReason(reason);
+    if (!seen.has(label)) {
+      seen.add(label);
+      readableReasons.push(label);
+    }
   }
 
-  if (context.to !== null) {
-    technical.push(`Target: ${context.to}`);
-  }
-
-  if (context.signature.verifyingContract !== null) {
-    technical.push(`Verifier: ${context.signature.verifyingContract}`);
-  }
-
-  return technical;
+  return readableReasons;
 }
 
-function buildUnknowns(
+function detailMethod(
   context: NormalizedTransactionContext
-): readonly string[] {
-  const unknowns: string[] = [];
-
-  if (context.eventKind === "transaction" && context.actionType === "unknown") {
-    unknowns.push("ClickShield could not fully decode this contract call.");
-  }
-
-  if (
-    context.eventKind === "signature" &&
-    context.signature.normalizationState === "missing_domain_fields"
-  ) {
-    unknowns.push(
-      `Important signature domain fields were missing: ${context.signature.missingDomainFields.join(", ")}`
-    );
-  }
-
-  if (
-    context.eventKind === "signature" &&
-    context.signature.normalizationState === "invalid_domain_fields"
-  ) {
-    unknowns.push(
-      `Important signature domain fields were invalid: ${context.signature.invalidDomainFields.join(", ")}`
-    );
-  }
-
-  return unknowns;
-}
-
-function explainApprove(
-  context: NormalizedTransactionContext,
-  signals: TransactionSignals
-): TransactionExplanation {
-  const spender = shortAddress(context.decoded.spender);
-  const summary = signals.isUnlimitedApproval
-    ? `Approve unlimited token spending by contract ${spender}`
-    : `Approve token spending by contract ${spender}`;
-
-  return {
-    headline: signals.isUnlimitedApproval
-      ? "Unlimited token approval"
-      : "Token approval",
-    summary,
-    details: [
-      "This gives the contract permission to spend this token balance without another approval.",
-    ],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context),
-  };
-}
-
-function explainSetApprovalForAll(
-  context: NormalizedTransactionContext
-): TransactionExplanation {
-  const approved = context.decoded.params.approved === true;
-  return {
-    headline: approved ? "Full NFT collection access" : "NFT collection approval revoked",
-    summary: approved
-      ? "Allow this contract to transfer all NFTs in this collection."
-      : "Remove this contract's permission to transfer NFTs in this collection.",
-    details: [
-      `Operator: ${shortAddress(context.decoded.operator)}`,
-      approved
-        ? "This grants collection-wide NFT transfer permission."
-        : "This removes collection-wide NFT transfer permission.",
-    ],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context),
-  };
-}
-
-function explainPermitSignature(
-  context: NormalizedTransactionContext
-): TransactionExplanation {
-  return {
-    headline: "Token permission signature",
-    summary: `Sign a permission that lets contract ${shortAddress(
-      context.signature.verifyingContract
-    )} spend tokens without an on-chain approval transaction.`,
-    details: [
-      "This signature can authorize token spending without sending a separate approval transaction first.",
-    ],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context),
-  };
-}
-
-function explainMulticall(
-  context: NormalizedTransactionContext,
-  signals: TransactionSignals
-): TransactionExplanation {
-  const summary = signals.containsApprovalAndTransfer
-    ? "This batch both grants token permission and moves assets in one request."
-    : `Execute a batch of ${context.batch.actions.length} contract actions in one request.`;
-
-  return {
-    headline: signals.containsApprovalAndTransfer
-      ? "Batch transaction with approval and transfer"
-      : "Batch contract transaction",
-    summary,
-    details: [`Batch action count: ${context.batch.actions.length}`],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context),
-  };
-}
-
-function explainUnknown(
-  context: NormalizedTransactionContext
-): TransactionExplanation {
-  return {
-    headline:
-      context.eventKind === "signature"
-        ? "Unknown typed-data signature"
-        : "Unknown contract interaction",
-    summary:
-      context.eventKind === "signature"
-        ? "ClickShield could not fully normalize this typed-data request."
-        : "ClickShield could not fully decode this contract call.",
-    details: [
-      `Destination contract: ${shortAddress(context.to)}`,
-      `Chain: ${context.chainId}`,
-      `Origin: ${context.originDomain}`,
-      `Native value: ${context.valueWei}`,
-      `Malicious-contract intel match: ${context.intel.contractDisposition === "malicious" ? "yes" : "no"}`,
-    ],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context),
-  };
-}
-
-export function buildTransactionExplanation(
-  context: NormalizedTransactionContext
-): TransactionExplanation {
+): string | undefined {
   const signals = context.signals ?? buildTransactionSignals(context);
 
-  if (context.eventKind === "signature" && signals.isPermitSignature) {
-    return explainPermitSignature(context);
+  if (signals.methodName) {
+    return signals.methodName;
   }
 
-  switch (context.actionType) {
-    case "approve":
-    case "increaseAllowance":
-      return explainApprove(context, signals);
-    case "setApprovalForAll":
-      return explainSetApprovalForAll(context);
-    case "multicall":
-      return explainMulticall(context, signals);
-    case "permit":
-      return {
-        headline: "Token permission transaction",
-        summary: `Submit an on-chain permit that grants token spending permission to contract ${shortAddress(
-          context.decoded.spender
-        )}.`,
-        details: [],
-        unknowns: buildUnknowns(context),
-        technical: buildTechnicalFacts(context),
-      };
-    case "transfer":
-      return {
-        headline: "Token transfer",
-        summary: `Transfer tokens to ${shortAddress(context.decoded.recipient)}.`,
-        details: [],
-        unknowns: buildUnknowns(context),
-        technical: buildTechnicalFacts(context),
-      };
-    case "transferFrom":
-      return {
-        headline: "Delegated token transfer",
-        summary: `Transfer tokens from ${shortAddress(
-          context.decoded.owner
-        )} to ${shortAddress(context.decoded.recipient)}.`,
-        details: [],
-        unknowns: buildUnknowns(context),
-        technical: buildTechnicalFacts(context),
-      };
-    default:
-      return explainUnknown(context);
+  if (context.eventKind === "signature") {
+    return context.signature.primaryType ?? undefined;
   }
+
+  return undefined;
+}
+
+function detailTarget(
+  context: NormalizedTransactionContext
+): string | undefined {
+  const signals = context.signals ?? buildTransactionSignals(context);
+  return signals.targetAddress;
+}
+
+function detailValue(
+  context: NormalizedTransactionContext
+): string | undefined {
+  if (context.eventKind !== "transaction") {
+    return undefined;
+  }
+
+  return context.valueWei;
+}
+
+export function explainTransaction(
+  ctx: NormalizedTransactionContext,
+  verdict: Verdict
+): TransactionExplanation;
+export function explainTransaction(
+  ctx: NormalizedTransactionContext,
+  verdict: ExplainableTransactionVerdict
+): TransactionExplanation;
+export function explainTransaction(
+  ctx: NormalizedTransactionContext,
+  verdict: ExplainableTransactionVerdict
+): TransactionExplanation {
+  const signals = ctx.signals ?? buildTransactionSignals(ctx);
+  const status = toExplanationStatus(verdict.status);
+
+  return {
+    status,
+    summary: summaryForStatus(status),
+    primaryReason: primaryReasonForVerdict(verdict, status),
+    secondaryReasons: secondaryReasonsForVerdict(verdict),
+    riskLevel: explanationRiskLevel(status),
+    details: {
+      method: detailMethod(ctx),
+      target: detailTarget(ctx),
+      value: detailValue(ctx),
+      isContractInteraction: signals.isContractInteraction,
+    },
+  };
 }

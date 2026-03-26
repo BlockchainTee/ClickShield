@@ -206,11 +206,17 @@ export interface NormalizedTransactionContext {
 }
 
 export interface TransactionExplanation {
-  readonly headline: string;
+  readonly status: "block" | "warn" | "allow";
   readonly summary: string;
-  readonly details: readonly string[];
-  readonly unknowns: readonly string[];
-  readonly technical: readonly string[];
+  readonly primaryReason: string;
+  readonly secondaryReasons: readonly string[];
+  readonly riskLevel: "high" | "medium" | "low";
+  readonly details: {
+    readonly method?: string;
+    readonly target?: string;
+    readonly value?: string;
+    readonly isContractInteraction: boolean;
+  };
 }
 
 export interface TransactionSignals {

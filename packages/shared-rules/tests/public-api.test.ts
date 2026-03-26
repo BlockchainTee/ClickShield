@@ -4,11 +4,11 @@ import {
   RULE_SET_VERSION,
   buildNavigationContext,
   classifyTransactionRisk,
-  buildTransactionExplanation,
   buildTransactionSignals,
   classifyTransactionSelector,
   contextToInput,
   createTransactionIntelProvider,
+  explainTransaction,
   evaluateEvmWalletScan,
   evaluateSolanaWalletScan,
   evaluateTransaction,
@@ -65,7 +65,7 @@ describe("root public API", () => {
     expect(typeof createTransactionIntelProvider).toBe("function");
     expect(typeof getDefaultTransactionIntelProvider).toBe("function");
     expect(typeof resolveCanonicalTransactionIntel).toBe("function");
-    expect(typeof buildTransactionExplanation).toBe("function");
+    expect(typeof explainTransaction).toBe("function");
     expect(typeof classifyTransactionRisk).toBe("function");
     expect(typeof buildTransactionSignals).toBe("function");
     expect(typeof getTransactionSignals).toBe("function");

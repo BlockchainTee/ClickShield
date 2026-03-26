@@ -11,7 +11,7 @@ import type {
   TransactionVerdictStatus,
   Verdict,
 } from "./types.js";
-import { buildTransactionExplanation } from "../transaction/explain.js";
+import { explainTransaction } from "../transaction/explain.js";
 
 /** Current version of the rule set. */
 export const RULE_SET_VERSION = "0.1.0";
@@ -282,8 +282,7 @@ export function assembleTransactionVerdict(
   const overrideLevel = overrideLevelForStatus(status);
   const signals = input.signals;
   const riskClassification = input.riskClassification;
-  const explanation = buildTransactionExplanation(input);
-  const verdict: TransactionVerdict = {
+  const verdictBase = {
     status,
     riskLevel: base.riskLevel,
     reasonCodes: base.reasonCodes,
@@ -292,7 +291,6 @@ export function assembleTransactionVerdict(
     primaryReason,
     secondaryReasons,
     evidence: base.evidence,
-    explanation,
     ruleSetVersion: base.ruleSetVersion,
     intelVersions: {
       contractFeedVersion: input.intel.contractFeedVersion,
@@ -301,6 +299,10 @@ export function assembleTransactionVerdict(
     },
     overrideAllowed: overrideLevel !== "none",
     overrideLevel,
+  };
+  const verdict: TransactionVerdict = {
+    ...verdictBase,
+    explanation: explainTransaction(input, verdictBase),
   };
 
   return {
