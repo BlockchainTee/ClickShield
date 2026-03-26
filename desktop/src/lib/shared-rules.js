@@ -3658,6 +3658,198 @@ function normalizeTypedDataRequest(input) {
   };
 }
 
+// src/transaction/intel-provider.ts
+var ZERO_EVM_ADDRESS = "0x0000000000000000000000000000000000000000";
+function freezeObject(value) {
+  return Object.freeze(value);
+}
+function freezeMaliciousContractRecord(entry) {
+  return freezeObject({
+    chain: entry.chain,
+    address: entry.address,
+    source: entry.source,
+    disposition: entry.disposition,
+    confidence: entry.confidence,
+    reasonCodes: freezeObject([...entry.reasonCodes])
+  });
+}
+function mapSnapshotSectionState(state) {
+  switch (state) {
+    case "ready":
+      return "fresh";
+    case "stale":
+      return "stale";
+    default:
+      return "missing";
+  }
+}
+function normalizeMaliciousContractAddress(value) {
+  if (value === null || !isValidEvmAddress(value)) {
+    return null;
+  }
+  const normalized = normalizeEvmAddress(value);
+  return normalized === ZERO_EVM_ADDRESS ? null : normalized;
+}
+function createUnavailableMaliciousContractResult(sectionState) {
+  return freezeObject({
+    lookupFamily: "contract",
+    matched: false,
+    disposition: "unavailable",
+    feedVersion: null,
+    sectionState,
+    record: null
+  });
+}
+function createUnavailableScamSignatureResult(sectionState) {
+  return freezeObject({
+    lookupFamily: "scam_signature",
+    matched: false,
+    disposition: "unavailable",
+    feedVersion: null,
+    sectionState
+  });
+}
+function createNoMatchMaliciousContractResult(feedVersion, sectionState) {
+  return freezeObject({
+    lookupFamily: "contract",
+    matched: false,
+    disposition: "no_match",
+    feedVersion,
+    sectionState,
+    record: null
+  });
+}
+function createNoMatchScamSignatureResult(feedVersion, sectionState) {
+  return freezeObject({
+    lookupFamily: "scam_signature",
+    matched: false,
+    disposition: "no_match",
+    feedVersion,
+    sectionState
+  });
+}
+function createMatchedMaliciousContractResult(entry, feedVersion, sectionState) {
+  return freezeObject({
+    lookupFamily: "contract",
+    matched: true,
+    disposition: "malicious",
+    matchedSection: "maliciousContracts",
+    feedVersion,
+    sectionState,
+    record: freezeMaliciousContractRecord(entry)
+  });
+}
+function createCanonicalTransactionIntelLookupResult(maliciousContract, scamSignature) {
+  return freezeObject({
+    maliciousContract,
+    scamSignature
+  });
+}
+function isTransactionIntelProvider(value) {
+  return value !== null && typeof value === "object" && "lookupCanonicalTransactionIntel" in value && typeof value.lookupCanonicalTransactionIntel === "function";
+}
+function canonicalLookupCacheKey(eventKind, targetAddress) {
+  return `${eventKind}:${targetAddress ?? "null"}`;
+}
+function createTransactionIntelProvider(snapshot) {
+  if (snapshot === null) {
+    const contractUnavailable = createUnavailableMaliciousContractResult("missing");
+    const signatureUnavailable = createUnavailableScamSignatureResult("missing");
+    const canonicalUnavailable = createCanonicalTransactionIntelLookupResult(
+      contractUnavailable,
+      signatureUnavailable
+    );
+    return freezeObject({
+      snapshotVersion: null,
+      generatedAt: null,
+      lookupCanonicalTransactionIntel: () => canonicalUnavailable,
+      lookupMaliciousContract: () => contractUnavailable,
+      lookupScamSignature: () => signatureUnavailable
+    });
+  }
+  const maliciousContractsState = mapSnapshotSectionState(
+    snapshot.sectionStates.maliciousContracts
+  );
+  const scamSignaturesState = mapSnapshotSectionState(
+    snapshot.sectionStates.scamSignatures
+  );
+  const maliciousContractsMissing = snapshot.sectionStates.maliciousContracts === "missing";
+  const scamSignaturesMissing = snapshot.sectionStates.scamSignatures === "missing";
+  const maliciousContractResults = /* @__PURE__ */ new Map();
+  snapshot.maliciousContracts.forEach((entry) => {
+    maliciousContractResults.set(
+      `${entry.chain}:${entry.address}`,
+      createMatchedMaliciousContractResult(
+        entry,
+        snapshot.version,
+        maliciousContractsState
+      )
+    );
+  });
+  const lookupMaliciousContract = maliciousContractsMissing ? (() => {
+    const unavailableResult = createUnavailableMaliciousContractResult(maliciousContractsState);
+    return () => unavailableResult;
+  })() : (() => {
+    const noMatchResult = createNoMatchMaliciousContractResult(
+      snapshot.version,
+      maliciousContractsState
+    );
+    return (lookup) => {
+      const normalizedAddress = normalizeMaliciousContractAddress(
+        lookup.address
+      );
+      if (normalizedAddress === null) {
+        return noMatchResult;
+      }
+      return maliciousContractResults.get(`${lookup.chain}:${normalizedAddress}`) ?? noMatchResult;
+    };
+  })();
+  const lookupScamSignature = scamSignaturesMissing ? (() => {
+    const unavailableResult = createUnavailableScamSignatureResult(scamSignaturesState);
+    return () => unavailableResult;
+  })() : (() => {
+    const noMatchResult = createNoMatchScamSignatureResult(
+      snapshot.version,
+      scamSignaturesState
+    );
+    return (lookup) => {
+      void lookup;
+      return noMatchResult;
+    };
+  })();
+  const canonicalLookupResults = /* @__PURE__ */ new Map();
+  const lookupCanonicalTransactionIntel = (lookup) => {
+    const normalizedAddress = normalizeMaliciousContractAddress(lookup.targetAddress);
+    const cacheKey = canonicalLookupCacheKey(lookup.eventKind, normalizedAddress);
+    const cached = canonicalLookupResults.get(cacheKey);
+    if (cached !== void 0) {
+      return cached;
+    }
+    const canonicalResult = createCanonicalTransactionIntelLookupResult(
+      lookupMaliciousContract({
+        chain: "evm",
+        address: lookup.targetAddress
+      }),
+      lookupScamSignature({
+        normalizedKey: null
+      })
+    );
+    canonicalLookupResults.set(cacheKey, canonicalResult);
+    return canonicalResult;
+  };
+  return freezeObject({
+    snapshotVersion: snapshot.version,
+    generatedAt: snapshot.generatedAt,
+    lookupCanonicalTransactionIntel,
+    lookupMaliciousContract,
+    lookupScamSignature
+  });
+}
+function resolveCanonicalTransactionIntel(input, lookup) {
+  const provider = isTransactionIntelProvider(input) ? input : createTransactionIntelProvider(input);
+  return provider.lookupCanonicalTransactionIntel(lookup);
+}
+
 // src/intel/hash.ts
 var SHA256_K = new Uint32Array([
   1116352408,
@@ -3847,7 +4039,7 @@ var MALICIOUS_CONTRACT_KEYS = [
   "reasonCodes"
 ];
 var SECTION_STATE_KEYS = ["maliciousContracts", "scamSignatures"];
-var ZERO_EVM_ADDRESS = "0x0000000000000000000000000000000000000000";
+var ZERO_EVM_ADDRESS2 = "0x0000000000000000000000000000000000000000";
 function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -4080,7 +4272,7 @@ function parseMaliciousContracts(value, issues, failureKinds) {
         "incompatible"
       );
     }
-    if (address === ZERO_EVM_ADDRESS) {
+    if (address === ZERO_EVM_ADDRESS2) {
       pushIssue(
         issues,
         failureKinds,
@@ -4201,16 +4393,6 @@ function parseScamSignatures(value, issues, failureKinds) {
 function toFailureStatus(failureKinds) {
   return failureKinds.includes("incompatible") ? "incompatible" : "malformed";
 }
-function mapSnapshotSectionState(state) {
-  switch (state) {
-    case "ready":
-      return "fresh";
-    case "stale":
-      return "stale";
-    default:
-      return "missing";
-  }
-}
 function validateTransactionLayer2Snapshot(input) {
   const issues = [];
   const failureKinds = [];
@@ -4311,70 +4493,18 @@ function validateTransactionLayer2Snapshot(input) {
       issues
     };
   }
-  const maliciousContractIndex = maliciousContracts.reduce((accumulator, entry) => {
-    accumulator[`${entry.chain}:${entry.address}`] = entry;
-    return accumulator;
-  }, {});
   const snapshot = deepFreeze({
     version,
     generatedAt,
     maliciousContracts,
     scamSignatures,
-    sectionStates,
-    maliciousContractIndex
+    sectionStates
   });
   return {
     ok: true,
     status: maliciousContracts.length === 0 ? "empty" : "valid",
     snapshot,
     issues
-  };
-}
-function normalizeLookupAddress(value) {
-  if (value === null || !isValidEvmAddress(value)) {
-    return null;
-  }
-  const normalized = normalizeEvmAddress(value);
-  return normalized === ZERO_EVM_ADDRESS ? null : normalized;
-}
-function resolveCanonicalTransactionIntel(snapshot, lookup, trustedOriginIntel) {
-  const defaultSectionStates = {
-    maliciousContracts: "missing",
-    scamSignatures: "missing",
-    allowlists: trustedOriginIntel.allowlistsState
-  };
-  if (snapshot === null) {
-    return {
-      contractDisposition: "unavailable",
-      contractFeedVersion: null,
-      allowlistFeedVersion: trustedOriginIntel.allowlistFeedVersion,
-      signatureDisposition: "unavailable",
-      signatureFeedVersion: null,
-      originDisposition: trustedOriginIntel.originDisposition,
-      sectionStates: defaultSectionStates
-    };
-  }
-  const targetAddress = normalizeLookupAddress(lookup.targetAddress);
-  const maliciousContractsState = mapSnapshotSectionState(
-    snapshot.sectionStates.maliciousContracts
-  );
-  const scamSignaturesState = mapSnapshotSectionState(
-    snapshot.sectionStates.scamSignatures
-  );
-  const contractDisposition = snapshot.sectionStates.maliciousContracts === "missing" ? "unavailable" : targetAddress !== null && snapshot.maliciousContractIndex[`evm:${targetAddress}`] !== void 0 ? "malicious" : "no_match";
-  const signatureDisposition = snapshot.sectionStates.scamSignatures === "missing" ? "unavailable" : "no_match";
-  return {
-    contractDisposition,
-    contractFeedVersion: snapshot.sectionStates.maliciousContracts === "missing" ? null : snapshot.version,
-    allowlistFeedVersion: trustedOriginIntel.allowlistFeedVersion,
-    signatureDisposition,
-    signatureFeedVersion: snapshot.sectionStates.scamSignatures === "missing" ? null : snapshot.version,
-    originDisposition: trustedOriginIntel.originDisposition,
-    sectionStates: {
-      maliciousContracts: maliciousContractsState,
-      scamSignatures: scamSignaturesState,
-      allowlists: trustedOriginIntel.allowlistsState
-    }
   };
 }
 
@@ -9901,6 +10031,7 @@ export {
   containsMintKeyword,
   containsWalletConnectPattern,
   contextToInput,
+  createTransactionIntelProvider,
   decodeTransactionCalldata,
   deconfuseHostname,
   domainSimilarityScore,

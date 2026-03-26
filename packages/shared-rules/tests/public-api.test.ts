@@ -7,6 +7,7 @@ import {
   buildTransactionSignals,
   classifyTransactionSelector,
   contextToInput,
+  createTransactionIntelProvider,
   evaluateEvmWalletScan,
   evaluateSolanaWalletScan,
   evaluateTransaction,
@@ -58,6 +59,7 @@ describe("root public API", () => {
     expect(typeof normalizeTransactionRequest).toBe("function");
     expect(typeof normalizeTypedDataRequest).toBe("function");
     expect(typeof validateTransactionLayer2Snapshot).toBe("function");
+    expect(typeof createTransactionIntelProvider).toBe("function");
     expect(typeof resolveCanonicalTransactionIntel).toBe("function");
     expect(typeof buildTransactionExplanation).toBe("function");
     expect(typeof buildTransactionSignals).toBe("function");

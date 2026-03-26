@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
+  createTransactionIntelProvider,
   resolveCanonicalTransactionIntel,
   validateTransactionLayer2Snapshot,
 } from "../../src/index.js";
@@ -75,7 +76,7 @@ function buildSnapshot(
 }
 
 describe("transaction Layer 2 snapshot validation", () => {
-  it("accepts a valid canonical snapshot and resolves provider-safe intel from it", () => {
+  it("accepts a valid canonical snapshot without leaking provider internals", () => {
     const input = buildSnapshot(
       [
         {
@@ -101,26 +102,28 @@ describe("transaction Layer 2 snapshot validation", () => {
       return;
     }
 
+    const leakedKey = ["maliciousContract", "Index"].join("");
+
     expect(Object.isFrozen(result.snapshot)).toBe(true);
     expect(Object.isFrozen(result.snapshot.maliciousContracts)).toBe(true);
+    expect(leakedKey in result.snapshot).toBe(false);
+    expect(Object.keys(result.snapshot)).not.toContain(leakedKey);
 
-    const intel = resolveCanonicalTransactionIntel(
-      result.snapshot,
-      {
+    const provider = createTransactionIntelProvider(result.snapshot);
+    const intel = resolveCanonicalTransactionIntel(provider, {
+      eventKind: "transaction",
+      targetAddress: "0x9999999999999999999999999999999999999999",
+    });
+
+    expect(intel).toBe(
+      provider.lookupCanonicalTransactionIntel({
         eventKind: "transaction",
         targetAddress: "0x9999999999999999999999999999999999999999",
-      },
-      {
-        originDisposition: "no_match",
-        allowlistFeedVersion: null,
-        allowlistsState: "missing",
-      }
+      })
     );
-
-    expect(intel.contractDisposition).toBe("malicious");
-    expect(intel.contractFeedVersion).toBe(input.version);
-    expect(intel.signatureDisposition).toBe("unavailable");
-    expect(intel.sectionStates.maliciousContracts).toBe("fresh");
+    expect(intel.maliciousContract.disposition).toBe("malicious");
+    expect(intel.maliciousContract.feedVersion).toBe(input.version);
+    expect(intel.scamSignature.disposition).toBe("unavailable");
   });
 
   it("rejects malformed and incompatible snapshots explicitly", () => {
@@ -180,20 +183,13 @@ describe("transaction Layer 2 snapshot validation", () => {
       return;
     }
 
-    const intel = resolveCanonicalTransactionIntel(
-      first.snapshot,
-      {
-        eventKind: "transaction",
-        targetAddress: "0x9999999999999999999999999999999999999999",
-      },
-      {
-        originDisposition: "unavailable",
-        allowlistFeedVersion: null,
-        allowlistsState: "missing",
-      }
-    );
+    const intel = resolveCanonicalTransactionIntel(first.snapshot, {
+      eventKind: "transaction",
+      targetAddress: "0x9999999999999999999999999999999999999999",
+    });
 
-    expect(intel.contractDisposition).toBe("unavailable");
-    expect(intel.sectionStates.maliciousContracts).toBe("missing");
+    expect(intel.maliciousContract.disposition).toBe("unavailable");
+    expect(intel.maliciousContract.sectionState).toBe("missing");
+    expect(intel.scamSignature.disposition).toBe("unavailable");
   });
 });

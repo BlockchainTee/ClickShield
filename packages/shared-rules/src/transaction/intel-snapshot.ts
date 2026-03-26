@@ -8,6 +8,7 @@ import type {
   TransactionEventKind,
   TransactionIntelContext,
 } from "./types.js";
+export { resolveCanonicalTransactionIntel } from "./intel-provider.js";
 
 export type CanonicalTransactionSnapshotSectionState =
   | "ready"
@@ -40,11 +41,7 @@ export interface TransactionLayer2Snapshot {
 }
 
 export interface ValidatedTransactionLayer2Snapshot
-  extends TransactionLayer2Snapshot {
-  readonly maliciousContractIndex: Readonly<
-    Record<string, TransactionLayer2MaliciousContract>
-  >;
-}
+  extends TransactionLayer2Snapshot {}
 
 export interface ValidateTransactionLayer2SnapshotSuccess {
   readonly ok: true;
@@ -552,19 +549,6 @@ function toFailureStatus(
   return failureKinds.includes("incompatible") ? "incompatible" : "malformed";
 }
 
-function mapSnapshotSectionState(
-  state: CanonicalTransactionSnapshotSectionState
-): TransactionLayer2SectionState {
-  switch (state) {
-    case "ready":
-      return "fresh";
-    case "stale":
-      return "stale";
-    default:
-      return "missing";
-  }
-}
-
 export function validateTransactionLayer2Snapshot(
   input: unknown
 ): ValidateTransactionLayer2SnapshotResult {
@@ -691,20 +675,12 @@ export function validateTransactionLayer2Snapshot(
     };
   }
 
-  const maliciousContractIndex = maliciousContracts.reduce<
-    Record<string, TransactionLayer2MaliciousContract>
-  >((accumulator, entry) => {
-    accumulator[`${entry.chain}:${entry.address}`] = entry;
-    return accumulator;
-  }, {});
-
   const snapshot: ValidatedTransactionLayer2Snapshot = deepFreeze({
     version,
     generatedAt,
     maliciousContracts,
     scamSignatures,
     sectionStates,
-    maliciousContractIndex,
   });
 
   return {
@@ -712,79 +688,5 @@ export function validateTransactionLayer2Snapshot(
     status: maliciousContracts.length === 0 ? "empty" : "valid",
     snapshot,
     issues,
-  };
-}
-
-function normalizeLookupAddress(value: string | null): string | null {
-  if (value === null || !isValidEvmAddress(value)) {
-    return null;
-  }
-
-  const normalized = normalizeEvmAddress(value);
-  return normalized === ZERO_EVM_ADDRESS ? null : normalized;
-}
-
-export function resolveCanonicalTransactionIntel(
-  snapshot: ValidatedTransactionLayer2Snapshot | null,
-  lookup: CanonicalTransactionIntelLookup,
-  trustedOriginIntel: TrustedTransactionOriginIntel
-): TransactionIntelContext {
-  const defaultSectionStates = {
-    maliciousContracts: "missing",
-    scamSignatures: "missing",
-    allowlists: trustedOriginIntel.allowlistsState,
-  } as const;
-
-  if (snapshot === null) {
-    return {
-      contractDisposition: "unavailable",
-      contractFeedVersion: null,
-      allowlistFeedVersion: trustedOriginIntel.allowlistFeedVersion,
-      signatureDisposition: "unavailable",
-      signatureFeedVersion: null,
-      originDisposition: trustedOriginIntel.originDisposition,
-      sectionStates: defaultSectionStates,
-    };
-  }
-
-  const targetAddress = normalizeLookupAddress(lookup.targetAddress);
-  const maliciousContractsState = mapSnapshotSectionState(
-    snapshot.sectionStates.maliciousContracts
-  );
-  const scamSignaturesState = mapSnapshotSectionState(
-    snapshot.sectionStates.scamSignatures
-  );
-
-  const contractDisposition =
-    snapshot.sectionStates.maliciousContracts === "missing"
-      ? "unavailable"
-      : targetAddress !== null &&
-          snapshot.maliciousContractIndex[`evm:${targetAddress}`] !== undefined
-        ? "malicious"
-        : "no_match";
-
-  const signatureDisposition =
-    snapshot.sectionStates.scamSignatures === "missing"
-      ? "unavailable"
-      : "no_match";
-
-  return {
-    contractDisposition,
-    contractFeedVersion:
-      snapshot.sectionStates.maliciousContracts === "missing"
-        ? null
-        : snapshot.version,
-    allowlistFeedVersion: trustedOriginIntel.allowlistFeedVersion,
-    signatureDisposition,
-    signatureFeedVersion:
-      snapshot.sectionStates.scamSignatures === "missing"
-        ? null
-        : snapshot.version,
-    originDisposition: trustedOriginIntel.originDisposition,
-    sectionStates: {
-      maliciousContracts: maliciousContractsState,
-      scamSignatures: scamSignaturesState,
-      allowlists: trustedOriginIntel.allowlistsState,
-    },
   };
 }
