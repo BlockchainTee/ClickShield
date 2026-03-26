@@ -7,6 +7,7 @@ import {
   buildTransactionSignals,
   classifyTransactionSelector,
   contextToInput,
+  createAuditRecord,
   createTransactionIntelProvider,
   explainTransaction,
   evaluateEvmWalletScan,
@@ -66,6 +67,7 @@ describe("root public API", () => {
     expect(typeof getDefaultTransactionIntelProvider).toBe("function");
     expect(typeof resolveCanonicalTransactionIntel).toBe("function");
     expect(typeof explainTransaction).toBe("function");
+    expect(typeof createAuditRecord).toBe("function");
     expect(typeof classifyTransactionRisk).toBe("function");
     expect(typeof buildTransactionSignals).toBe("function");
     expect(typeof getTransactionSignals).toBe("function");

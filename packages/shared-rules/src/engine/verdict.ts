@@ -12,6 +12,7 @@ import type {
   Verdict,
 } from "./types.js";
 import { explainTransaction } from "../transaction/explain.js";
+import { createAuditRecord } from "../transaction/audit.js";
 
 /** Current version of the rule set. */
 export const RULE_SET_VERSION = "0.1.0";
@@ -300,9 +301,15 @@ export function assembleTransactionVerdict(
     overrideAllowed: overrideLevel !== "none",
     overrideLevel,
   };
+  const explanation = explainTransaction(input, verdictBase);
+  const audit = createAuditRecord(input, {
+    ...verdictBase,
+    explanation,
+  });
   const verdict: TransactionVerdict = {
     ...verdictBase,
-    explanation: explainTransaction(input, verdictBase),
+    explanation,
+    audit,
   };
 
   return {

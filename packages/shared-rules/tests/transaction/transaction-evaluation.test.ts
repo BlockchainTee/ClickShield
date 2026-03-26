@@ -106,6 +106,21 @@ function buildSnapshot(
   };
 }
 
+function withNormalizedAuditTimestamp<
+  TResult extends { verdict: { audit: { timestamp: string } } }
+>(result: TResult): TResult {
+  return {
+    ...result,
+    verdict: {
+      ...result.verdict,
+      audit: {
+        ...result.verdict.audit,
+        timestamp: "<timestamp>",
+      },
+    },
+  };
+}
+
 function buildValidatedProvider(
   maliciousContracts: readonly unknown[]
 ): TransactionIntelProvider {
@@ -829,7 +844,11 @@ describe("Layer 3 Phase B transaction evaluation", () => {
     const second = evaluateTransaction(secondContext);
 
     expect(secondContext).toEqual(firstContext);
-    expect(second).toEqual(first);
+    expect(second.verdict.audit.id).toBe(first.verdict.audit.id);
+    expect(second.verdict.audit.timestamp).toEqual(expect.any(String));
+    expect(withNormalizedAuditTimestamp(second)).toEqual(
+      withNormalizedAuditTimestamp(first)
+    );
   });
 
   it("reuses the canonical default provider lifecycle across repeated runtime calls", () => {

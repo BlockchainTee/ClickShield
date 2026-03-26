@@ -4,6 +4,7 @@ import type {
   TransactionRiskClassification,
   TransactionSignals,
 } from "../transaction/types.js";
+import type { TransactionAuditRecord } from "../transaction/audit.js";
 
 /**
  * Discriminator for event categories the engine handles.
@@ -211,6 +212,7 @@ export interface TransactionVerdict {
   readonly intelVersions: TransactionIntelVersions;
   readonly overrideAllowed: boolean;
   readonly overrideLevel: TransactionOverrideLevel;
+  readonly audit: TransactionAuditRecord;
 }
 
 export interface TransactionEvaluationResult {

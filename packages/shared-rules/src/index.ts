@@ -85,6 +85,8 @@ export {
 } from "./transaction/intel-snapshot.js";
 export { normalizeTypedData, classifyPermitKind } from "./transaction/typed-data.js";
 export { explainTransaction } from "./transaction/explain.js";
+export { createAuditRecord } from "./transaction/audit.js";
+export type { TransactionAuditRecord } from "./transaction/audit.js";
 export {
   classifyTransactionRisk,
 } from "./signals/transaction-risk.js";
