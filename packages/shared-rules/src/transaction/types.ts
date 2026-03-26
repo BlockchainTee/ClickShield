@@ -197,6 +197,7 @@ export interface NormalizedTransactionContext {
   readonly decoded: DecodedTransactionAction;
   readonly batch: TransactionBatchContext;
   readonly signature: NormalizedTypedData;
+  readonly signals: TransactionSignals;
   readonly intel: TransactionIntelContext;
   readonly provider: TransactionProviderContext;
   readonly counterparty: TransactionCounterpartyContext;
@@ -212,9 +213,16 @@ export interface TransactionExplanation {
 }
 
 export interface TransactionSignals {
+  readonly isContractInteraction: boolean;
+  readonly isNativeTransfer: boolean;
+  readonly methodName?: string;
+  readonly isApproval: boolean;
   readonly actionType: TransactionActionType;
   readonly isApprovalMethod: boolean;
   readonly isUnlimitedApproval: boolean;
+  readonly hasValueTransfer: boolean;
+  readonly isHighValue: boolean;
+  readonly targetAddress?: string;
   readonly isPermitSignature: boolean;
   readonly isSetApprovalForAll: boolean;
   readonly approvalDirection: ApprovalDirection;
@@ -222,7 +230,6 @@ export interface TransactionSignals {
   readonly recipientIsNew: boolean | null;
   readonly isTransfer: boolean;
   readonly isTransferFrom: boolean;
-  readonly isContractInteraction: boolean;
   readonly isMulticall: boolean;
   readonly containsApprovalAndTransfer: boolean;
   readonly containsApproval: boolean;

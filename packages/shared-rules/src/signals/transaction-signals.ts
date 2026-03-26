@@ -1,10 +1,6 @@
-import {
-  classifySelector,
-  extractSelector,
-  isUnlimitedApprovalAmount,
-  parseApprovalAmount,
-} from "../normalize/transaction.js";
-import { classifyPermitKind } from "../transaction/typed-data.js";
+import type { TransactionInput } from "../engine/types.js";
+import { MAX_UINT256_HEX, extractSelector } from "../normalize/transaction.js";
+import { getTransactionSelectorDefinition } from "../transaction/selectors.js";
 import type {
   ApprovalDirection,
   DecodedTransactionAction,
@@ -12,46 +8,29 @@ import type {
   TransactionSignals,
 } from "../transaction/types.js";
 
-/**
- * Check if calldata is an approval method (approve, setApprovalForAll, increaseAllowance).
- */
-export function isApprovalMethod(calldata: string): boolean {
-  const selector = extractSelector(calldata);
-  const kind = classifySelector(selector);
-  return (
-    kind === "approve" ||
-    kind === "setApprovalForAll" ||
-    kind === "increaseAllowance"
-  );
-}
+const HIGH_VALUE_THRESHOLD = 1_000_000_000_000_000_000n;
+const MAX_UINT256_DECIMAL = BigInt(`0x${MAX_UINT256_HEX}`).toString(10);
 
-/**
- * Check if calldata contains an unlimited approval (max uint256).
- */
-export function isUnlimitedApproval(calldata: string): boolean {
-  if (!isApprovalMethod(calldata)) return false;
-  const amount = parseApprovalAmount(calldata);
-  return isUnlimitedApprovalAmount(amount);
-}
+type TransactionSignalContext = Omit<NormalizedTransactionContext, "signals">;
+type TransactionSignalInput = TransactionSignalContext & {
+  readonly eventKind: "transaction";
+};
+type SignatureSignalInput = TransactionSignalContext & {
+  readonly eventKind: "signature";
+};
 
-/**
- * Check if a typed data object is a permit-style signature.
- */
-export function isPermitSignature(typedData: string): boolean {
-  if (!typedData) return false;
-  try {
-    const parsed: unknown = JSON.parse(typedData);
-    const primaryType =
-      typeof parsed === "object" &&
-      parsed !== null &&
-      "primaryType" in parsed &&
-      typeof parsed.primaryType === "string"
-        ? parsed.primaryType
-        : null;
-    return classifyPermitKind(primaryType) !== "none";
-  } catch {
-    return false;
+function toMethodName(
+  methodSelector: string | null,
+  calldata: string
+): string | undefined {
+  const selector =
+    methodSelector ?? (calldata === "0x" ? null : extractSelector(calldata));
+
+  if (selector === null || selector === "0x") {
+    return undefined;
   }
+
+  return getTransactionSelectorDefinition(selector)?.functionName ?? undefined;
 }
 
 function isApprovalMethodAction(action: DecodedTransactionAction): boolean {
@@ -76,57 +55,133 @@ function hasTransferAction(action: DecodedTransactionAction): boolean {
   return action.actionType === "transfer" || action.actionType === "transferFrom";
 }
 
-export function buildTransactionSignals(
-  context: NormalizedTransactionContext
+function isTransactionSignalInput(
+  input: TransactionSignalContext
+): input is TransactionSignalInput {
+  return input.eventKind === "transaction";
+}
+
+function isSignatureSignalInput(
+  input: TransactionSignalContext
+): input is SignatureSignalInput {
+  return input.eventKind === "signature";
+}
+
+function buildTransactionSignalsFromTransaction(
+  input: TransactionSignalInput
 ): TransactionSignals {
-  const actions = context.batch.isMulticall
-    ? context.batch.actions
-    : [context.decoded];
+  const actions = input.batch.isMulticall ? input.batch.actions : [input.decoded];
   const containsApproval = actions.some((action) => isGrantApprovalAction(action));
   const containsTransfer = actions.some((action) => action.actionType === "transfer");
   const containsTransferFrom = actions.some(
     (action) => action.actionType === "transferFrom"
   );
+  const hasValueTransfer = BigInt(input.valueWei) > 0n;
+  const methodName = toMethodName(input.methodSelector, input.calldata);
+  const isApproval = methodName === "approve";
 
   return {
-    actionType: context.actionType,
-    isApprovalMethod: isApprovalMethodAction(context.decoded),
-    isUnlimitedApproval: context.decoded.amount !== null
-      ? isUnlimitedApprovalAmount(
-          BigInt(context.decoded.amount).toString(16).padStart(64, "0")
-        )
-      : false,
-    isPermitSignature:
-      context.eventKind === "signature" && context.signature.permitKind !== "none",
-    isSetApprovalForAll: context.decoded.actionType === "setApprovalForAll",
-    approvalDirection: approvalDirectionForAction(context.decoded),
-    spenderTrusted: context.counterparty.spenderTrusted,
-    recipientIsNew: context.counterparty.recipientIsNew,
-    isTransfer: context.decoded.actionType === "transfer",
-    isTransferFrom: context.decoded.actionType === "transferFrom",
-    isContractInteraction:
-      context.eventKind === "transaction" &&
-      context.to !== null &&
-      context.decoded.actionType !== "transfer",
-    isMulticall: context.batch.isMulticall,
+    isContractInteraction: input.calldata !== "0x",
+    isNativeTransfer: input.calldata === "0x",
+    methodName,
+    isApproval,
+    actionType: input.actionType,
+    isApprovalMethod: isApprovalMethodAction(input.decoded),
+    isUnlimitedApproval:
+      isApprovalMethodAction(input.decoded) &&
+      input.decoded.amount === MAX_UINT256_DECIMAL,
+    hasValueTransfer,
+    isHighValue: BigInt(input.valueWei) >= HIGH_VALUE_THRESHOLD,
+    targetAddress: input.to ?? undefined,
+    isPermitSignature: false,
+    isSetApprovalForAll: input.decoded.actionType === "setApprovalForAll",
+    approvalDirection: approvalDirectionForAction(input.decoded),
+    spenderTrusted: input.counterparty.spenderTrusted,
+    recipientIsNew: input.counterparty.recipientIsNew,
+    isTransfer: input.decoded.actionType === "transfer",
+    isTransferFrom: input.decoded.actionType === "transferFrom",
+    isMulticall: input.batch.isMulticall,
     containsApprovalAndTransfer:
-      context.batch.isMulticall &&
+      input.batch.isMulticall &&
       containsApproval &&
       actions.some((action) => hasTransferAction(action)),
     containsApproval,
     containsTransfer,
     containsTransferFrom,
-    batchActionCount: context.batch.actions.length,
-    hasNativeValue: context.valueWei !== "0",
-    touchesMaliciousContract: context.intel.contractDisposition === "malicious",
-    targetAllowlisted: context.intel.contractDisposition === "allowlisted",
-    signatureIntelMatch: context.intel.signatureDisposition === "malicious",
-    verifyingContractKnown:
-      context.eventKind === "signature" &&
-      context.signature.verifyingContractPresent &&
-      context.signature.verifyingContract !== null,
-    hasUnknownInnerCall: context.batch.actions.some(
+    batchActionCount: input.batch.actions.length,
+    hasNativeValue: hasValueTransfer,
+    touchesMaliciousContract: input.intel.contractDisposition === "malicious",
+    targetAllowlisted: input.intel.contractDisposition === "allowlisted",
+    signatureIntelMatch: input.intel.signatureDisposition === "malicious",
+    verifyingContractKnown: false,
+    hasUnknownInnerCall: input.batch.actions.some(
       (action) => action.actionType === "unknown"
     ),
   };
+}
+
+function buildTransactionSignalsFromSignature(
+  input: SignatureSignalInput
+): TransactionSignals {
+  return {
+    isContractInteraction: false,
+    isNativeTransfer: false,
+    methodName: undefined,
+    isApproval: false,
+    actionType: input.actionType,
+    isApprovalMethod: false,
+    isUnlimitedApproval: false,
+    hasValueTransfer: false,
+    isHighValue: false,
+    targetAddress: input.signature.verifyingContract ?? undefined,
+    isPermitSignature: input.signature.permitKind !== "none",
+    isSetApprovalForAll: false,
+    approvalDirection: "not_applicable",
+    spenderTrusted: input.counterparty.spenderTrusted,
+    recipientIsNew: input.counterparty.recipientIsNew,
+    isTransfer: false,
+    isTransferFrom: false,
+    isMulticall: false,
+    containsApprovalAndTransfer: false,
+    containsApproval: false,
+    containsTransfer: false,
+    containsTransferFrom: false,
+    batchActionCount: 0,
+    hasNativeValue: false,
+    touchesMaliciousContract: input.intel.contractDisposition === "malicious",
+    targetAllowlisted: input.intel.contractDisposition === "allowlisted",
+    signatureIntelMatch: input.intel.signatureDisposition === "malicious",
+    verifyingContractKnown:
+      input.signature.verifyingContractPresent &&
+      input.signature.verifyingContract !== null,
+    hasUnknownInnerCall: false,
+  };
+}
+
+export function getTransactionSignals(input: TransactionInput): TransactionSignals;
+export function getTransactionSignals(
+  input: TransactionSignalInput
+): TransactionSignals;
+export function getTransactionSignals(
+  input: TransactionInput | TransactionSignalInput
+): TransactionSignals {
+  return buildTransactionSignalsFromTransaction(input);
+}
+
+export function buildTransactionSignals(
+  context: NormalizedTransactionContext | TransactionSignalContext
+): TransactionSignals {
+  if ("signals" in context) {
+    return context.signals;
+  }
+
+  if (isTransactionSignalInput(context)) {
+    return buildTransactionSignalsFromTransaction(context);
+  }
+
+  if (isSignatureSignalInput(context)) {
+    return buildTransactionSignalsFromSignature(context);
+  }
+
+  throw new TypeError(`Unsupported transaction event kind: ${context.eventKind}`);
 }

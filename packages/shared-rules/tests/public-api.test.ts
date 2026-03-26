@@ -12,6 +12,7 @@ import {
   evaluateSolanaWalletScan,
   evaluateTransaction,
   getDefaultTransactionIntelProvider,
+  getTransactionSignals,
   getTransactionSelectorDefinition,
   evaluate,
   getReasonMessage,
@@ -65,6 +66,7 @@ describe("root public API", () => {
     expect(typeof resolveCanonicalTransactionIntel).toBe("function");
     expect(typeof buildTransactionExplanation).toBe("function");
     expect(typeof buildTransactionSignals).toBe("function");
+    expect(typeof getTransactionSignals).toBe("function");
     expect(typeof evaluateTransaction).toBe("function");
     expect(typeof evaluateEvmWalletScan).toBe("function");
     expect(typeof evaluateSolanaWalletScan).toBe("function");

@@ -84,7 +84,10 @@ export {
 } from "./transaction/intel-snapshot.js";
 export { normalizeTypedData, classifyPermitKind } from "./transaction/typed-data.js";
 export { buildTransactionExplanation } from "./transaction/explain.js";
-export { buildTransactionSignals } from "./signals/transaction-signals.js";
+export {
+  buildTransactionSignals,
+  getTransactionSignals,
+} from "./signals/transaction-signals.js";
 export type {
   ApprovalDirection,
   ApprovalAmountKind,

@@ -1,4 +1,5 @@
 import canonicalTransactionSnapshot from "../intel/generated/layer2-snapshot.json";
+import { buildTransactionSignals } from "../signals/transaction-signals.js";
 import {
   createTransactionIntelProvider,
   resolveCanonicalTransactionIntel,
@@ -90,9 +91,15 @@ export function hydrateNormalizedTransactionContext(
   input: NormalizedTransactionContext,
   provider?: TransactionIntelProvider | null
 ): NormalizedTransactionContext {
-  return {
+  const hydrated = {
     ...input,
     intel: buildHydratedIntel(input, provider),
+  };
+  const { signals: _signals, ...signalInput } = hydrated;
+
+  return {
+    ...hydrated,
+    signals: buildTransactionSignals(signalInput),
   };
 }
 

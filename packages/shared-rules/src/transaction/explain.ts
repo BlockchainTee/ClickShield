@@ -167,7 +167,7 @@ function explainUnknown(
 export function buildTransactionExplanation(
   context: NormalizedTransactionContext
 ): TransactionExplanation {
-  const signals = buildTransactionSignals(context);
+  const signals = context.signals ?? buildTransactionSignals(context);
 
   if (context.eventKind === "signature" && signals.isPermitSignature) {
     return explainPermitSignature(context);

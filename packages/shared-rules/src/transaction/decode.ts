@@ -12,6 +12,7 @@ import {
   TRANSFER_FROM_SELECTOR,
   TRANSFER_SELECTOR,
 } from "./selectors.js";
+import { buildTransactionSignals, getTransactionSignals } from "../signals/transaction-signals.js";
 import { hydrateNormalizedTransactionContext } from "./hydrate.js";
 import { normalizeTypedData } from "./typed-data.js";
 import type { TransactionIntelProvider } from "./intel-provider.js";
@@ -410,9 +411,7 @@ export function normalizeTransactionRequest(
   const normalizedCalldata = normalizeHex(input.calldata);
   const methodSelector = normalizedCalldata === "0x" ? null : extractSelector(normalizedCalldata);
   const { decoded, batch } = decodeTransactionCalldata(normalizedCalldata, to);
-
-  return hydrateNormalizedTransactionContext(
-    {
+  const normalized = {
     eventKind: "transaction",
     rpcMethod: input.rpcMethod,
     chainFamily: input.chainFamily,
@@ -460,9 +459,18 @@ export function normalizeTransactionRequest(
     ),
     counterparty: defaultCounterparty(input.counterparty),
     meta: {
-      selectorRecognized: methodSelector !== null && getTransactionSelectorDefinition(methodSelector) !== null,
+      selectorRecognized:
+        methodSelector !== null &&
+        getTransactionSelectorDefinition(methodSelector) !== null,
       typedDataNormalized: false,
     },
+  } satisfies Omit<NormalizedTransactionContext, "signals">;
+  const signals = getTransactionSignals(normalized);
+
+  return hydrateNormalizedTransactionContext(
+    {
+    ...normalized,
+    signals,
     },
     options?.intelProvider
   );
@@ -476,9 +484,7 @@ export function normalizeTypedDataRequest(
 ): NormalizedTransactionContext {
   const from = normalizeEvmAddress(input.from);
   const signature = normalizeTypedData(input.typedData);
-
-  return hydrateNormalizedTransactionContext(
-    {
+  const normalized = {
     eventKind: "signature",
     rpcMethod: input.rpcMethod,
     chainFamily: input.chainFamily,
@@ -521,6 +527,13 @@ export function normalizeTypedDataRequest(
       selectorRecognized: false,
       typedDataNormalized: signature.normalizationState === "normalized",
     },
+  } satisfies Omit<NormalizedTransactionContext, "signals">;
+  const signals = buildTransactionSignals(normalized);
+
+  return hydrateNormalizedTransactionContext(
+    {
+    ...normalized,
+    signals,
     },
     options?.intelProvider
   );

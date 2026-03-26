@@ -11,7 +11,6 @@ import type {
   Verdict,
 } from "./types.js";
 import { buildTransactionExplanation } from "../transaction/explain.js";
-import { buildTransactionSignals } from "../signals/transaction-signals.js";
 
 /** Current version of the rule set. */
 export const RULE_SET_VERSION = "0.1.0";
@@ -181,7 +180,7 @@ export function assembleTransactionVerdict(
   const base = assembleVerdict(matches);
   const status = toTransactionStatus(base.status);
   const overrideLevel = overrideLevelForStatus(status);
-  const signals = buildTransactionSignals(input);
+  const signals = input.signals;
   const explanation = buildTransactionExplanation(input);
   const verdict: TransactionVerdict = {
     status,

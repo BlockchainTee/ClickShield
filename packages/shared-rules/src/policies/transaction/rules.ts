@@ -3,7 +3,6 @@ import type {
   SignatureInput,
   TransactionInput,
 } from "../../engine/types.js";
-import { buildTransactionSignals } from "../../signals/transaction-signals.js";
 import type { TransactionCode } from "./codes.js";
 import { TRANSACTION_CODES } from "./codes.js";
 
@@ -91,7 +90,7 @@ const WARN_UNLIMITED_APPROVAL_UNKNOWN_SPENDER: Rule<TransactionPolicyInput> = {
   outcome: "warn",
   priority: 120,
   predicate: (ctx) => {
-    const signals = buildTransactionSignals(ctx);
+    const signals = ctx.signals;
     return (
       ctx.eventKind === "transaction" &&
       signals.isApprovalMethod &&
@@ -122,7 +121,7 @@ const WARN_SET_APPROVAL_FOR_ALL_UNKNOWN_OPERATOR: Rule<TransactionPolicyInput> =
   outcome: "warn",
   priority: 130,
   predicate: (ctx) => {
-    const signals = buildTransactionSignals(ctx);
+    const signals = ctx.signals;
     return (
       ctx.eventKind === "transaction" &&
       signals.isSetApprovalForAll &&
@@ -151,7 +150,7 @@ const WARN_INCREASE_ALLOWANCE_UNKNOWN_SPENDER: Rule<TransactionPolicyInput> = {
   outcome: "warn",
   priority: 135,
   predicate: (ctx) => {
-    const signals = buildTransactionSignals(ctx);
+    const signals = ctx.signals;
     return (
       ctx.eventKind === "transaction" &&
       ctx.actionType === "increaseAllowance" &&
@@ -180,7 +179,7 @@ const WARN_PERMIT_SIGNATURE_TO_UNTRUSTED_CONTRACT: Rule<TransactionPolicyInput> 
   outcome: "warn",
   priority: 140,
   predicate: (ctx) => {
-    const signals = buildTransactionSignals(ctx);
+    const signals = ctx.signals;
     return (
       ctx.eventKind === "signature" &&
       signals.isPermitSignature &&
@@ -209,7 +208,7 @@ const WARN_MULTICALL_APPROVAL_AND_TRANSFER: Rule<TransactionPolicyInput> = {
   outcome: "warn",
   priority: 150,
   predicate: (ctx) => {
-    const signals = buildTransactionSignals(ctx);
+    const signals = ctx.signals;
     return (
       ctx.eventKind === "transaction" &&
       signals.isMulticall &&
@@ -262,7 +261,7 @@ const WARN_UNKNOWN_CONTRACT_INTERACTION_WITH_VALUE: Rule<TransactionPolicyInput>
   outcome: "warn",
   priority: 240,
   predicate: (ctx) => {
-    const signals = buildTransactionSignals(ctx);
+    const signals = ctx.signals;
     return (
       ctx.eventKind === "transaction" &&
       ctx.actionType === "unknown" &&
