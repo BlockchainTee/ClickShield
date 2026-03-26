@@ -114,265 +114,17 @@ function extractSelector(calldata) {
   const clean = calldata.startsWith("0x") ? calldata : `0x${calldata}`;
   return clean.slice(0, 10).toLowerCase();
 }
-function isUnlimitedApprovalAmount(amount) {
-  return amount.toLowerCase() === MAX_UINT256_HEX;
-}
-
-// src/normalize/address.ts
-function normalizeEvmAddress(address) {
-  const trimmed = address.trim().toLowerCase();
-  return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
-}
-function normalizeSolAddress(address) {
-  return address.trim();
-}
-function isValidEvmAddress(address) {
-  return /^0x[0-9a-fA-F]{40}$/.test(address.trim());
-}
-function isValidSolAddress(address) {
-  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address.trim());
-}
-
-// src/transaction/typed-data.ts
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function isTypedDataField(value) {
-  if (!isRecord(value)) return false;
-  return typeof value.name === "string" && typeof value.type === "string";
-}
-function parseTypedDataPayload(input) {
-  if (typeof input === "string") {
-    const parsed = JSON.parse(input);
-    if (!isRecord(parsed)) {
-      throw new Error("Typed data payload must be an object.");
-    }
-    return parsed;
-  }
-  return input;
-}
-function normalizeTypes(value) {
-  if (!value || !isRecord(value)) {
-    return {};
-  }
-  const entries = [];
-  for (const key of Object.keys(value).sort()) {
-    const fields = value[key];
-    if (!Array.isArray(fields)) continue;
-    const normalizedFields = fields.filter(isTypedDataField).map((field) => ({
-      name: field.name,
-      type: field.type
-    }));
-    entries.push([key, normalizedFields]);
-  }
-  return Object.fromEntries(entries);
-}
-function normalizeString(value) {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed === "" ? null : trimmed;
-}
-function normalizeNumericString(value) {
-  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "bigint") {
-    return null;
-  }
-  const raw = typeof value === "string" ? value.trim() : `${value}`;
-  if (raw === "") return null;
-  try {
-    if (/^0x[0-9a-fA-F]+$/.test(raw)) {
-      return BigInt(raw).toString(10);
-    }
-    if (/^-?[0-9]+$/.test(raw)) {
-      return BigInt(raw).toString(10);
-    }
-  } catch {
-    return raw;
-  }
-  return raw;
-}
-function isCanonicalDecimalString(value) {
-  return value !== null && /^[0-9]+$/.test(value);
-}
-function normalizeBoolean(value) {
-  return value === true;
-}
-function stripArraySuffix(type) {
-  const match = type.match(/^(.*)\[[0-9]*\]$/);
-  return match ? match[1] : null;
-}
-function normalizeUnknownObject(value) {
-  const entries = [];
-  for (const key of Object.keys(value).sort()) {
-    entries.push([key, normalizeTypedDataValue(value[key], null, {})]);
-  }
-  return Object.fromEntries(entries);
-}
-function normalizeStructuredValue(value, structName, types) {
-  const fieldMap = /* @__PURE__ */ new Map();
-  for (const field of types[structName] ?? []) {
-    fieldMap.set(field.name, field.type);
-  }
-  const entries = [];
-  for (const key of Object.keys(value).sort()) {
-    entries.push([
-      key,
-      normalizeTypedDataValue(value[key], fieldMap.get(key) ?? null, types)
-    ]);
-  }
-  return Object.fromEntries(entries);
-}
-function normalizeTypedDataValue(value, solidityType, types) {
-  if (value === null || value === void 0) return null;
-  if (solidityType !== null) {
-    const arrayInnerType = stripArraySuffix(solidityType);
-    if (arrayInnerType !== null) {
-      if (!Array.isArray(value)) return [];
-      return value.map(
-        (item) => normalizeTypedDataValue(item, arrayInnerType, types)
-      );
-    }
-    if (solidityType === "address") {
-      const normalized = normalizeString(value);
-      return normalized === null ? null : normalizeEvmAddress(normalized);
-    }
-    if (solidityType.startsWith("uint") || solidityType.startsWith("int")) {
-      return normalizeNumericString(value);
-    }
-    if (solidityType === "bool") {
-      return normalizeBoolean(value);
-    }
-    if (solidityType === "string" || solidityType.startsWith("bytes")) {
-      return normalizeString(value);
-    }
-    if (types[solidityType] && isRecord(value)) {
-      return normalizeStructuredValue(value, solidityType, types);
-    }
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => normalizeTypedDataValue(item, null, types));
-  }
-  if (isRecord(value)) {
-    return normalizeUnknownObject(value);
-  }
-  if (typeof value === "boolean") return value;
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "bigint") {
-    return `${value}`;
-  }
-  return `${value}`;
-}
-function stableStringify(value) {
-  if (value === null) return "null";
-  if (typeof value === "string") return JSON.stringify(value);
-  if (typeof value === "boolean") return value ? "true" : "false";
-  if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
-  }
-  const record = value;
-  const parts = Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
-  return `{${parts.join(",")}}`;
-}
-function serializeTypesForCanonical(types) {
-  const entries = [];
-  for (const key of Object.keys(types).sort()) {
-    const fields = types[key] ?? [];
-    entries.push([
-      key,
-      fields.map((field) => ({
-        name: field.name,
-        type: field.type
-      }))
-    ]);
-  }
-  return Object.fromEntries(entries);
-}
-function classifyPermitKind(primaryType) {
-  if (primaryType === null) return "none";
-  const normalized = primaryType.trim().toLowerCase();
-  if (normalized === "") return "none";
-  if (normalized === "permit") return "erc20_permit";
-  if (normalized === "permitsingle") return "permit2_single";
-  if (normalized === "permitbatch") return "permit2_batch";
-  if (normalized.includes("permit")) return "unknown_permit";
-  return "none";
-}
-function normalizeTypedData(input) {
-  const payload = parseTypedDataPayload(input);
-  const types = normalizeTypes(payload.types ?? null);
-  const primaryType = normalizeString(payload.primaryType);
-  const domainInput = isRecord(payload.domain) ? payload.domain : {};
-  const messageInput = isRecord(payload.message) ? payload.message : {};
-  const domainType = types.EIP712Domain ? "EIP712Domain" : null;
-  const normalizedDomain = normalizeTypedDataValue(
-    domainInput,
-    domainType,
-    types
-  );
-  const normalizedMessage = normalizeTypedDataValue(
-    messageInput,
-    primaryType,
-    types
-  );
-  const domain = normalizedDomain !== null && !Array.isArray(normalizedDomain) && typeof normalizedDomain === "object" ? normalizedDomain : {};
-  const message = normalizedMessage !== null && !Array.isArray(normalizedMessage) && typeof normalizedMessage === "object" ? normalizedMessage : {};
-  const domainName = typeof domain.name === "string" ? domain.name : normalizeString(domainInput.name);
-  const domainVersion = typeof domain.version === "string" ? domain.version : normalizeString(domainInput.version);
-  const domainChainIdPresent = Object.prototype.hasOwnProperty.call(
-    domainInput,
-    "chainId"
-  );
-  const normalizedDomainChainId = domainChainIdPresent ? normalizeNumericString(domainInput.chainId) : null;
-  const verifyingContractPresent = Object.prototype.hasOwnProperty.call(
-    domainInput,
-    "verifyingContract"
-  );
-  const verifyingContractRaw = verifyingContractPresent ? normalizeString(domainInput.verifyingContract) : null;
-  const missingDomainFields = [];
-  const invalidDomainFields = [];
-  if (!domainChainIdPresent) {
-    missingDomainFields.push("domain.chainId");
-  }
-  if (!verifyingContractPresent) {
-    missingDomainFields.push("domain.verifyingContract");
-  }
-  const domainChainId = domainChainIdPresent && isCanonicalDecimalString(normalizedDomainChainId) ? normalizedDomainChainId : null;
-  const hasValidDomainChainId = domainChainId !== null;
-  if (domainChainIdPresent && !hasValidDomainChainId) {
-    invalidDomainFields.push("domain.chainId");
-  }
-  const verifyingContract = verifyingContractRaw !== null && isValidEvmAddress(verifyingContractRaw) ? normalizeEvmAddress(verifyingContractRaw) : null;
-  const hasValidVerifyingContract = verifyingContract !== null;
-  if (verifyingContractPresent && !hasValidVerifyingContract) {
-    invalidDomainFields.push("domain.verifyingContract");
-  }
-  const normalizationState = invalidDomainFields.length > 0 ? "invalid_domain_fields" : missingDomainFields.length > 0 ? "missing_domain_fields" : "normalized";
-  const canonicalRoot = {
-    domain,
-    message,
-    primaryType,
-    types: serializeTypesForCanonical(types)
-  };
-  return {
-    isTypedData: true,
-    primaryType,
-    domainName,
-    domainVersion,
-    domainChainId,
-    domainChainIdPresent: hasValidDomainChainId,
-    verifyingContract,
-    verifyingContractPresent: hasValidVerifyingContract,
-    message,
-    domain,
-    types,
-    canonicalJson: stableStringify(canonicalRoot),
-    normalizationState,
-    missingDomainFields,
-    invalidDomainFields,
-    permitKind: classifyPermitKind(primaryType)
-  };
-}
 
 // src/signals/transaction-signals.ts
+var HIGH_VALUE_THRESHOLD = 1000000000000000000n;
+var MAX_UINT256_DECIMAL = BigInt(`0x${MAX_UINT256_HEX}`).toString(10);
+function toMethodName(methodSelector, calldata) {
+  const selector = methodSelector ?? (calldata === "0x" ? null : extractSelector(calldata));
+  if (selector === null || selector === "0x") {
+    return void 0;
+  }
+  return getTransactionSelectorDefinition(selector)?.functionName ?? void 0;
+}
 function isApprovalMethodAction(action) {
   return action.actionType === "approve" || action.actionType === "increaseAllowance" || action.actionType === "setApprovalForAll";
 }
@@ -385,42 +137,103 @@ function isGrantApprovalAction(action) {
 function hasTransferAction(action) {
   return action.actionType === "transfer" || action.actionType === "transferFrom";
 }
-function buildTransactionSignals(context) {
-  const actions = context.batch.isMulticall ? context.batch.actions : [context.decoded];
+function isTransactionSignalInput(input) {
+  return input.eventKind === "transaction";
+}
+function isSignatureSignalInput(input) {
+  return input.eventKind === "signature";
+}
+function buildTransactionSignalsFromTransaction(input) {
+  const actions = input.batch.isMulticall ? input.batch.actions : [input.decoded];
   const containsApproval = actions.some((action) => isGrantApprovalAction(action));
   const containsTransfer = actions.some((action) => action.actionType === "transfer");
   const containsTransferFrom = actions.some(
     (action) => action.actionType === "transferFrom"
   );
+  const hasValueTransfer = BigInt(input.valueWei) > 0n;
+  const methodName = toMethodName(input.methodSelector, input.calldata);
+  const isApproval = methodName === "approve";
   return {
-    actionType: context.actionType,
-    isApprovalMethod: isApprovalMethodAction(context.decoded),
-    isUnlimitedApproval: context.decoded.amount !== null ? isUnlimitedApprovalAmount(
-      BigInt(context.decoded.amount).toString(16).padStart(64, "0")
-    ) : false,
-    isPermitSignature: context.eventKind === "signature" && context.signature.permitKind !== "none",
-    isSetApprovalForAll: context.decoded.actionType === "setApprovalForAll",
-    approvalDirection: approvalDirectionForAction(context.decoded),
-    spenderTrusted: context.counterparty.spenderTrusted,
-    recipientIsNew: context.counterparty.recipientIsNew,
-    isTransfer: context.decoded.actionType === "transfer",
-    isTransferFrom: context.decoded.actionType === "transferFrom",
-    isContractInteraction: context.eventKind === "transaction" && context.to !== null && context.decoded.actionType !== "transfer",
-    isMulticall: context.batch.isMulticall,
-    containsApprovalAndTransfer: context.batch.isMulticall && containsApproval && actions.some((action) => hasTransferAction(action)),
+    isContractInteraction: input.calldata !== "0x",
+    isNativeTransfer: input.calldata === "0x",
+    methodName,
+    isApproval,
+    actionType: input.actionType,
+    isApprovalMethod: isApprovalMethodAction(input.decoded),
+    isUnlimitedApproval: isApprovalMethodAction(input.decoded) && input.decoded.amount === MAX_UINT256_DECIMAL,
+    hasValueTransfer,
+    isHighValue: BigInt(input.valueWei) >= HIGH_VALUE_THRESHOLD,
+    targetAddress: input.to ?? void 0,
+    isPermitSignature: false,
+    isSetApprovalForAll: input.decoded.actionType === "setApprovalForAll",
+    approvalDirection: approvalDirectionForAction(input.decoded),
+    spenderTrusted: input.counterparty.spenderTrusted,
+    recipientIsNew: input.counterparty.recipientIsNew,
+    isTransfer: input.decoded.actionType === "transfer",
+    isTransferFrom: input.decoded.actionType === "transferFrom",
+    isMulticall: input.batch.isMulticall,
+    containsApprovalAndTransfer: input.batch.isMulticall && containsApproval && actions.some((action) => hasTransferAction(action)),
     containsApproval,
     containsTransfer,
     containsTransferFrom,
-    batchActionCount: context.batch.actions.length,
-    hasNativeValue: context.valueWei !== "0",
-    touchesMaliciousContract: context.intel.contractDisposition === "malicious",
-    targetAllowlisted: context.intel.contractDisposition === "allowlisted",
-    signatureIntelMatch: context.intel.signatureDisposition === "malicious",
-    verifyingContractKnown: context.eventKind === "signature" && context.signature.verifyingContractPresent && context.signature.verifyingContract !== null,
-    hasUnknownInnerCall: context.batch.actions.some(
+    batchActionCount: input.batch.actions.length,
+    hasNativeValue: hasValueTransfer,
+    touchesMaliciousContract: input.intel.contractDisposition === "malicious",
+    targetAllowlisted: input.intel.contractDisposition === "allowlisted",
+    signatureIntelMatch: input.intel.signatureDisposition === "malicious",
+    verifyingContractKnown: false,
+    hasUnknownInnerCall: input.batch.actions.some(
       (action) => action.actionType === "unknown"
     )
   };
+}
+function buildTransactionSignalsFromSignature(input) {
+  return {
+    isContractInteraction: false,
+    isNativeTransfer: false,
+    methodName: void 0,
+    isApproval: false,
+    actionType: input.actionType,
+    isApprovalMethod: false,
+    isUnlimitedApproval: false,
+    hasValueTransfer: false,
+    isHighValue: false,
+    targetAddress: input.signature.verifyingContract ?? void 0,
+    isPermitSignature: input.signature.permitKind !== "none",
+    isSetApprovalForAll: false,
+    approvalDirection: "not_applicable",
+    spenderTrusted: input.counterparty.spenderTrusted,
+    recipientIsNew: input.counterparty.recipientIsNew,
+    isTransfer: false,
+    isTransferFrom: false,
+    isMulticall: false,
+    containsApprovalAndTransfer: false,
+    containsApproval: false,
+    containsTransfer: false,
+    containsTransferFrom: false,
+    batchActionCount: 0,
+    hasNativeValue: false,
+    touchesMaliciousContract: input.intel.contractDisposition === "malicious",
+    targetAllowlisted: input.intel.contractDisposition === "allowlisted",
+    signatureIntelMatch: input.intel.signatureDisposition === "malicious",
+    verifyingContractKnown: input.signature.verifyingContractPresent && input.signature.verifyingContract !== null,
+    hasUnknownInnerCall: false
+  };
+}
+function getTransactionSignals(input) {
+  return buildTransactionSignalsFromTransaction(input);
+}
+function buildTransactionSignals(context) {
+  if ("signals" in context) {
+    return context.signals;
+  }
+  if (isTransactionSignalInput(context)) {
+    return buildTransactionSignalsFromTransaction(context);
+  }
+  if (isSignatureSignalInput(context)) {
+    return buildTransactionSignalsFromSignature(context);
+  }
+  throw new TypeError(`Unsupported transaction event kind: ${context.eventKind}`);
 }
 
 // src/transaction/explain.ts
@@ -525,7 +338,7 @@ function explainUnknown(context) {
   };
 }
 function buildTransactionExplanation(context) {
-  const signals = buildTransactionSignals(context);
+  const signals = context.signals ?? buildTransactionSignals(context);
   if (context.eventKind === "signature" && signals.isPermitSignature) {
     return explainPermitSignature(context);
   }
@@ -578,6 +391,72 @@ var SEVERITY_WEIGHT2 = {
   high: 2,
   critical: 3
 };
+var OUTCOME_WEIGHT = {
+  allow: 0,
+  warn: 1,
+  block: 2
+};
+function dedupeStable(values) {
+  const seen = /* @__PURE__ */ new Set();
+  const deduped = [];
+  for (const value of values) {
+    if (!seen.has(value)) {
+      seen.add(value);
+      deduped.push(value);
+    }
+  }
+  return deduped;
+}
+function isPlainObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function stabilizeValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => stabilizeValue(entry));
+  }
+  if (!isPlainObject(value)) {
+    return value;
+  }
+  const stable = {};
+  for (const key of Object.keys(value).sort()) {
+    stable[key] = stabilizeValue(value[key]);
+  }
+  return stable;
+}
+function normalizeMatchedRule(match) {
+  return {
+    ...match,
+    reasonCodes: dedupeStable(match.reasonCodes),
+    evidence: stabilizeValue(match.evidence)
+  };
+}
+function compareMatchedRules(a, b) {
+  const outcomeDelta = OUTCOME_WEIGHT[b.outcome] - OUTCOME_WEIGHT[a.outcome];
+  if (outcomeDelta !== 0) {
+    return outcomeDelta;
+  }
+  const severityDelta = SEVERITY_WEIGHT2[b.severity] - SEVERITY_WEIGHT2[a.severity];
+  if (severityDelta !== 0) {
+    return severityDelta;
+  }
+  if (a.priority !== b.priority) {
+    return a.priority - b.priority;
+  }
+  return a.ruleId.localeCompare(b.ruleId);
+}
+function orderMatchedRules(matches) {
+  return matches.map(normalizeMatchedRule).sort(compareMatchedRules);
+}
+function toTransactionMatchedReason(match) {
+  return {
+    ruleId: match.ruleId,
+    outcome: match.outcome,
+    severity: match.severity,
+    priority: match.priority,
+    reasonCodes: match.reasonCodes,
+    evidence: match.evidence
+  };
+}
 function assembleVerdict(matches) {
   if (matches.length === 0) {
     return {
@@ -589,35 +468,33 @@ function assembleVerdict(matches) {
       ruleSetVersion: RULE_SET_VERSION
     };
   }
-  const primary = matches[0];
+  const orderedMatches = orderMatchedRules(matches);
+  const primary = orderedMatches[0];
   const status = primary.outcome;
   let highestRisk = "low";
-  for (const match of matches) {
+  for (const match of orderedMatches) {
     if (SEVERITY_WEIGHT2[match.severity] > SEVERITY_WEIGHT2[highestRisk]) {
       highestRisk = match.severity;
     }
   }
-  const seenCodes = /* @__PURE__ */ new Set();
   const reasonCodes = [];
-  for (const match of matches) {
-    for (const code of match.reasonCodes) {
-      if (!seenCodes.has(code)) {
-        seenCodes.add(code);
-        reasonCodes.push(code);
-      }
-    }
+  for (const match of orderedMatches) {
+    reasonCodes.push(...match.reasonCodes);
   }
-  const matchedRules = matches.map((m) => m.ruleId);
+  const consolidatedReasonCodes = dedupeStable(reasonCodes);
+  const matchedRules = orderedMatches.map((m) => m.ruleId);
   const evidence = {};
-  for (const match of matches) {
+  for (const match of orderedMatches) {
     for (const [key, value] of Object.entries(match.evidence)) {
-      evidence[key] = value;
+      if (!(key in evidence)) {
+        evidence[key] = value;
+      }
     }
   }
   return {
     status,
     riskLevel: highestRisk,
-    reasonCodes,
+    reasonCodes: consolidatedReasonCodes,
     matchedRules,
     evidence,
     ruleSetVersion: RULE_SET_VERSION
@@ -631,6 +508,7 @@ function collectMatches(rules2, input) {
       const evidence = rule.buildEvidence ? rule.buildEvidence(input) : {};
       matches.push({
         ruleId: rule.id,
+        priority: rule.priority,
         outcome: rule.outcome,
         severity: rule.severity,
         reasonCodes,
@@ -657,21 +535,27 @@ function overrideLevelForStatus(status) {
     case "WARN":
       return "confirm";
     case "BLOCK":
-      return "high_friction_confirm";
+      return "none";
   }
 }
 function assembleTransactionVerdict(input, matches) {
   const base2 = assembleVerdict(matches);
+  const orderedMatches = orderMatchedRules(matches);
+  const primaryReason = orderedMatches[0] ? toTransactionMatchedReason(orderedMatches[0]) : null;
+  const secondaryReasons = orderedMatches.slice(1).map((match) => toTransactionMatchedReason(match));
   const status = toTransactionStatus(base2.status);
   const overrideLevel = overrideLevelForStatus(status);
-  const signals = buildTransactionSignals(input);
+  const signals = input.signals;
+  const riskClassification = input.riskClassification;
   const explanation = buildTransactionExplanation(input);
   const verdict = {
     status,
     riskLevel: base2.riskLevel,
     reasonCodes: base2.reasonCodes,
     matchedRules: base2.matchedRules,
-    primaryRuleId: base2.matchedRules[0] ?? null,
+    primaryRuleId: primaryReason?.ruleId ?? null,
+    primaryReason,
+    secondaryReasons,
     evidence: base2.evidence,
     explanation,
     ruleSetVersion: base2.ruleSetVersion,
@@ -680,7 +564,7 @@ function assembleTransactionVerdict(input, matches) {
       allowlistFeedVersion: input.intel.allowlistFeedVersion,
       signatureFeedVersion: input.intel.signatureFeedVersion
     },
-    overrideAllowed: status !== "ALLOW",
+    overrideAllowed: overrideLevel !== "none",
     overrideLevel
   };
   return {
@@ -688,7 +572,8 @@ function assembleTransactionVerdict(input, matches) {
     matchedRules: verdict.matchedRules,
     reasonCodes: verdict.reasonCodes,
     evidence: verdict.evidence,
-    signals
+    signals,
+    riskClassification
   };
 }
 
@@ -2761,7 +2646,7 @@ var BLOCK_MALICIOUS_TRANSACTION_CONTRACT = {
   severity: "critical",
   outcome: "block",
   priority: 10,
-  predicate: (ctx) => ctx.eventKind === "transaction" && ctx.intel.contractDisposition === "malicious",
+  predicate: (ctx) => ctx.eventKind === "transaction" && ctx.riskClassification.hasMaliciousTarget,
   buildReasonCodes: () => [TRANSACTION_CODES.KNOWN_MALICIOUS_CONTRACT],
   buildEvidence: (ctx) => ({
     maliciousContract: {
@@ -2778,7 +2663,7 @@ var BLOCK_MALICIOUS_SIGNATURE_CONTRACT = {
   severity: "critical",
   outcome: "block",
   priority: 10,
-  predicate: (ctx) => ctx.eventKind === "signature" && ctx.intel.contractDisposition === "malicious",
+  predicate: (ctx) => ctx.eventKind === "signature" && ctx.riskClassification.hasMaliciousTarget,
   buildReasonCodes: (ctx) => {
     const codes = [TRANSACTION_CODES.KNOWN_MALICIOUS_CONTRACT];
     if (ctx.signature.permitKind !== "none") {
@@ -2801,7 +2686,7 @@ var BLOCK_SCAM_SIGNATURE_MATCH = {
   severity: "critical",
   outcome: "block",
   priority: 5,
-  predicate: (ctx) => ctx.eventKind === "signature" && ctx.intel.signatureDisposition === "malicious",
+  predicate: (ctx) => ctx.eventKind === "signature" && ctx.riskClassification.hasKnownScamSignature,
   buildReasonCodes: (ctx) => {
     const codes = [TRANSACTION_CODES.SCAM_SIGNATURE_MATCH];
     if (ctx.signature.permitKind !== "none") {
@@ -2826,8 +2711,7 @@ var WARN_UNLIMITED_APPROVAL_UNKNOWN_SPENDER = {
   outcome: "warn",
   priority: 120,
   predicate: (ctx) => {
-    const signals = buildTransactionSignals(ctx);
-    return ctx.eventKind === "transaction" && signals.isApprovalMethod && signals.isUnlimitedApproval && signals.approvalDirection === "grant" && isNonTrustedCounterparty(ctx) && !signals.targetAllowlisted;
+    return ctx.eventKind === "transaction" && ctx.riskClassification.isApprovalRisk && ctx.riskClassification.isUnlimitedApprovalRisk && isNonTrustedCounterparty(ctx) && !ctx.signals.targetAllowlisted;
   },
   buildReasonCodes: () => [
     TRANSACTION_CODES.UNLIMITED_APPROVAL,
@@ -2849,8 +2733,7 @@ var WARN_SET_APPROVAL_FOR_ALL_UNKNOWN_OPERATOR = {
   outcome: "warn",
   priority: 130,
   predicate: (ctx) => {
-    const signals = buildTransactionSignals(ctx);
-    return ctx.eventKind === "transaction" && signals.isSetApprovalForAll && signals.approvalDirection === "grant" && isNonTrustedCounterparty(ctx) && !signals.targetAllowlisted;
+    return ctx.eventKind === "transaction" && ctx.riskClassification.isApprovalRisk && ctx.actionType === "setApprovalForAll" && isNonTrustedCounterparty(ctx) && !ctx.signals.targetAllowlisted;
   },
   buildReasonCodes: () => [
     TRANSACTION_CODES.SET_APPROVAL_FOR_ALL,
@@ -2871,8 +2754,7 @@ var WARN_INCREASE_ALLOWANCE_UNKNOWN_SPENDER = {
   outcome: "warn",
   priority: 135,
   predicate: (ctx) => {
-    const signals = buildTransactionSignals(ctx);
-    return ctx.eventKind === "transaction" && ctx.actionType === "increaseAllowance" && signals.approvalDirection === "grant" && !signals.isUnlimitedApproval && isNonTrustedCounterparty(ctx) && !signals.targetAllowlisted;
+    return ctx.eventKind === "transaction" && ctx.actionType === "increaseAllowance" && ctx.riskClassification.isApprovalRisk && !ctx.riskClassification.isUnlimitedApprovalRisk && isNonTrustedCounterparty(ctx) && !ctx.signals.targetAllowlisted;
   },
   buildReasonCodes: () => [TRANSACTION_CODES.UNKNOWN_SPENDER],
   buildEvidence: (ctx) => ({
@@ -2892,8 +2774,7 @@ var WARN_PERMIT_SIGNATURE_TO_UNTRUSTED_CONTRACT = {
   outcome: "warn",
   priority: 140,
   predicate: (ctx) => {
-    const signals = buildTransactionSignals(ctx);
-    return ctx.eventKind === "signature" && signals.isPermitSignature && !signals.signatureIntelMatch && !signals.touchesMaliciousContract && !signals.targetAllowlisted;
+    return ctx.eventKind === "signature" && ctx.riskClassification.isPermitRisk && !ctx.riskClassification.hasKnownScamSignature && !ctx.riskClassification.hasMaliciousTarget && !ctx.signals.targetAllowlisted;
   },
   buildReasonCodes: () => [TRANSACTION_CODES.PERMIT_SIGNATURE],
   buildEvidence: (ctx) => ({
@@ -2914,7 +2795,7 @@ var WARN_MULTICALL_APPROVAL_AND_TRANSFER = {
   outcome: "warn",
   priority: 150,
   predicate: (ctx) => {
-    const signals = buildTransactionSignals(ctx);
+    const signals = ctx.signals;
     return ctx.eventKind === "transaction" && signals.isMulticall && signals.containsApprovalAndTransfer;
   },
   buildReasonCodes: () => [
@@ -2956,8 +2837,7 @@ var WARN_UNKNOWN_CONTRACT_INTERACTION_WITH_VALUE = {
   outcome: "warn",
   priority: 240,
   predicate: (ctx) => {
-    const signals = buildTransactionSignals(ctx);
-    return ctx.eventKind === "transaction" && ctx.actionType === "unknown" && signals.hasNativeValue && ctx.intel.contractDisposition !== "allowlisted" && ctx.intel.contractDisposition !== "malicious";
+    return ctx.eventKind === "transaction" && ctx.riskClassification.isUnknownMethodRisk && ctx.signals.hasNativeValue && ctx.intel.contractDisposition !== "allowlisted" && ctx.intel.contractDisposition !== "malicious";
   },
   buildReasonCodes: (ctx) => {
     const codes = [TRANSACTION_CODES.UNKNOWN_CONTRACT_INTERACTION];
@@ -3008,7 +2888,75 @@ function getRulesForEventKind(eventKind) {
   return [];
 }
 
+// src/signals/transaction-risk.ts
+function isGrantApprovalDirection(direction) {
+  return direction === "grant";
+}
+function isApprovalStyleAction(context) {
+  if (context.eventKind !== "transaction") {
+    return false;
+  }
+  return (context.signals.isApprovalMethod || context.signals.isSetApprovalForAll) && isGrantApprovalDirection(context.signals.approvalDirection);
+}
+function isPermitStyleAction(context) {
+  return context.signals.isPermitSignature || context.eventKind === "transaction" && context.actionType === "permit" && isGrantApprovalDirection(context.decoded.approvalDirection);
+}
+function isNonBenignUnknownMethod(context) {
+  if (context.eventKind !== "transaction") {
+    return false;
+  }
+  if (!context.signals.isContractInteraction) {
+    return false;
+  }
+  if (context.intel.contractDisposition === "allowlisted") {
+    return false;
+  }
+  return context.actionType === "unknown" || context.signals.hasUnknownInnerCall;
+}
+function isMeaningfulHighValueTransfer(context) {
+  if (context.eventKind !== "transaction") {
+    return false;
+  }
+  return context.signals.hasValueTransfer && context.signals.isHighValue;
+}
+function classifyTransactionRisk(context) {
+  const hasMaliciousTarget = context.intel.contractDisposition === "malicious";
+  const hasKnownScamSignature = context.intel.signatureDisposition === "malicious";
+  const isApprovalRisk = isApprovalStyleAction(context) || isPermitStyleAction(context);
+  const isUnlimitedApprovalRisk = isApprovalRisk && context.signals.isUnlimitedApproval && isGrantApprovalDirection(context.signals.approvalDirection);
+  const isPermitRisk = isPermitStyleAction(context);
+  const isHighValueTransferRisk = isMeaningfulHighValueTransfer(context);
+  const isUnknownMethodRisk = isNonBenignUnknownMethod(context);
+  const requiresUserAttention = hasMaliciousTarget || hasKnownScamSignature || isUnlimitedApprovalRisk || isApprovalRisk && context.counterparty.spenderTrusted !== true && !context.signals.targetAllowlisted || isPermitRisk && !context.signals.targetAllowlisted || isHighValueTransferRisk || isUnknownMethodRisk;
+  return {
+    hasMaliciousTarget,
+    hasKnownScamSignature,
+    isApprovalRisk,
+    isUnlimitedApprovalRisk,
+    isPermitRisk,
+    isHighValueTransferRisk,
+    isUnknownMethodRisk,
+    requiresUserAttention
+  };
+}
+
 // src/engine/evaluate.ts
+function finalizeTransactionEvaluationInput(input) {
+  const {
+    signals: _signals,
+    riskClassification: _riskClassification,
+    ...base2
+  } = input;
+  const signals = buildTransactionSignals(base2);
+  return {
+    ...base2,
+    signals,
+    riskClassification: classifyTransactionRisk({
+      ...base2,
+      signals
+    })
+  };
+}
 function evaluateTyped(rules2, input) {
   const sorted = sortRules(rules2);
   const matches = collectMatches(sorted, input);
@@ -3025,16 +2973,17 @@ function evaluate(input) {
   return evaluateTyped(rules2, input);
 }
 function evaluateTransaction(input) {
-  if (input.eventKind === "transaction") {
+  const finalizedInput = finalizeTransactionEvaluationInput(input);
+  if (finalizedInput.eventKind === "transaction") {
     const rules3 = getRulesForEventKind("transaction");
     const sorted2 = sortRules(rules3);
-    const matches2 = collectMatches(sorted2, input);
-    return assembleTransactionVerdict(input, matches2);
+    const matches2 = collectMatches(sorted2, finalizedInput);
+    return assembleTransactionVerdict(finalizedInput, matches2);
   }
   const rules2 = getRulesForEventKind("signature");
   const sorted = sortRules(rules2);
-  const matches = collectMatches(sorted, input);
-  return assembleTransactionVerdict(input, matches);
+  const matches = collectMatches(sorted, finalizedInput);
+  return assembleTransactionVerdict(finalizedInput, matches);
 }
 
 // src/normalize/url.ts
@@ -3215,16 +3164,35 @@ function riskBadgeLabel(riskLevel) {
   }
 }
 
+// src/normalize/address.ts
+function normalizeEvmAddress(address) {
+  const trimmed = address.trim().toLowerCase();
+  return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+}
+function normalizeSolAddress(address) {
+  return address.trim();
+}
+function isValidEvmAddress(address) {
+  return /^0x[0-9a-fA-F]{40}$/.test(address.trim());
+}
+function isValidSolAddress(address) {
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address.trim());
+}
+
 // src/intel/generated/layer2-snapshot.json
 var layer2_snapshot_default = {
   generatedAt: "2026-03-24T00:00:00.000Z",
   maliciousContracts: [],
   scamSignatures: [],
+  metadata: {
+    generatedAt: "2026-03-24T00:00:00.000Z",
+    sources: []
+  },
   sectionStates: {
     maliciousContracts: "missing",
     scamSignatures: "missing"
   },
-  version: "layer2.f0f054496c4fda37"
+  version: "layer2.0678fea2fb9bed9a"
 };
 
 // src/transaction/intel-provider.ts
@@ -3593,6 +3561,7 @@ var ROOT_KEYS = [
   "generatedAt",
   "maliciousContracts",
   "scamSignatures",
+  "metadata",
   "sectionStates"
 ];
 var MALICIOUS_CONTRACT_KEYS = [
@@ -3601,11 +3570,26 @@ var MALICIOUS_CONTRACT_KEYS = [
   "source",
   "disposition",
   "confidence",
+  "reason",
   "reasonCodes"
 ];
+var SCAM_SIGNATURE_KEYS = [
+  "signatureHash",
+  "source",
+  "confidence",
+  "reason"
+];
+var METADATA_KEYS = ["generatedAt", "sources"];
 var SECTION_STATE_KEYS = ["maliciousContracts", "scamSignatures"];
 var ZERO_EVM_ADDRESS2 = "0x0000000000000000000000000000000000000000";
-function isRecord2(value) {
+var TRANSACTION_INTEL_SOURCES = ["chainabuse", "internal", "ofac"];
+var TRANSACTION_INTEL_CONFIDENCES = ["high", "low", "medium"];
+var MALICIOUS_CONTRACT_CHAINS = ["bitcoin", "evm", "solana"];
+var SCAM_SIGNATURE_SOURCE_SET = /* @__PURE__ */ new Set([
+  "chainabuse",
+  "internal"
+]);
+function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function deepFreeze(value) {
@@ -3615,7 +3599,7 @@ function deepFreeze(value) {
     });
     return Object.freeze(value);
   }
-  if (isRecord2(value)) {
+  if (isRecord(value)) {
     Object.values(value).forEach((entry) => {
       deepFreeze(entry);
     });
@@ -3659,18 +3643,70 @@ function readRequiredString(value, key, path, issues, failureKinds) {
   }
   return candidate;
 }
-function readRequiredNumber(value, key, path, issues, failureKinds) {
+function readRequiredStringArray(value, key, path, issues, failureKinds) {
   const candidate = value[key];
-  if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
+  if (!Array.isArray(candidate)) {
     pushIssue(
       issues,
       failureKinds,
       path === "" ? key : `${path}.${key}`,
-      "Expected a finite number"
+      "Expected array of non-empty strings"
     );
     return null;
   }
-  return candidate;
+  const parsed = candidate.map((entry, index) => {
+    if (typeof entry !== "string" || entry.trim() === "") {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${path === "" ? key : `${path}.${key}`}[${index}]`,
+        "Expected a non-empty string"
+      );
+      return "";
+    }
+    return entry;
+  });
+  return parsed;
+}
+function isSortedUnique(values) {
+  for (let index = 1; index < values.length; index += 1) {
+    if (values[index - 1] >= values[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+function isTransactionIntelSource(value) {
+  return TRANSACTION_INTEL_SOURCES.includes(value);
+}
+function isTransactionIntelConfidence(value) {
+  return TRANSACTION_INTEL_CONFIDENCES.includes(value);
+}
+function isTransactionMaliciousContractChain(value) {
+  return MALICIOUS_CONTRACT_CHAINS.includes(value);
+}
+function validateConfidenceForSource(source, confidence, path, issues, failureKinds) {
+  if ((source === "ofac" || source === "internal") && confidence !== "high") {
+    pushIssue(
+      issues,
+      failureKinds,
+      path,
+      `${source} entries must use high confidence`,
+      "incompatible"
+    );
+  }
+  if (source === "chainabuse" && confidence === "high") {
+    pushIssue(
+      issues,
+      failureKinds,
+      path,
+      "chainabuse entries must use low or medium confidence",
+      "incompatible"
+    );
+  }
+}
+function isValidSignatureHash(value) {
+  return /^0x[0-9a-f]{64}$/.test(value);
 }
 function buildSnapshotVersion(snapshotBody) {
   const digest = sha256Hex(
@@ -3681,16 +3717,26 @@ function buildSnapshotVersion(snapshotBody) {
         source: entry.source,
         disposition: entry.disposition,
         confidence: entry.confidence,
+        reason: entry.reason,
         reasonCodes: entry.reasonCodes
       })),
-      scamSignatures: snapshotBody.scamSignatures,
+      scamSignatures: snapshotBody.scamSignatures.map((entry) => ({
+        signatureHash: entry.signatureHash,
+        source: entry.source,
+        confidence: entry.confidence,
+        reason: entry.reason
+      })),
+      metadata: {
+        generatedAt: snapshotBody.metadata.generatedAt,
+        sources: snapshotBody.metadata.sources
+      },
       sectionStates: snapshotBody.sectionStates
     })
   ).slice(0, 16);
   return `layer2.${digest}`;
 }
 function parseSectionStates(value, issues, failureKinds) {
-  if (!isRecord2(value)) {
+  if (!isRecord(value)) {
     pushIssue(
       issues,
       failureKinds,
@@ -3726,18 +3772,79 @@ function parseSectionStates(value, issues, failureKinds) {
       "incompatible"
     );
   }
-  if (scamSignatures !== "missing") {
+  if (scamSignatures !== "ready" && scamSignatures !== "stale" && scamSignatures !== "missing") {
     pushIssue(
       issues,
       failureKinds,
       "sectionStates.scamSignatures",
-      "Unsupported scamSignatures state for this snapshot schema",
+      "Unsupported scamSignatures state",
       "incompatible"
     );
   }
   return {
     maliciousContracts: maliciousContracts === "ready" || maliciousContracts === "stale" || maliciousContracts === "missing" ? maliciousContracts : "missing",
-    scamSignatures: "missing"
+    scamSignatures: scamSignatures === "ready" || scamSignatures === "stale" || scamSignatures === "missing" ? scamSignatures : "missing"
+  };
+}
+function parseMetadata(value, issues, failureKinds) {
+  if (!isRecord(value)) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "metadata",
+      "Expected metadata object"
+    );
+    return null;
+  }
+  assertExactKeys(value, METADATA_KEYS, "metadata", issues, failureKinds);
+  const generatedAt = readRequiredString(
+    value,
+    "generatedAt",
+    "metadata",
+    issues,
+    failureKinds
+  );
+  const sources = readRequiredStringArray(
+    value,
+    "sources",
+    "metadata",
+    issues,
+    failureKinds
+  );
+  if (generatedAt === null || sources === null) {
+    return null;
+  }
+  if (!isValidUtcTimestamp(generatedAt)) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "metadata.generatedAt",
+      "Expected an ISO-8601 UTC timestamp"
+    );
+  }
+  sources.forEach((source, index) => {
+    if (!isTransactionIntelSource(source)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `metadata.sources[${index}]`,
+        "Unsupported snapshot source",
+        "incompatible"
+      );
+    }
+  });
+  if (!isSortedUnique(sources)) {
+    pushIssue(
+      issues,
+      failureKinds,
+      "metadata.sources",
+      "sources must be sorted and unique",
+      "incompatible"
+    );
+  }
+  return {
+    generatedAt,
+    sources: sources.filter(isTransactionIntelSource)
   };
 }
 function parseMaliciousContracts(value, issues, failureKinds) {
@@ -3752,10 +3859,10 @@ function parseMaliciousContracts(value, issues, failureKinds) {
   }
   const parsed = [];
   const seenKeys = /* @__PURE__ */ new Set();
-  let previousAddress = "";
+  let previousKey = "";
   value.forEach((rawEntry, index) => {
     const entryPath = `maliciousContracts[${index}]`;
-    if (!isRecord2(rawEntry)) {
+    if (!isRecord(rawEntry)) {
       pushIssue(
         issues,
         failureKinds,
@@ -3799,18 +3906,25 @@ function parseMaliciousContracts(value, issues, failureKinds) {
       issues,
       failureKinds
     );
-    const confidence = readRequiredNumber(
+    const confidence = readRequiredString(
       rawEntry,
       "confidence",
       entryPath,
       issues,
       failureKinds
     );
+    const reason = readRequiredString(
+      rawEntry,
+      "reason",
+      entryPath,
+      issues,
+      failureKinds
+    );
     const reasonCodesRaw = rawEntry.reasonCodes;
-    if (chain === null || address === null || source === null || disposition === null || confidence === null) {
+    if (chain === null || address === null || source === null || disposition === null || confidence === null || reason === null) {
       return;
     }
-    if (chain !== "evm") {
+    if (!isTransactionMaliciousContractChain(chain)) {
       pushIssue(
         issues,
         failureKinds,
@@ -3819,34 +3933,36 @@ function parseMaliciousContracts(value, issues, failureKinds) {
         "incompatible"
       );
     }
-    if (!isValidEvmAddress(address)) {
-      pushIssue(
-        issues,
-        failureKinds,
-        `${entryPath}.address`,
-        "Expected a canonical EVM address",
-        "incompatible"
-      );
+    if (chain === "evm") {
+      if (!isValidEvmAddress(address)) {
+        pushIssue(
+          issues,
+          failureKinds,
+          `${entryPath}.address`,
+          "Expected a canonical EVM address",
+          "incompatible"
+        );
+      }
+      if (address !== normalizeEvmAddress(address)) {
+        pushIssue(
+          issues,
+          failureKinds,
+          `${entryPath}.address`,
+          "Expected a lowercase canonical EVM address",
+          "incompatible"
+        );
+      }
+      if (address === ZERO_EVM_ADDRESS2) {
+        pushIssue(
+          issues,
+          failureKinds,
+          `${entryPath}.address`,
+          "Zero address is not allowed in transaction snapshot",
+          "incompatible"
+        );
+      }
     }
-    if (address !== normalizeEvmAddress(address)) {
-      pushIssue(
-        issues,
-        failureKinds,
-        `${entryPath}.address`,
-        "Expected a lowercase canonical EVM address",
-        "incompatible"
-      );
-    }
-    if (address === ZERO_EVM_ADDRESS2) {
-      pushIssue(
-        issues,
-        failureKinds,
-        `${entryPath}.address`,
-        "Zero address is not allowed in transaction snapshot",
-        "incompatible"
-      );
-    }
-    if (source !== "ofac" && source !== "chainabuse") {
+    if (!isTransactionIntelSource(source)) {
       pushIssue(
         issues,
         failureKinds,
@@ -3864,12 +3980,22 @@ function parseMaliciousContracts(value, issues, failureKinds) {
         "incompatible"
       );
     }
-    if (confidence < 0 || confidence > 1) {
+    if (!isTransactionIntelConfidence(confidence)) {
       pushIssue(
         issues,
         failureKinds,
         `${entryPath}.confidence`,
-        "Expected confidence to be between 0 and 1"
+        "Unsupported malicious contract confidence",
+        "incompatible"
+      );
+    }
+    if (isTransactionIntelSource(source) && isTransactionIntelConfidence(confidence)) {
+      validateConfidenceForSource(
+        source,
+        confidence,
+        `${entryPath}.confidence`,
+        issues,
+        failureKinds
       );
     }
     if (!Array.isArray(reasonCodesRaw)) {
@@ -3913,22 +4039,23 @@ function parseMaliciousContracts(value, issues, failureKinds) {
     } else {
       seenKeys.add(dedupeKey);
     }
-    if (address < previousAddress) {
+    if (dedupeKey < previousKey) {
       pushIssue(
         issues,
         failureKinds,
         entryPath,
-        "maliciousContracts entries must be sorted by address",
+        "maliciousContracts entries must be sorted by chain and address",
         "incompatible"
       );
     }
-    previousAddress = address;
+    previousKey = dedupeKey;
     parsed.push({
-      chain: "evm",
+      chain: isTransactionMaliciousContractChain(chain) ? chain : "evm",
       address,
-      source: source === "ofac" ? "ofac" : "chainabuse",
+      source: isTransactionIntelSource(source) ? source : "internal",
       disposition: disposition === "block" ? "block" : "warn",
-      confidence,
+      confidence: isTransactionIntelConfidence(confidence) ? confidence : "low",
+      reason,
       reasonCodes
     });
   });
@@ -3944,16 +4071,123 @@ function parseScamSignatures(value, issues, failureKinds) {
     );
     return null;
   }
-  if (value.length > 0) {
-    pushIssue(
+  const parsed = [];
+  const seenHashes = /* @__PURE__ */ new Set();
+  let previousHash = "";
+  value.forEach((rawEntry, index) => {
+    const entryPath = `scamSignatures[${index}]`;
+    if (!isRecord(rawEntry)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        entryPath,
+        "Expected scam signature entry object"
+      );
+      return;
+    }
+    assertExactKeys(
+      rawEntry,
+      SCAM_SIGNATURE_KEYS,
+      entryPath,
       issues,
-      failureKinds,
-      "scamSignatures",
-      "Unsupported non-empty scamSignatures section for this snapshot schema",
-      "incompatible"
+      failureKinds
     );
-  }
-  return [];
+    const signatureHash = readRequiredString(
+      rawEntry,
+      "signatureHash",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const source = readRequiredString(
+      rawEntry,
+      "source",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const confidence = readRequiredString(
+      rawEntry,
+      "confidence",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    const reason = readRequiredString(
+      rawEntry,
+      "reason",
+      entryPath,
+      issues,
+      failureKinds
+    );
+    if (signatureHash === null || source === null || confidence === null || reason === null) {
+      return;
+    }
+    if (!isValidSignatureHash(signatureHash)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.signatureHash`,
+        "Expected a lowercase 32-byte hex signature hash",
+        "incompatible"
+      );
+    }
+    if (!SCAM_SIGNATURE_SOURCE_SET.has(source)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.source`,
+        "Unsupported scam signature source",
+        "incompatible"
+      );
+    }
+    if (!isTransactionIntelConfidence(confidence)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `${entryPath}.confidence`,
+        "Unsupported scam signature confidence",
+        "incompatible"
+      );
+    }
+    if (SCAM_SIGNATURE_SOURCE_SET.has(source) && isTransactionIntelConfidence(confidence)) {
+      validateConfidenceForSource(
+        source,
+        confidence,
+        `${entryPath}.confidence`,
+        issues,
+        failureKinds
+      );
+    }
+    if (seenHashes.has(signatureHash)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        entryPath,
+        "Duplicate scam signature entry",
+        "incompatible"
+      );
+    } else {
+      seenHashes.add(signatureHash);
+    }
+    if (signatureHash < previousHash) {
+      pushIssue(
+        issues,
+        failureKinds,
+        entryPath,
+        "scamSignatures entries must be sorted by signatureHash",
+        "incompatible"
+      );
+    }
+    previousHash = signatureHash;
+    parsed.push({
+      signatureHash,
+      source: source === "chainabuse" || source === "internal" ? source : "internal",
+      confidence: isTransactionIntelConfidence(confidence) ? confidence : "low",
+      reason
+    });
+  });
+  return parsed;
 }
 function toFailureStatus(failureKinds) {
   return failureKinds.includes("incompatible") ? "incompatible" : "malformed";
@@ -3961,7 +4195,7 @@ function toFailureStatus(failureKinds) {
 function validateTransactionLayer2Snapshot(input) {
   const issues = [];
   const failureKinds = [];
-  if (!isRecord2(input)) {
+  if (!isRecord(input)) {
     pushIssue(issues, failureKinds, "", "Expected snapshot object");
     return {
       ok: false,
@@ -3988,6 +4222,7 @@ function validateTransactionLayer2Snapshot(input) {
     issues,
     failureKinds
   );
+  const metadata = parseMetadata(input.metadata, issues, failureKinds);
   const sectionStates = parseSectionStates(
     input.sectionStates,
     issues,
@@ -4010,19 +4245,19 @@ function validateTransactionLayer2Snapshot(input) {
       "incompatible"
     );
   }
-  if (maliciousContracts === null || scamSignatures === null || sectionStates === null || version === null || generatedAt === null) {
+  if (maliciousContracts === null || scamSignatures === null || metadata === null || sectionStates === null || version === null || generatedAt === null) {
     return {
       ok: false,
       status: toFailureStatus(failureKinds),
       issues
     };
   }
-  if (maliciousContracts.length === 0 && sectionStates.maliciousContracts !== "missing") {
+  if (generatedAt !== metadata.generatedAt) {
     pushIssue(
       issues,
       failureKinds,
-      "sectionStates.maliciousContracts",
-      "Empty maliciousContracts snapshots must declare a missing section",
+      "metadata.generatedAt",
+      "metadata.generatedAt must match root generatedAt",
       "incompatible"
     );
   }
@@ -4035,10 +4270,42 @@ function validateTransactionLayer2Snapshot(input) {
       "incompatible"
     );
   }
+  if (scamSignatures.length > 0 && sectionStates.scamSignatures === "missing") {
+    pushIssue(
+      issues,
+      failureKinds,
+      "sectionStates.scamSignatures",
+      "scamSignatures section cannot be missing when entries are present",
+      "incompatible"
+    );
+  }
+  maliciousContracts.forEach((entry, index) => {
+    if (!metadata.sources.includes(entry.source)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `maliciousContracts[${index}].source`,
+        "Entry source must appear in metadata.sources",
+        "incompatible"
+      );
+    }
+  });
+  scamSignatures.forEach((entry, index) => {
+    if (!metadata.sources.includes(entry.source)) {
+      pushIssue(
+        issues,
+        failureKinds,
+        `scamSignatures[${index}].source`,
+        "Entry source must appear in metadata.sources",
+        "incompatible"
+      );
+    }
+  });
   const snapshotBody = {
     generatedAt,
     maliciousContracts,
     scamSignatures,
+    metadata,
     sectionStates
   };
   const expectedVersion = buildSnapshotVersion(snapshotBody);
@@ -4063,11 +4330,12 @@ function validateTransactionLayer2Snapshot(input) {
     generatedAt,
     maliciousContracts,
     scamSignatures,
+    metadata,
     sectionStates
   });
   return {
     ok: true,
-    status: maliciousContracts.length === 0 ? "empty" : "valid",
+    status: maliciousContracts.length === 0 && scamSignatures.length === 0 ? "empty" : "valid",
     snapshot,
     issues
   };
@@ -4123,13 +4391,266 @@ function buildHydratedIntel(input, provider) {
   };
 }
 function hydrateNormalizedTransactionContext(input, provider) {
-  return {
+  const hydrated = {
     ...input,
     intel: buildHydratedIntel(input, provider)
+  };
+  const {
+    signals: _signals,
+    riskClassification: _riskClassification,
+    ...signalInput
+  } = hydrated;
+  const signals = buildTransactionSignals(signalInput);
+  return {
+    ...hydrated,
+    signals,
+    riskClassification: classifyTransactionRisk({
+      ...signalInput,
+      signals
+    })
   };
 }
 function getDefaultTransactionIntelProvider() {
   return CANONICAL_TRANSACTION_INTEL_PROVIDER;
+}
+
+// src/transaction/typed-data.ts
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function isTypedDataField(value) {
+  if (!isRecord2(value)) return false;
+  return typeof value.name === "string" && typeof value.type === "string";
+}
+function parseTypedDataPayload(input) {
+  if (typeof input === "string") {
+    const parsed = JSON.parse(input);
+    if (!isRecord2(parsed)) {
+      throw new Error("Typed data payload must be an object.");
+    }
+    return parsed;
+  }
+  return input;
+}
+function normalizeTypes(value) {
+  if (!value || !isRecord2(value)) {
+    return {};
+  }
+  const entries = [];
+  for (const key of Object.keys(value).sort()) {
+    const fields = value[key];
+    if (!Array.isArray(fields)) continue;
+    const normalizedFields = fields.filter(isTypedDataField).map((field) => ({
+      name: field.name,
+      type: field.type
+    }));
+    entries.push([key, normalizedFields]);
+  }
+  return Object.fromEntries(entries);
+}
+function normalizeString(value) {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed === "" ? null : trimmed;
+}
+function normalizeNumericString(value) {
+  if (typeof value !== "string" && typeof value !== "number" && typeof value !== "bigint") {
+    return null;
+  }
+  const raw = typeof value === "string" ? value.trim() : `${value}`;
+  if (raw === "") return null;
+  try {
+    if (/^0x[0-9a-fA-F]+$/.test(raw)) {
+      return BigInt(raw).toString(10);
+    }
+    if (/^-?[0-9]+$/.test(raw)) {
+      return BigInt(raw).toString(10);
+    }
+  } catch {
+    return raw;
+  }
+  return raw;
+}
+function isCanonicalDecimalString(value) {
+  return value !== null && /^[0-9]+$/.test(value);
+}
+function normalizeBoolean(value) {
+  return value === true;
+}
+function stripArraySuffix(type) {
+  const match = type.match(/^(.*)\[[0-9]*\]$/);
+  return match ? match[1] : null;
+}
+function normalizeUnknownObject(value) {
+  const entries = [];
+  for (const key of Object.keys(value).sort()) {
+    entries.push([key, normalizeTypedDataValue(value[key], null, {})]);
+  }
+  return Object.fromEntries(entries);
+}
+function normalizeStructuredValue(value, structName, types) {
+  const fieldMap = /* @__PURE__ */ new Map();
+  for (const field of types[structName] ?? []) {
+    fieldMap.set(field.name, field.type);
+  }
+  const entries = [];
+  for (const key of Object.keys(value).sort()) {
+    entries.push([
+      key,
+      normalizeTypedDataValue(value[key], fieldMap.get(key) ?? null, types)
+    ]);
+  }
+  return Object.fromEntries(entries);
+}
+function normalizeTypedDataValue(value, solidityType, types) {
+  if (value === null || value === void 0) return null;
+  if (solidityType !== null) {
+    const arrayInnerType = stripArraySuffix(solidityType);
+    if (arrayInnerType !== null) {
+      if (!Array.isArray(value)) return [];
+      return value.map(
+        (item) => normalizeTypedDataValue(item, arrayInnerType, types)
+      );
+    }
+    if (solidityType === "address") {
+      const normalized = normalizeString(value);
+      return normalized === null ? null : normalizeEvmAddress(normalized);
+    }
+    if (solidityType.startsWith("uint") || solidityType.startsWith("int")) {
+      return normalizeNumericString(value);
+    }
+    if (solidityType === "bool") {
+      return normalizeBoolean(value);
+    }
+    if (solidityType === "string" || solidityType.startsWith("bytes")) {
+      return normalizeString(value);
+    }
+    if (types[solidityType] && isRecord2(value)) {
+      return normalizeStructuredValue(value, solidityType, types);
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeTypedDataValue(item, null, types));
+  }
+  if (isRecord2(value)) {
+    return normalizeUnknownObject(value);
+  }
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "bigint") {
+    return `${value}`;
+  }
+  return `${value}`;
+}
+function stableStringify(value) {
+  if (value === null) return "null";
+  if (typeof value === "string") return JSON.stringify(value);
+  if (typeof value === "boolean") return value ? "true" : "false";
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  const record = value;
+  const parts = Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
+  return `{${parts.join(",")}}`;
+}
+function serializeTypesForCanonical(types) {
+  const entries = [];
+  for (const key of Object.keys(types).sort()) {
+    const fields = types[key] ?? [];
+    entries.push([
+      key,
+      fields.map((field) => ({
+        name: field.name,
+        type: field.type
+      }))
+    ]);
+  }
+  return Object.fromEntries(entries);
+}
+function classifyPermitKind(primaryType) {
+  if (primaryType === null) return "none";
+  const normalized = primaryType.trim().toLowerCase();
+  if (normalized === "") return "none";
+  if (normalized === "permit") return "erc20_permit";
+  if (normalized === "permitsingle") return "permit2_single";
+  if (normalized === "permitbatch") return "permit2_batch";
+  if (normalized.includes("permit")) return "unknown_permit";
+  return "none";
+}
+function normalizeTypedData(input) {
+  const payload = parseTypedDataPayload(input);
+  const types = normalizeTypes(payload.types ?? null);
+  const primaryType = normalizeString(payload.primaryType);
+  const domainInput = isRecord2(payload.domain) ? payload.domain : {};
+  const messageInput = isRecord2(payload.message) ? payload.message : {};
+  const domainType = types.EIP712Domain ? "EIP712Domain" : null;
+  const normalizedDomain = normalizeTypedDataValue(
+    domainInput,
+    domainType,
+    types
+  );
+  const normalizedMessage = normalizeTypedDataValue(
+    messageInput,
+    primaryType,
+    types
+  );
+  const domain = normalizedDomain !== null && !Array.isArray(normalizedDomain) && typeof normalizedDomain === "object" ? normalizedDomain : {};
+  const message = normalizedMessage !== null && !Array.isArray(normalizedMessage) && typeof normalizedMessage === "object" ? normalizedMessage : {};
+  const domainName = typeof domain.name === "string" ? domain.name : normalizeString(domainInput.name);
+  const domainVersion = typeof domain.version === "string" ? domain.version : normalizeString(domainInput.version);
+  const domainChainIdPresent = Object.prototype.hasOwnProperty.call(
+    domainInput,
+    "chainId"
+  );
+  const normalizedDomainChainId = domainChainIdPresent ? normalizeNumericString(domainInput.chainId) : null;
+  const verifyingContractPresent = Object.prototype.hasOwnProperty.call(
+    domainInput,
+    "verifyingContract"
+  );
+  const verifyingContractRaw = verifyingContractPresent ? normalizeString(domainInput.verifyingContract) : null;
+  const missingDomainFields = [];
+  const invalidDomainFields = [];
+  if (!domainChainIdPresent) {
+    missingDomainFields.push("domain.chainId");
+  }
+  if (!verifyingContractPresent) {
+    missingDomainFields.push("domain.verifyingContract");
+  }
+  const domainChainId = domainChainIdPresent && isCanonicalDecimalString(normalizedDomainChainId) ? normalizedDomainChainId : null;
+  const hasValidDomainChainId = domainChainId !== null;
+  if (domainChainIdPresent && !hasValidDomainChainId) {
+    invalidDomainFields.push("domain.chainId");
+  }
+  const verifyingContract = verifyingContractRaw !== null && isValidEvmAddress(verifyingContractRaw) ? normalizeEvmAddress(verifyingContractRaw) : null;
+  const hasValidVerifyingContract = verifyingContract !== null;
+  if (verifyingContractPresent && !hasValidVerifyingContract) {
+    invalidDomainFields.push("domain.verifyingContract");
+  }
+  const normalizationState = invalidDomainFields.length > 0 ? "invalid_domain_fields" : missingDomainFields.length > 0 ? "missing_domain_fields" : "normalized";
+  const canonicalRoot = {
+    domain,
+    message,
+    primaryType,
+    types: serializeTypesForCanonical(types)
+  };
+  return {
+    isTypedData: true,
+    primaryType,
+    domainName,
+    domainVersion,
+    domainChainId,
+    domainChainIdPresent: hasValidDomainChainId,
+    verifyingContract,
+    verifyingContractPresent: hasValidVerifyingContract,
+    message,
+    domain,
+    types,
+    canonicalJson: stableStringify(canonicalRoot),
+    normalizationState,
+    missingDomainFields,
+    invalidDomainFields,
+    permitKind: classifyPermitKind(primaryType)
+  };
 }
 
 // src/transaction/decode.ts
@@ -4466,58 +4987,67 @@ function normalizeTransactionRequest(input, options) {
   const normalizedCalldata = normalizeHex(input.calldata);
   const methodSelector = normalizedCalldata === "0x" ? null : extractSelector(normalizedCalldata);
   const { decoded, batch } = decodeTransactionCalldata(normalizedCalldata, to);
+  const normalized = {
+    eventKind: "transaction",
+    rpcMethod: input.rpcMethod,
+    chainFamily: input.chainFamily,
+    chainId: input.chainId,
+    originDomain: input.originDomain,
+    from,
+    to,
+    valueWei: quantityToDecimal(input.value),
+    calldata: normalizedCalldata,
+    methodSelector,
+    actionType: decoded.actionType,
+    decoded,
+    batch,
+    signature: {
+      isTypedData: false,
+      primaryType: null,
+      domainName: null,
+      domainVersion: null,
+      domainChainId: null,
+      domainChainIdPresent: false,
+      verifyingContract: null,
+      verifyingContractPresent: false,
+      message: {},
+      domain: {},
+      types: {},
+      canonicalJson: "{}",
+      normalizationState: "normalized",
+      missingDomainFields: [],
+      invalidDomainFields: [],
+      permitKind: "none"
+    },
+    intel: {
+      contractDisposition: "unavailable",
+      contractFeedVersion: null,
+      allowlistFeedVersion: null,
+      signatureDisposition: "unavailable",
+      signatureFeedVersion: null,
+      originDisposition: "unavailable",
+      sectionStates: {}
+    },
+    provider: buildProvider(
+      input.surface,
+      input.walletProvider,
+      input.walletMetadata
+    ),
+    counterparty: defaultCounterparty(input.counterparty),
+    meta: {
+      selectorRecognized: methodSelector !== null && getTransactionSelectorDefinition(methodSelector) !== null,
+      typedDataNormalized: false
+    }
+  };
+  const signals = getTransactionSignals(normalized);
   return hydrateNormalizedTransactionContext(
     {
-      eventKind: "transaction",
-      rpcMethod: input.rpcMethod,
-      chainFamily: input.chainFamily,
-      chainId: input.chainId,
-      originDomain: input.originDomain,
-      from,
-      to,
-      valueWei: quantityToDecimal(input.value),
-      calldata: normalizedCalldata,
-      methodSelector,
-      actionType: decoded.actionType,
-      decoded,
-      batch,
-      signature: {
-        isTypedData: false,
-        primaryType: null,
-        domainName: null,
-        domainVersion: null,
-        domainChainId: null,
-        domainChainIdPresent: false,
-        verifyingContract: null,
-        verifyingContractPresent: false,
-        message: {},
-        domain: {},
-        types: {},
-        canonicalJson: "{}",
-        normalizationState: "normalized",
-        missingDomainFields: [],
-        invalidDomainFields: [],
-        permitKind: "none"
-      },
-      intel: {
-        contractDisposition: "unavailable",
-        contractFeedVersion: null,
-        allowlistFeedVersion: null,
-        signatureDisposition: "unavailable",
-        signatureFeedVersion: null,
-        originDisposition: "unavailable",
-        sectionStates: {}
-      },
-      provider: buildProvider(
-        input.surface,
-        input.walletProvider,
-        input.walletMetadata
-      ),
-      counterparty: defaultCounterparty(input.counterparty),
-      meta: {
-        selectorRecognized: methodSelector !== null && getTransactionSelectorDefinition(methodSelector) !== null,
-        typedDataNormalized: false
-      }
+      ...normalized,
+      signals,
+      riskClassification: classifyTransactionRisk({
+        ...normalized,
+        signals
+      })
     },
     options?.intelProvider
   );
@@ -4525,50 +5055,59 @@ function normalizeTransactionRequest(input, options) {
 function normalizeTypedDataRequest(input, options) {
   const from = normalizeEvmAddress(input.from);
   const signature = normalizeTypedData(input.typedData);
+  const normalized = {
+    eventKind: "signature",
+    rpcMethod: input.rpcMethod,
+    chainFamily: input.chainFamily,
+    chainId: input.chainId,
+    originDomain: input.originDomain,
+    from,
+    to: signature.verifyingContract,
+    valueWei: "0",
+    calldata: "0x",
+    methodSelector: null,
+    actionType: signature.permitKind === "none" ? "unknown" : "permit",
+    decoded: buildDecodedAction({
+      actionType: signature.permitKind === "none" ? "unknown" : "permit",
+      functionName: signature.permitKind === "none" ? null : "permit",
+      tokenAddress: signature.verifyingContract,
+      selector: null
+    }),
+    batch: {
+      isMulticall: false,
+      batchSelector: null,
+      actions: []
+    },
+    signature,
+    intel: {
+      contractDisposition: "unavailable",
+      contractFeedVersion: null,
+      allowlistFeedVersion: null,
+      signatureDisposition: "unavailable",
+      signatureFeedVersion: null,
+      originDisposition: "unavailable",
+      sectionStates: {}
+    },
+    provider: buildProvider(
+      input.surface,
+      input.walletProvider,
+      input.walletMetadata
+    ),
+    counterparty: defaultCounterparty(input.counterparty),
+    meta: {
+      selectorRecognized: false,
+      typedDataNormalized: signature.normalizationState === "normalized"
+    }
+  };
+  const signals = buildTransactionSignals(normalized);
   return hydrateNormalizedTransactionContext(
     {
-      eventKind: "signature",
-      rpcMethod: input.rpcMethod,
-      chainFamily: input.chainFamily,
-      chainId: input.chainId,
-      originDomain: input.originDomain,
-      from,
-      to: signature.verifyingContract,
-      valueWei: "0",
-      calldata: "0x",
-      methodSelector: null,
-      actionType: signature.permitKind === "none" ? "unknown" : "permit",
-      decoded: buildDecodedAction({
-        actionType: signature.permitKind === "none" ? "unknown" : "permit",
-        functionName: signature.permitKind === "none" ? null : "permit",
-        tokenAddress: signature.verifyingContract,
-        selector: null
-      }),
-      batch: {
-        isMulticall: false,
-        batchSelector: null,
-        actions: []
-      },
-      signature,
-      intel: {
-        contractDisposition: "unavailable",
-        contractFeedVersion: null,
-        allowlistFeedVersion: null,
-        signatureDisposition: "unavailable",
-        signatureFeedVersion: null,
-        originDisposition: "unavailable",
-        sectionStates: {}
-      },
-      provider: buildProvider(
-        input.surface,
-        input.walletProvider,
-        input.walletMetadata
-      ),
-      counterparty: defaultCounterparty(input.counterparty),
-      meta: {
-        selectorRecognized: false,
-        typedDataNormalized: signature.normalizationState === "normalized"
-      }
+      ...normalized,
+      signals,
+      riskClassification: classifyTransactionRisk({
+        ...normalized,
+        signals
+      })
     },
     options?.intelProvider
   );
@@ -5180,7 +5719,7 @@ function readRequiredString2(value, key, path, issues) {
   }
   return candidate;
 }
-function readRequiredNumber2(value, key, path, issues) {
+function readRequiredNumber(value, key, path, issues) {
   const candidate = value[key];
   if (typeof candidate !== "number" || !Number.isFinite(candidate)) {
     pushIssue2(issues, `${path}.${key}`, "Expected a finite number");
@@ -5212,7 +5751,7 @@ function readMetadata(value, path, issues) {
   }
   assertExactKeys2(value, SECTION_METADATA_KEYS, path, issues);
   const feedVersion = readRequiredString2(value, "feedVersion", path, issues);
-  const itemCount = readRequiredNumber2(value, "itemCount", path, issues);
+  const itemCount = readRequiredNumber(value, "itemCount", path, issues);
   const sha256 = readRequiredString2(value, "sha256", path, issues);
   const staleAfter = readRequiredTimestamp(value, "staleAfter", path, issues);
   const expiresAt = readRequiredTimestamp(value, "expiresAt", path, issues);
@@ -5391,7 +5930,7 @@ function canonicalAllowlistSection(section) {
 }
 function validateSectionHeader(section, metadata, path, issues) {
   const feedVersion = readRequiredString2(section, "feedVersion", path, issues);
-  const itemCount = readRequiredNumber2(section, "itemCount", path, issues);
+  const itemCount = readRequiredNumber(section, "itemCount", path, issues);
   const sha256 = readRequiredString2(section, "sha256", path, issues);
   const staleAfter = readRequiredTimestamp(section, "staleAfter", path, issues);
   const expiresAt = readRequiredTimestamp(section, "expiresAt", path, issues);
@@ -5437,7 +5976,7 @@ function parseMaliciousItems(rawItems, path, issues) {
     const identity = readRequiredString2(rawItem, "identity", itemPath, issues);
     const source = readRequiredString2(rawItem, "source", itemPath, issues);
     const reasonCode = readRequiredString2(rawItem, "reasonCode", itemPath, issues);
-    const confidence = readRequiredNumber2(rawItem, "confidence", itemPath, issues);
+    const confidence = readRequiredNumber(rawItem, "confidence", itemPath, issues);
     const firstSeenAt = readRequiredTimestamp(rawItem, "firstSeenAt", itemPath, issues);
     const lastSeenAt = readRequiredTimestamp(rawItem, "lastSeenAt", itemPath, issues);
     const domain = readRequiredString2(rawItem, "domain", itemPath, issues);
@@ -5523,7 +6062,7 @@ function parseAllowlistItems(rawItems, path, issues) {
     const identity = readRequiredString2(rawItem, "identity", itemPath, issues);
     const source = readRequiredString2(rawItem, "source", itemPath, issues);
     const reasonCode = readRequiredString2(rawItem, "reasonCode", itemPath, issues);
-    const confidence = readRequiredNumber2(rawItem, "confidence", itemPath, issues);
+    const confidence = readRequiredNumber(rawItem, "confidence", itemPath, issues);
     const firstSeenAt = readRequiredTimestamp(rawItem, "firstSeenAt", itemPath, issues);
     const lastSeenAt = readRequiredTimestamp(rawItem, "lastSeenAt", itemPath, issues);
     const targetKind = readRequiredString2(rawItem, "targetKind", itemPath, issues);
@@ -10091,6 +10630,7 @@ export {
   buildTransactionSignals,
   buildWalletReportId,
   classifyPermitKind,
+  classifyTransactionRisk,
   classifyTransactionSelector,
   compileDomainIntelSnapshot,
   containsAirdropKeyword,
@@ -10113,6 +10653,7 @@ export {
   getEvmCleanupEligibility,
   getReasonMessage,
   getTransactionSelectorDefinition,
+  getTransactionSignals,
   getVerdictTitle,
   hasHomoglyphs,
   hasSuspiciousTld,

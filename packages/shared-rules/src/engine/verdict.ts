@@ -262,7 +262,7 @@ function overrideLevelForStatus(
     case "WARN":
       return "confirm";
     case "BLOCK":
-      return "high_friction_confirm";
+      return "none";
   }
 }
 
@@ -299,7 +299,7 @@ export function assembleTransactionVerdict(
       allowlistFeedVersion: input.intel.allowlistFeedVersion,
       signatureFeedVersion: input.intel.signatureFeedVersion,
     },
-    overrideAllowed: status !== "ALLOW",
+    overrideAllowed: overrideLevel !== "none",
     overrideLevel,
   };
 

@@ -180,10 +180,7 @@ export type EngineInput =
 
 export type TransactionVerdictStatus = "ALLOW" | "WARN" | "BLOCK";
 
-export type TransactionOverrideLevel =
-  | "none"
-  | "confirm"
-  | "high_friction_confirm";
+export type TransactionOverrideLevel = "none" | "confirm";
 
 export interface TransactionIntelVersions {
   readonly contractFeedVersion: string | null;

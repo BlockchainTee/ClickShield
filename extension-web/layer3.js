@@ -18,9 +18,6 @@ export const LAYER3_USER_REJECTED_ERROR = Object.freeze({
   message: "User rejected the request.",
 });
 
-export const LAYER3_BLOCK_ACKNOWLEDGEMENT =
-  "I understand ClickShield flagged this request as high risk and I still want to continue.";
-
 const REASON_BADGE_LABELS = Object.freeze({
   TX_UNLIMITED_APPROVAL: "Unlimited approval",
   TX_UNKNOWN_SPENDER: "Unknown spender",
@@ -461,18 +458,11 @@ function buildHighestRiskConsequence(verdict, context) {
 }
 
 function buildConfirmationContract(verdict, context) {
-  const consequence = buildHighestRiskConsequence(verdict, context);
-
-  if (verdict.overrideLevel === "high_friction_confirm") {
-    return {
-      kind: "typed_acknowledgement",
-      title: "Type the acknowledgement to continue",
-      prompt: "ClickShield requires a typed acknowledgement before forwarding this blocked request.",
-      consequence,
-      expectedText: LAYER3_BLOCK_ACKNOWLEDGEMENT,
-      confirmLabel: "Type and Continue",
-    };
+  if (verdict.overrideAllowed !== true || verdict.overrideLevel !== "confirm") {
+    return null;
   }
+
+  const consequence = buildHighestRiskConsequence(verdict, context);
 
   return {
     kind: "confirm",
@@ -485,6 +475,8 @@ function buildConfirmationContract(verdict, context) {
 }
 
 function buildModalContract(context, verdict) {
+  const confirmation = buildConfirmationContract(verdict, context);
+
   return {
     verdictLabel: verdict.status === "BLOCK" ? "Blocked" : "Warning",
     headline: verdict.explanation.headline,
@@ -504,20 +496,42 @@ function buildModalContract(context, verdict) {
     reasonBadges: buildReasonBadges(verdict.reasonCodes),
     overrideAllowed: verdict.overrideAllowed,
     overrideLevel: verdict.overrideLevel,
-    confirmation: buildConfirmationContract(verdict, context),
+    confirmation,
+    dismissalLabel: verdict.status === "BLOCK" ? "Close" : "Cancel",
+    enforcementMessage:
+      verdict.status === "BLOCK"
+        ? "ClickShield blocked this request and will not forward it."
+        : null,
+    primaryReason: verdict.primaryReason,
+    secondaryReasons: verdict.secondaryReasons,
     evidence: verdict.evidence,
     matchedRules: verdict.matchedRules,
   };
 }
 
-function confirmationModeForOverrideLevel(overrideLevel) {
-  switch (overrideLevel) {
-    case "confirm":
-      return "confirm";
-    case "high_friction_confirm":
-      return "typed_acknowledgement";
+function confirmationModeForVerdict(verdict) {
+  return verdict.overrideLevel === "confirm" ? "confirm" : "none";
+}
+
+function finalUserActionForVerdict(verdict) {
+  switch (verdict.status) {
+    case "ALLOW":
+      return "auto-allowed";
+    case "BLOCK":
+      return "blocked";
     default:
-      return "none";
+      return "pending";
+  }
+}
+
+function actionForVerdict(verdict) {
+  switch (verdict.status) {
+    case "ALLOW":
+      return "allow";
+    case "BLOCK":
+      return "block";
+    default:
+      return "warn";
   }
 }
 
@@ -537,8 +551,10 @@ function buildAuditRecord(rawRequest, context, verdict) {
     matchedRules: verdict.matchedRules,
     ruleSetVersion: verdict.ruleSetVersion,
     intelVersions: verdict.intelVersions,
-    finalUserAction: verdict.status === "ALLOW" ? "auto-allowed" : "pending",
-    confirmationMode: confirmationModeForOverrideLevel(verdict.overrideLevel),
+    primaryReason: verdict.primaryReason,
+    secondaryReasons: verdict.secondaryReasons,
+    finalUserAction: finalUserActionForVerdict(verdict),
+    confirmationMode: confirmationModeForVerdict(verdict),
   };
 }
 
@@ -561,7 +577,7 @@ export function evaluateLayer3RpcRequest(rawRequest, options = {}) {
     evaluation,
     verdict,
     signals: evaluation.signals,
-    action: verdict.status === "ALLOW" ? "allow" : "gate",
+    action: actionForVerdict(verdict),
     modal: verdict.status === "ALLOW" ? null : buildModalContract(normalizedContext, verdict),
     audit: buildAuditRecord(normalizedRawRequest, normalizedContext, verdict),
   };

@@ -2,7 +2,6 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  LAYER3_BLOCK_ACKNOWLEDGEMENT,
   evaluateLayer3RpcRequest,
 } from '../layer3.js';
 
@@ -131,9 +130,14 @@ test('eth_sendTransaction approval requests are normalized and gated as WARN', (
   assert.equal(decision.normalizedContext.intel.contractDisposition, 'no_match');
   assert.equal(decision.verdict.status, 'WARN');
   assert.equal(decision.verdict.overrideLevel, 'confirm');
-  assert.equal(decision.action, 'gate');
+  assert.equal(decision.action, 'warn');
   assert.equal(decision.modal.verdictLabel, 'Warning');
+  assert.equal(decision.modal.overrideAllowed, true);
   assert.equal(decision.modal.confirmation.kind, 'confirm');
+  assert.equal(decision.audit.finalUserAction, 'pending');
+  assert.equal(decision.audit.confirmationMode, 'confirm');
+  assert.equal(decision.verdict.primaryReason === null, false);
+  assert.ok(Array.isArray(decision.verdict.secondaryReasons));
   assert.ok(decision.verdict.reasonCodes.includes('TX_UNLIMITED_APPROVAL'));
   assert.ok(decision.verdict.reasonCodes.includes('TX_UNKNOWN_SPENDER'));
 });
@@ -167,6 +171,7 @@ test('eth_signTypedData and eth_signTypedData_v4 are normalized as signature req
     assert.equal(decision.normalizedContext.signature.primaryType, 'PermitSingle');
     assert.equal(decision.normalizedContext.intel.contractDisposition, 'no_match');
     assert.equal(decision.verdict.status, 'WARN');
+    assert.equal(decision.action, 'warn');
     assert.equal(decision.modal.primaryAddressLabel, 'Verifying contract');
     assert.equal(decision.modal.confirmation.kind, 'confirm');
     assert.ok(decision.verdict.reasonCodes.includes('TX_PERMIT_SIGNATURE'));
@@ -207,6 +212,8 @@ test('safe transfer requests stay ALLOW and forward without a modal', () => {
   assert.equal(decision.action, 'allow');
   assert.equal(decision.modal, null);
   assert.equal(decision.audit.finalUserAction, 'auto-allowed');
+  assert.equal(decision.audit.primaryReason, null);
+  assert.deepEqual(decision.audit.secondaryReasons, []);
 });
 
 test('provider-fed malicious contract intel drives BLOCK and request intel cannot override it', () => {
@@ -243,10 +250,55 @@ test('provider-fed malicious contract intel drives BLOCK and request intel canno
   assert.equal(decision.normalizedContext.intel.contractDisposition, 'malicious');
   assert.equal(decision.normalizedContext.intel.contractFeedVersion, 'contracts@2026-03-22');
   assert.equal(decision.verdict.status, 'BLOCK');
-  assert.equal(decision.verdict.overrideLevel, 'high_friction_confirm');
+  assert.equal(decision.verdict.overrideAllowed, false);
+  assert.equal(decision.verdict.overrideLevel, 'none');
+  assert.equal(decision.action, 'block');
   assert.equal(decision.modal.verdictLabel, 'Blocked');
-  assert.equal(decision.modal.confirmation.kind, 'typed_acknowledgement');
-  assert.equal(decision.modal.confirmation.expectedText, LAYER3_BLOCK_ACKNOWLEDGEMENT);
-  assert.equal(decision.audit.confirmationMode, 'typed_acknowledgement');
+  assert.equal(decision.modal.overrideAllowed, decision.verdict.overrideAllowed);
+  assert.equal(decision.modal.overrideLevel, decision.verdict.overrideLevel);
+  assert.equal(decision.modal.confirmation, null);
+  assert.match(decision.modal.enforcementMessage, /will not forward/i);
+  assert.equal(decision.audit.finalUserAction, 'blocked');
+  assert.equal(decision.audit.confirmationMode, 'none');
+  assert.equal(decision.verdict.primaryReason === null, false);
+  assert.ok(Array.isArray(decision.verdict.secondaryReasons));
   assert.ok(decision.verdict.reasonCodes.includes('TX_KNOWN_MALICIOUS_CONTRACT'));
+});
+
+test('repeated WARN evaluation stays deterministic across action and reasons', () => {
+  const input = {
+    requestId: 'warn-deterministic',
+    rpcMethod: 'eth_sendTransaction',
+    rpcParams: [
+      {
+        from: '0x1111111111111111111111111111111111111111',
+        to: '0x2222222222222222222222222222222222222222',
+        value: '0x0',
+        data: buildApproveCalldata(
+          '0x3333333333333333333333333333333333333333',
+          '0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff',
+        ),
+      },
+    ],
+    originUrl: 'https://app.example.com/swap',
+    originDomain: 'app.example.com',
+    walletProvider: 'metamask',
+    walletMetadata: {
+      providerType: 'injected',
+      walletName: 'MetaMask',
+      walletVersion: '1.0.0',
+      platform: 'web',
+    },
+    selectedAddress: '0x1111111111111111111111111111111111111111',
+    chainId: '0x1',
+  };
+
+  const first = evaluateLayer3RpcRequest(input, {
+    intelProvider: NO_MATCH_PROVIDER,
+  });
+  const second = evaluateLayer3RpcRequest(input, {
+    intelProvider: NO_MATCH_PROVIDER,
+  });
+
+  assert.deepEqual(second, first);
 });

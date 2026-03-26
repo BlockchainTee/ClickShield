@@ -4,6 +4,10 @@ const USER_REJECTED_ERROR = Object.freeze({
   code: 4001,
   message: "User rejected the request.",
 });
+const BLOCKED_ERROR = Object.freeze({
+  code: 4001,
+  message: "ClickShield blocked this request.",
+});
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -61,9 +65,11 @@ function createTransactionModalPresenter(options = {}) {
 
       function render() {
         const confirmation = modal.confirmation;
-        const showConfirmStep = confirmationAccepted === true || typedAcknowledgement !== "";
+        const canOverride = modal.overrideAllowed === true && confirmation !== null;
         const confirmDisabled =
-          confirmation.kind === "typed_acknowledgement"
+          !canOverride
+            ? true
+            : confirmation.kind === "typed_acknowledgement"
             ? typedAcknowledgement !== confirmation.expectedText
             : confirmationAccepted !== true;
 
@@ -259,30 +265,47 @@ function createTransactionModalPresenter(options = {}) {
                 </div>`
                   : ""
               }
-              <div class="cs-l3-confirmation">
-                <p class="cs-l3-label">${escapeHtml(modal.confirmation.title)}</p>
-                <p class="cs-l3-value">${escapeHtml(modal.confirmation.prompt)}</p>
-                <p class="cs-l3-value" style="margin-top: 10px;">${escapeHtml(modal.confirmation.consequence)}</p>
-                ${
-                  modal.confirmation.kind === "typed_acknowledgement"
-                    ? `
-                  <code>${escapeHtml(modal.confirmation.expectedText)}</code>
-                  <input id="${root.id}-typed-input" type="text" value="${escapeHtml(typedAcknowledgement)}" placeholder="Type the acknowledgement exactly" />`
-                    : `
-                  <label class="cs-l3-checkbox">
-                    <input id="${root.id}-confirm-checkbox" type="checkbox" ${
-                      confirmationAccepted ? "checked" : ""
-                    } />
-                    <span>I understand the risk and want to continue.</span>
-                  </label>`
-                }
-              </div>
+              ${
+                canOverride
+                  ? `
+                <div class="cs-l3-confirmation">
+                  <p class="cs-l3-label">${escapeHtml(confirmation.title)}</p>
+                  <p class="cs-l3-value">${escapeHtml(confirmation.prompt)}</p>
+                  <p class="cs-l3-value" style="margin-top: 10px;">${escapeHtml(confirmation.consequence)}</p>
+                  ${
+                    confirmation.kind === "typed_acknowledgement"
+                      ? `
+                    <code>${escapeHtml(confirmation.expectedText)}</code>
+                    <input id="${root.id}-typed-input" type="text" value="${escapeHtml(typedAcknowledgement)}" placeholder="Type the acknowledgement exactly" />`
+                      : `
+                    <label class="cs-l3-checkbox">
+                      <input id="${root.id}-confirm-checkbox" type="checkbox" ${
+                        confirmationAccepted ? "checked" : ""
+                      } />
+                      <span>I understand the risk and want to continue.</span>
+                    </label>`
+                  }
+                </div>`
+                  : `
+                <div class="cs-l3-section">
+                  <p class="cs-l3-label">Enforcement</p>
+                  <p class="cs-l3-value">${escapeHtml(
+                    modal.enforcementMessage ?? "ClickShield blocked this request and will not forward it.",
+                  )}</p>
+                </div>`
+              }
             </div>
             <div class="cs-l3-actions">
-              <button id="${root.id}-cancel" class="cs-l3-cancel">Cancel</button>
-              <button id="${root.id}-override" class="cs-l3-override" ${
-                confirmDisabled ? "disabled" : ""
-              }>${escapeHtml(modal.confirmation.confirmLabel)}</button>
+              <button id="${root.id}-cancel" class="cs-l3-cancel">${escapeHtml(
+                modal.dismissalLabel ?? (canOverride ? "Cancel" : "Close"),
+              )}</button>
+              ${
+                canOverride
+                  ? `<button id="${root.id}-override" class="cs-l3-override" ${
+                      confirmDisabled ? "disabled" : ""
+                    }>${escapeHtml(confirmation.confirmLabel)}</button>`
+                  : ""
+              }
             </div>
           </div>`;
 
@@ -359,6 +382,26 @@ function createTransactionInterceptorController(options = {}) {
       return {
         action: "forward",
         audit: decision.audit,
+      };
+    }
+
+    if (decision.verdict.status === "BLOCK") {
+      try {
+        await presentModal(decision);
+      } catch {
+        // Fail closed when block UX cannot be presented.
+      }
+
+      return {
+        action: "reject",
+        error: {
+          ...BLOCKED_ERROR,
+        },
+        audit: {
+          ...decision.audit,
+          finalUserAction: "blocked",
+          confirmationMode: "none",
+        },
       };
     }
 
@@ -446,6 +489,7 @@ if (globalThis.__CLICKSHIELD_ENABLE_TEST_HOOKS__ === true) {
     CLICKSHIELD_PROVIDER_SOURCE,
     CLICKSHIELD_MODAL_REQUEST,
     USER_REJECTED_ERROR,
+    BLOCKED_ERROR,
     createTransactionInterceptorController,
     createRuntimeMessenger,
   };

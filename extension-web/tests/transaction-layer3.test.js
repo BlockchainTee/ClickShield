@@ -356,11 +356,11 @@ test('interceptor forwards WARN decisions only after modal override', async () =
   });
 });
 
-test('interceptor supports the stronger BLOCK override path', async () => {
-  let modalPayload = null;
+test('interceptor keeps BLOCK decisions rejected even if the modal flow resolves', async () => {
+  let presentedDecision = null;
   const controller = interceptorHooks.createTransactionInterceptorController({
     async presentModal(decision) {
-      modalPayload = decision.modal;
+      presentedDecision = decision;
       return { action: 'override' };
     },
   });
@@ -371,28 +371,27 @@ test('interceptor supports the stronger BLOCK override path', async () => {
       requestId: 'block-override',
       verdict: { status: 'BLOCK' },
       audit: {
-        finalUserAction: 'pending',
-        confirmationMode: 'typed_acknowledgement',
+        finalUserAction: 'blocked',
+        confirmationMode: 'none',
       },
       modal: {
-        confirmation: {
-          kind: 'typed_acknowledgement',
-          expectedText:
-            'I understand ClickShield flagged this request as high risk and I still want to continue.',
-        },
+        overrideAllowed: false,
+        confirmation: null,
+        enforcementMessage: 'ClickShield blocked this request and will not forward it.',
       },
     },
   });
 
-  assert.equal(modalPayload.confirmation.kind, 'typed_acknowledgement');
-  assert.match(modalPayload.confirmation.expectedText, /high risk/i);
+  assert.equal(presentedDecision.modal.overrideAllowed, false);
+  assert.equal(presentedDecision.modal.confirmation, null);
   assert.deepEqual(response, {
     ok: true,
     resolution: {
-      action: 'forward',
+      action: 'reject',
+      error: interceptorHooks.BLOCKED_ERROR,
       audit: {
-        finalUserAction: 'overridden',
-        confirmationMode: 'typed_acknowledgement',
+        finalUserAction: 'blocked',
+        confirmationMode: 'none',
       },
     },
   });

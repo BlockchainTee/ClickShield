@@ -517,8 +517,8 @@ describe("Layer 3 Phase B transaction evaluation", () => {
     expect(context.intel.contractDisposition).toBe("malicious");
     expect(context.intel.contractFeedVersion).toBe(POPULATED_PROVIDER.snapshotVersion);
     expect(result.verdict.status).toBe("BLOCK");
-    expect(result.verdict.overrideAllowed).toBe(true);
-    expect(result.verdict.overrideLevel).toBe("high_friction_confirm");
+    expect(result.verdict.overrideAllowed).toBe(false);
+    expect(result.verdict.overrideLevel).toBe("none");
     expect(result.reasonCodes).toContain("TX_KNOWN_MALICIOUS_CONTRACT");
     expect(result.verdict.primaryRuleId).toBe(
       "TX_BLOCK_MALICIOUS_TRANSACTION_CONTRACT"
