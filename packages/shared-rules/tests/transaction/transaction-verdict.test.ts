@@ -108,21 +108,6 @@ function match(
   };
 }
 
-function withNormalizedAuditTimestamp<
-  TResult extends { verdict: { audit: { timestamp: string } } }
->(result: TResult): TResult {
-  return {
-    ...result,
-    verdict: {
-      ...result.verdict,
-      audit: {
-        ...result.verdict.audit,
-        timestamp: "<timestamp>",
-      },
-    },
-  };
-}
-
 describe("transaction verdict consolidation", () => {
   it("block beats warn and keeps the block reason primary", () => {
     const result = assembleTransactionVerdict(buildTransactionContext(), [
@@ -395,11 +380,7 @@ describe("transaction verdict consolidation", () => {
     const first = assembleTransactionVerdict(context, matches);
     const second = assembleTransactionVerdict(context, matches);
 
-    expect(second.verdict.audit.id).toBe(first.verdict.audit.id);
-    expect(second.verdict.audit.timestamp).toEqual(expect.any(String));
-    expect(withNormalizedAuditTimestamp(second)).toEqual(
-      withNormalizedAuditTimestamp(first)
-    );
+    expect(second).toEqual(first);
     expect(first.signals).toEqual(context.signals);
     expect(first.riskClassification).toEqual(context.riskClassification);
     expect(first.verdict.intelVersions).toEqual({

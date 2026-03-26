@@ -21,6 +21,8 @@ type TransactionAuditVerdictInput =
   | Omit<TransactionVerdict, "audit">
   | TransactionVerdict;
 
+const DETERMINISTIC_AUDIT_TIMESTAMP = "1970-01-01T00:00:00.000Z";
+
 export interface TransactionAuditRecord {
   id: string;
   timestamp: string;
@@ -203,7 +205,9 @@ export function createAuditRecord(
 
   return {
     id: buildAuditId(ctx, verdict, status, explanation, source),
-    timestamp: new Date().toISOString(),
+    // The shipped evaluation contract must be time-invariant. Real telemetry
+    // timestamps belong to the caller or persistence layer, not pure evaluation.
+    timestamp: DETERMINISTIC_AUDIT_TIMESTAMP,
     status,
     explanation,
     signals,

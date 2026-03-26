@@ -151,11 +151,17 @@ interface NormalizedTransactionContext {
     readonly meta: TransactionMeta;
 }
 interface TransactionExplanation {
-    readonly headline: string;
+    readonly status: "block" | "warn" | "allow";
     readonly summary: string;
-    readonly details: readonly string[];
-    readonly unknowns: readonly string[];
-    readonly technical: readonly string[];
+    readonly primaryReason: string;
+    readonly secondaryReasons: readonly string[];
+    readonly riskLevel: "high" | "medium" | "low";
+    readonly details: {
+        readonly method?: string;
+        readonly target?: string;
+        readonly value?: string;
+        readonly isContractInteraction: boolean;
+    };
 }
 interface TransactionSignals {
     readonly isContractInteraction: boolean;
@@ -198,6 +204,21 @@ interface TransactionRiskClassification {
     readonly isUnknownMethodRisk: boolean;
     readonly requiresUserAttention: boolean;
 }
+
+interface TransactionAuditRecord {
+    id: string;
+    timestamp: string;
+    status: "block" | "warn" | "allow";
+    explanation: TransactionExplanation;
+    signals: TransactionSignals;
+    classification: TransactionRiskClassification;
+    metadata: {
+        source: "extension" | "mobile" | "desktop";
+    };
+}
+declare function createAuditRecord(ctx: NormalizedTransactionContext, verdict: Verdict): TransactionAuditRecord;
+declare function createAuditRecord(ctx: NormalizedTransactionContext, verdict: Omit<TransactionVerdict, "audit">): TransactionAuditRecord;
+declare function createAuditRecord(ctx: NormalizedTransactionContext, verdict: TransactionVerdict): TransactionAuditRecord;
 
 /**
  * Risk severity levels, ordered from least to most severe.
@@ -304,6 +325,7 @@ interface TransactionVerdict {
     readonly intelVersions: TransactionIntelVersions;
     readonly overrideAllowed: boolean;
     readonly overrideLevel: TransactionOverrideLevel;
+    readonly audit: TransactionAuditRecord;
 }
 interface TransactionEvaluationResult {
     readonly verdict: TransactionVerdict;
@@ -703,13 +725,16 @@ type ValidateTransactionLayer2SnapshotResult = ValidateTransactionLayer2Snapshot
 interface CanonicalTransactionIntelLookup {
     readonly eventKind: TransactionEventKind;
     readonly targetAddress: string | null;
+    readonly signatureHash: string | null;
 }
 interface TrustedTransactionOriginIntel {
     readonly originDisposition: TransactionIntelContext["originDisposition"];
     readonly allowlistFeedVersion: string | null;
     readonly allowlistsState: Layer2SectionState$1;
 }
+declare const EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT = "1970-01-01T00:00:00.000Z";
 declare function validateTransactionLayer2Snapshot(input: unknown): ValidateTransactionLayer2SnapshotResult;
+declare function buildEmptyValidatedTransactionLayer2Snapshot(generatedAt?: string): ValidatedTransactionLayer2Snapshot;
 
 type TransactionIntelLookupDisposition = Extract<TransactionIntelContext["contractDisposition"], "malicious" | "no_match" | "unavailable">;
 interface TransactionMaliciousContractLookup {
@@ -735,6 +760,7 @@ interface TransactionScamSignatureLookupResult {
     readonly matchedSection?: "scamSignatures";
     readonly feedVersion: string | null;
     readonly sectionState: Layer2SectionState$1;
+    readonly record?: TransactionLayer2ScamSignature | null;
 }
 interface CanonicalTransactionIntelLookupResult {
     readonly maliciousContract: TransactionMaliciousContractLookupResult;
@@ -761,12 +787,75 @@ declare function normalizeTypedDataRequest(input: RawSignatureRequest, options?:
     readonly intelProvider?: TransactionIntelProvider | null;
 }): NormalizedTransactionContext;
 
+interface CanonicalTransactionSnapshotActivation {
+    readonly state: "valid" | "empty" | "rejected";
+    readonly rejectionStatus: "malformed" | "incompatible" | null;
+    readonly issues: readonly TransactionLayer2SnapshotValidationIssue[];
+    readonly snapshot: ValidatedTransactionLayer2Snapshot;
+    readonly provider: TransactionIntelProvider;
+}
 declare function getDefaultTransactionIntelProvider(): TransactionIntelProvider;
+declare function getCanonicalTransactionSnapshotActivation(): CanonicalTransactionSnapshotActivation;
 
 declare function classifyPermitKind(primaryType: string | null): PermitKind;
 declare function normalizeTypedData(input: string | RawTypedDataPayload): NormalizedTypedData;
 
-declare function buildTransactionExplanation(context: NormalizedTransactionContext): TransactionExplanation;
+type ExplainableTransactionVerdict = Verdict | Pick<TransactionVerdict, "status" | "primaryReason" | "secondaryReasons">;
+declare function explainTransaction(ctx: NormalizedTransactionContext, verdict: Verdict): TransactionExplanation;
+declare function explainTransaction(ctx: NormalizedTransactionContext, verdict: ExplainableTransactionVerdict): TransactionExplanation;
+
+interface TransactionAnalytics {
+    totalTransactions: number;
+    blockedCount: number;
+    warnedCount: number;
+    repeatedTargetCount: Record<string, number>;
+    highRiskFrequency: number;
+    patterns: {
+        repeatedTarget: boolean;
+        frequentHighRisk: boolean;
+    };
+}
+declare function analyzeTransactions(records: TransactionAuditRecord[]): TransactionAnalytics;
+
+interface UserProtectionProfile {
+    heightenedProtection: boolean;
+    controls: {
+        repeatedTargetCaution: boolean;
+        frequentHighRiskCaution: boolean;
+        warnEscalationSuggested: boolean;
+        cooldownSuggested: boolean;
+    };
+    summary: {
+        totalTransactions: number;
+        blockedCount: number;
+        warnedCount: number;
+        repeatedTargetCount: number;
+        highRiskFrequency: number;
+    };
+}
+/**
+ * Derives deterministic, advisory-only user protection controls from local
+ * audit history. Thresholds are intentionally fixed:
+ * - warn escalation: at least 3 warnings and warnings are >= 50% of history
+ * - cooldown suggestion: at least 4 of the 5 most recent records are risky
+ */
+declare function deriveUserProtectionProfile(records: TransactionAuditRecord[]): UserProtectionProfile;
+
+interface TransactionDecisionPackage {
+    readonly verdict: TransactionVerdict;
+    readonly explanation: TransactionExplanation;
+    readonly audit: TransactionAuditRecord;
+    readonly analytics: TransactionAnalytics;
+    readonly protection: UserProtectionProfile;
+    readonly readiness: {
+        readonly hasExplanation: boolean;
+        readonly hasAudit: boolean;
+        readonly hasAnalytics: boolean;
+        readonly hasProtectionProfile: boolean;
+        readonly complete: boolean;
+    };
+}
+declare function buildTransactionDecisionPackage(records: readonly TransactionAuditRecord[], verdict: TransactionVerdict): TransactionDecisionPackage;
 
 type TransactionRiskContext = Omit<NormalizedTransactionContext, "riskClassification">;
 declare function classifyTransactionRisk(context: NormalizedTransactionContext): TransactionRiskClassification;
@@ -2293,4 +2382,4 @@ declare function interpretEvmCleanupExecutionResult(input: {
  */
 declare function reconcileEvmCleanupPlanResults(plan: EvmWalletCleanupPlan, results: readonly EvmCleanupActionExecutionResult[], rescanSnapshot?: EvmCleanupRescanSnapshot | null): EvmCleanupReconciliationSummary;
 
-export { type ApprovalAmountKind, type ApprovalDirection, type ApprovalScope, type BitcoinAddressRole, type BitcoinAddressSummaryInput, type BitcoinAddressType, type BitcoinConcentrationLevel, type BitcoinFragmentationLevel, type BitcoinHygieneIssueType, type BitcoinHygieneRecordInput, type BitcoinUtxoSummaryInput, type BitcoinWalletHydratedSnapshot, type BitcoinWalletScanEvaluation, type BitcoinWalletScanEvaluationInput, type BitcoinWalletSignals, type BuildContextOptions, type CanonicalTransactionIntelLookup, type CanonicalTransactionIntelLookupResult, type CanonicalTransactionSnapshotSectionState, type ChainFamily, type CompileDomainIntelSnapshotOptions, type CompiledDomainAllowlistItem, type CompiledDomainAllowlistsSection, type CompiledDomainIntelSnapshot, type CompiledMaliciousDomainItem, type CompiledMaliciousDomainsSection, type DecodedTransactionAction, type DomainAllowlistFeedItem, type DomainAllowlistsSection, type DomainContext, type DomainIntelBundle, type DomainIntelCompileFailure, type DomainIntelCompileResult, type DomainIntelCompileSuccess, type DomainIntelSectionMetadata, type DomainIntelSectionName, type DomainIntelSectionValidationReport, type DomainIntelSignatureEnvelope, type DomainIntelValidationOptions, type DomainIntelValidationReport, type DomainLookupDisposition, type DomainLookupResult, type EngineResult, type EvmApprovalAmountKind, type EvmApprovalKind, type EvmApprovalRecordInput, type EvmCleanupAction, type EvmCleanupActionExecutionResult, type EvmCleanupBatchPlan, type EvmCleanupEligibility, type EvmCleanupExecutionRequest, type EvmCleanupExecutionStatus, type EvmCleanupPackaging, type EvmCleanupReconciliationItem, type EvmCleanupReconciliationSummary, type EvmCleanupRescanSnapshot, type EvmCleanupRescanStatus, type EvmCleanupRevocationMethod, type EvmCleanupSelectionKind, type EvmContractExposureInput, type EvmContractExposureType, type EvmCounterpartyDisposition, type EvmPreparedCleanupArgument, type EvmPreparedCleanupTransaction, type EvmRevocableApprovalTarget, type EvmTokenStandard, type EvmWalletCleanupPlan, type EvmWalletHydratedSnapshot, type EvmWalletScanEvaluation, type EvmWalletScanEvaluationInput, type EvmWalletSignals, type IntelValidationIssue, KNOWN_PROTOCOL_DOMAINS, type Layer2SectionState, type Layer3RpcMethod, type MaliciousDomainFeedItem, type MaliciousDomainsSection, type NavigationContext, type NavigationInput, type NormalizedBitcoinAddressSummary, type NormalizedBitcoinHygieneRecord, type NormalizedBitcoinUtxoSummary, type NormalizedBitcoinWalletSnapshot, type NormalizedEvmApprovalState, type NormalizedEvmContractExposure, type NormalizedEvmSpenderRisk, type NormalizedEvmWalletSnapshot, type NormalizedSolanaAuthorityAssignment, type NormalizedSolanaConnectionRecord, type NormalizedSolanaProgramExposure, type NormalizedSolanaTokenAccountState, type NormalizedSolanaWalletSnapshot, type NormalizedTransactionContext, type NormalizedTypedData, PHISHING_CODES, type PermitKind, type PhishingCode, RULE_SET_VERSION, type RawSignatureRequest, type RawTransactionRequest, type RawTypedDataPayload, type ReasonMessage, type RiskLevel, type RuleOutcome, SUSPICIOUS_TLDS, type SignatureInput, type SignatureRpcMethod, type SolanaAuthorityAssignmentInput, type SolanaAuthorityType, type SolanaConnectionRecordInput, type SolanaPermissionLevel, type SolanaProgramExposureInput, type SolanaTokenAccountInput, type SolanaWalletHydratedSnapshot, type SolanaWalletScanEvaluation, type SolanaWalletScanEvaluationInput, type SolanaWalletSignals, TRANSACTION_SELECTOR_REGISTRY, type TransactionActionType, type TransactionBatchContext, type TransactionCounterpartyContext, type TransactionEvaluationResult, type TransactionEventKind, type TransactionExplanation, type TransactionInput, type TransactionIntelConfidence, type TransactionIntelContext, type TransactionIntelDisposition, type TransactionIntelLookupDisposition, type TransactionIntelProvider, type TransactionIntelSource, type TransactionIntelVersions, type TransactionLayer2MaliciousContract, type TransactionLayer2MaliciousContractEntry, type TransactionLayer2ScamSignature, type Layer2SectionState$1 as TransactionLayer2SectionState, type TransactionLayer2Snapshot, type TransactionLayer2SnapshotMetadata, type TransactionLayer2SnapshotValidationIssue, type Layer3RpcMethod as TransactionLayer3RpcMethod, type TransactionMaliciousContractLookup, type TransactionMaliciousContractLookupResult, type TransactionMatchedReason, type TransactionMeta, type TransactionOverrideLevel, type TransactionParamValue, type TransactionProviderContext, type TransactionRiskClassification, type TransactionRpcMethod, type TransactionScamSignatureLookup, type TransactionScamSignatureLookupResult, type TransactionSelectorDefinition, type TransactionSignals, type TransactionVerdict, type TransactionVerdictStatus, type TrustedTransactionOriginIntel, type TypedDataField, type TypedDataNormalizationState, type TypedDataTypes, type TypedDataValue, type ValidateTransactionLayer2SnapshotFailure, type ValidateTransactionLayer2SnapshotResult, type ValidateTransactionLayer2SnapshotSuccess, type ValidatedTransactionLayer2Snapshot, type Verdict, type WalletCapabilityArea, type WalletCapabilityBoundary, type WalletCapabilityStatus, type WalletChain, type WalletCleanupAction, type WalletCleanupActionExecutionStatus, type WalletCleanupActionKind, type WalletCleanupActionResult, type WalletCleanupActionStatus, type WalletCleanupExecutionMode, type WalletCleanupExecutionResult, type WalletCleanupExecutionStatus, type WalletCleanupExecutionType, type WalletCleanupPlan, type WalletCleanupTarget, type WalletCleanupTargetKind, type WalletEvidenceRef, type WalletExposureCategory, type WalletFinding, type WalletFindingStatus, type WalletProviderMetadata, type WalletReport, type WalletReportIdInput, type WalletRiskFactor, type WalletScanMode, type WalletScanRequest, type WalletScanResult, type WalletScanSnapshot, type WalletScoreBreakdown, type WalletScoreComponent, type WalletSnapshotSection, type WalletSummary, buildEvmCleanupPlan, buildNavigationContext, buildTransactionExplanation, buildTransactionSignals, buildWalletReportId, classifyPermitKind, classifyTransactionRisk, classifyTransactionSelector, compileDomainIntelSnapshot, containsAirdropKeyword, containsMintKeyword, containsWalletConnectPattern, contextToInput, createTransactionIntelProvider, decodeTransactionCalldata, deconfuseHostname, domainSimilarityScore, evaluate, evaluateBitcoinWalletScan, evaluateEvmWalletScan, evaluateSolanaWalletScan, evaluateTransaction, extractHostname, extractRegistrableDomain, extractTld, getDefaultTransactionIntelProvider, getEvmCleanupEligibility, getReasonMessage, getTransactionSelectorDefinition, getTransactionSignals, getVerdictTitle, hasHomoglyphs, hasSuspiciousTld, interpretEvmCleanupExecutionResult, isIpHost, isKnownMaliciousDomain, isNewDomain, isValidUrl, listTransactionSelectors, looksLikeProtocolImpersonation, matchedLureKeywords, normalizeTransactionRequest, normalizeTypedData, normalizeTypedDataRequest, normalizeUrl, prepareEvmCleanupExecutionRequest, prepareEvmCleanupTransaction, reconcileEvmCleanupPlanResults, resolveCanonicalTransactionIntel, resolveDomainIntel, riskBadgeLabel, validateDomainIntelBundle, validateTransactionLayer2Snapshot };
+export { type ApprovalAmountKind, type ApprovalDirection, type ApprovalScope, type BitcoinAddressRole, type BitcoinAddressSummaryInput, type BitcoinAddressType, type BitcoinConcentrationLevel, type BitcoinFragmentationLevel, type BitcoinHygieneIssueType, type BitcoinHygieneRecordInput, type BitcoinUtxoSummaryInput, type BitcoinWalletHydratedSnapshot, type BitcoinWalletScanEvaluation, type BitcoinWalletScanEvaluationInput, type BitcoinWalletSignals, type BuildContextOptions, type CanonicalTransactionIntelLookup, type CanonicalTransactionIntelLookupResult, type CanonicalTransactionSnapshotActivation, type CanonicalTransactionSnapshotSectionState, type ChainFamily, type CompileDomainIntelSnapshotOptions, type CompiledDomainAllowlistItem, type CompiledDomainAllowlistsSection, type CompiledDomainIntelSnapshot, type CompiledMaliciousDomainItem, type CompiledMaliciousDomainsSection, type DecodedTransactionAction, type DomainAllowlistFeedItem, type DomainAllowlistsSection, type DomainContext, type DomainIntelBundle, type DomainIntelCompileFailure, type DomainIntelCompileResult, type DomainIntelCompileSuccess, type DomainIntelSectionMetadata, type DomainIntelSectionName, type DomainIntelSectionValidationReport, type DomainIntelSignatureEnvelope, type DomainIntelValidationOptions, type DomainIntelValidationReport, type DomainLookupDisposition, type DomainLookupResult, EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT, type EngineResult, type EvmApprovalAmountKind, type EvmApprovalKind, type EvmApprovalRecordInput, type EvmCleanupAction, type EvmCleanupActionExecutionResult, type EvmCleanupBatchPlan, type EvmCleanupEligibility, type EvmCleanupExecutionRequest, type EvmCleanupExecutionStatus, type EvmCleanupPackaging, type EvmCleanupReconciliationItem, type EvmCleanupReconciliationSummary, type EvmCleanupRescanSnapshot, type EvmCleanupRescanStatus, type EvmCleanupRevocationMethod, type EvmCleanupSelectionKind, type EvmContractExposureInput, type EvmContractExposureType, type EvmCounterpartyDisposition, type EvmPreparedCleanupArgument, type EvmPreparedCleanupTransaction, type EvmRevocableApprovalTarget, type EvmTokenStandard, type EvmWalletCleanupPlan, type EvmWalletHydratedSnapshot, type EvmWalletScanEvaluation, type EvmWalletScanEvaluationInput, type EvmWalletSignals, type IntelValidationIssue, KNOWN_PROTOCOL_DOMAINS, type Layer2SectionState, type Layer3RpcMethod, type MaliciousDomainFeedItem, type MaliciousDomainsSection, type NavigationContext, type NavigationInput, type NormalizedBitcoinAddressSummary, type NormalizedBitcoinHygieneRecord, type NormalizedBitcoinUtxoSummary, type NormalizedBitcoinWalletSnapshot, type NormalizedEvmApprovalState, type NormalizedEvmContractExposure, type NormalizedEvmSpenderRisk, type NormalizedEvmWalletSnapshot, type NormalizedSolanaAuthorityAssignment, type NormalizedSolanaConnectionRecord, type NormalizedSolanaProgramExposure, type NormalizedSolanaTokenAccountState, type NormalizedSolanaWalletSnapshot, type NormalizedTransactionContext, type NormalizedTypedData, PHISHING_CODES, type PermitKind, type PhishingCode, RULE_SET_VERSION, type RawSignatureRequest, type RawTransactionRequest, type RawTypedDataPayload, type ReasonMessage, type RiskLevel, type RuleOutcome, SUSPICIOUS_TLDS, type SignatureInput, type SignatureRpcMethod, type SolanaAuthorityAssignmentInput, type SolanaAuthorityType, type SolanaConnectionRecordInput, type SolanaPermissionLevel, type SolanaProgramExposureInput, type SolanaTokenAccountInput, type SolanaWalletHydratedSnapshot, type SolanaWalletScanEvaluation, type SolanaWalletScanEvaluationInput, type SolanaWalletSignals, TRANSACTION_SELECTOR_REGISTRY, type TransactionActionType, type TransactionAnalytics, type TransactionAuditRecord, type TransactionBatchContext, type TransactionCounterpartyContext, type TransactionDecisionPackage, type TransactionEvaluationResult, type TransactionEventKind, type TransactionExplanation, type TransactionInput, type TransactionIntelConfidence, type TransactionIntelContext, type TransactionIntelDisposition, type TransactionIntelLookupDisposition, type TransactionIntelProvider, type TransactionIntelSource, type TransactionIntelVersions, type TransactionLayer2MaliciousContract, type TransactionLayer2MaliciousContractEntry, type TransactionLayer2ScamSignature, type Layer2SectionState$1 as TransactionLayer2SectionState, type TransactionLayer2Snapshot, type TransactionLayer2SnapshotMetadata, type TransactionLayer2SnapshotValidationIssue, type Layer3RpcMethod as TransactionLayer3RpcMethod, type TransactionMaliciousContractLookup, type TransactionMaliciousContractLookupResult, type TransactionMatchedReason, type TransactionMeta, type TransactionOverrideLevel, type TransactionParamValue, type TransactionProviderContext, type TransactionRiskClassification, type TransactionRpcMethod, type TransactionScamSignatureLookup, type TransactionScamSignatureLookupResult, type TransactionSelectorDefinition, type TransactionSignals, type TransactionVerdict, type TransactionVerdictStatus, type TrustedTransactionOriginIntel, type TypedDataField, type TypedDataNormalizationState, type TypedDataTypes, type TypedDataValue, type UserProtectionProfile, type ValidateTransactionLayer2SnapshotFailure, type ValidateTransactionLayer2SnapshotResult, type ValidateTransactionLayer2SnapshotSuccess, type ValidatedTransactionLayer2Snapshot, type Verdict, type WalletCapabilityArea, type WalletCapabilityBoundary, type WalletCapabilityStatus, type WalletChain, type WalletCleanupAction, type WalletCleanupActionExecutionStatus, type WalletCleanupActionKind, type WalletCleanupActionResult, type WalletCleanupActionStatus, type WalletCleanupExecutionMode, type WalletCleanupExecutionResult, type WalletCleanupExecutionStatus, type WalletCleanupExecutionType, type WalletCleanupPlan, type WalletCleanupTarget, type WalletCleanupTargetKind, type WalletEvidenceRef, type WalletExposureCategory, type WalletFinding, type WalletFindingStatus, type WalletProviderMetadata, type WalletReport, type WalletReportIdInput, type WalletRiskFactor, type WalletScanMode, type WalletScanRequest, type WalletScanResult, type WalletScanSnapshot, type WalletScoreBreakdown, type WalletScoreComponent, type WalletSnapshotSection, type WalletSummary, analyzeTransactions, buildEmptyValidatedTransactionLayer2Snapshot, buildEvmCleanupPlan, buildNavigationContext, buildTransactionDecisionPackage, buildTransactionSignals, buildWalletReportId, classifyPermitKind, classifyTransactionRisk, classifyTransactionSelector, compileDomainIntelSnapshot, containsAirdropKeyword, containsMintKeyword, containsWalletConnectPattern, contextToInput, createAuditRecord, createTransactionIntelProvider, decodeTransactionCalldata, deconfuseHostname, deriveUserProtectionProfile, domainSimilarityScore, evaluate, evaluateBitcoinWalletScan, evaluateEvmWalletScan, evaluateSolanaWalletScan, evaluateTransaction, explainTransaction, extractHostname, extractRegistrableDomain, extractTld, getCanonicalTransactionSnapshotActivation, getDefaultTransactionIntelProvider, getEvmCleanupEligibility, getReasonMessage, getTransactionSelectorDefinition, getTransactionSignals, getVerdictTitle, hasHomoglyphs, hasSuspiciousTld, interpretEvmCleanupExecutionResult, isIpHost, isKnownMaliciousDomain, isNewDomain, isValidUrl, listTransactionSelectors, looksLikeProtocolImpersonation, matchedLureKeywords, normalizeTransactionRequest, normalizeTypedData, normalizeTypedDataRequest, normalizeUrl, prepareEvmCleanupExecutionRequest, prepareEvmCleanupTransaction, reconcileEvmCleanupPlanResults, resolveCanonicalTransactionIntel, resolveDomainIntel, riskBadgeLabel, validateDomainIntelBundle, validateTransactionLayer2Snapshot };

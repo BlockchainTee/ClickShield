@@ -237,150 +237,420 @@ function buildTransactionSignals(context) {
 }
 
 // src/transaction/explain.ts
-function shortAddress(address) {
-  return address ?? "unknown contract";
+var REASON_LABELS = Object.freeze({
+  TX_UNLIMITED_APPROVAL: "Unlimited token approval",
+  TX_UNKNOWN_SPENDER: "Unknown spender",
+  TX_SET_APPROVAL_FOR_ALL: "Full NFT collection approval",
+  TX_PERMIT_SIGNATURE: "Permit signature",
+  TX_KNOWN_MALICIOUS_CONTRACT: "Known malicious contract",
+  TX_SCAM_SIGNATURE_MATCH: "Known scam signature match",
+  TX_MULTICALL_APPROVAL_AND_TRANSFER: "Batch approval and transfer",
+  TX_UNKNOWN_CONTRACT_INTERACTION: "Unknown contract interaction",
+  TX_NEW_RECIPIENT: "New recipient"
+});
+function humanizeIdentifier(value) {
+  return value.replace(/^TX_/, "").replace(/_/g, " ").toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
 }
-function buildTechnicalFacts(context) {
-  const technical = [];
-  if (context.methodSelector !== null) {
-    technical.push(`Selector: ${context.methodSelector}`);
+function toExplanationStatus(status) {
+  switch (status) {
+    case "BLOCK":
+    case "block":
+      return "block";
+    case "WARN":
+    case "warn":
+      return "warn";
+    case "ALLOW":
+    case "allow":
+      return "allow";
   }
-  if (context.signature.primaryType !== null) {
-    technical.push(`Primary type: ${context.signature.primaryType}`);
+}
+function summaryForStatus(status) {
+  switch (status) {
+    case "block":
+      return "This transaction is dangerous and has been blocked";
+    case "warn":
+      return "This transaction may be risky";
+    case "allow":
+      return "This transaction appears safe";
   }
-  if (context.to !== null) {
-    technical.push(`Target: ${context.to}`);
+}
+function explanationRiskLevel(status) {
+  switch (status) {
+    case "block":
+      return "high";
+    case "warn":
+      return "medium";
+    case "allow":
+      return "low";
   }
-  if (context.signature.verifyingContract !== null) {
-    technical.push(`Verifier: ${context.signature.verifyingContract}`);
+}
+function hasMatchedReasonFields(verdict) {
+  return "primaryReason" in verdict && "secondaryReasons" in verdict;
+}
+function readableReasonLabel(reasonCode) {
+  return REASON_LABELS[reasonCode] ?? humanizeIdentifier(reasonCode);
+}
+function readableMatchedReason(reason) {
+  const reasonCode = reason.reasonCodes[0];
+  if (typeof reasonCode === "string" && reasonCode.length > 0) {
+    return readableReasonLabel(reasonCode);
   }
-  return technical;
+  return humanizeIdentifier(reason.ruleId);
 }
-function buildUnknowns(context) {
-  const unknowns = [];
-  if (context.eventKind === "transaction" && context.actionType === "unknown") {
-    unknowns.push("ClickShield could not fully decode this contract call.");
+function primaryReasonForVerdict(verdict, status) {
+  if (hasMatchedReasonFields(verdict) && verdict.primaryReason !== null) {
+    return readableMatchedReason(verdict.primaryReason);
   }
-  if (context.eventKind === "signature" && context.signature.normalizationState === "missing_domain_fields") {
-    unknowns.push(
-      `Important signature domain fields were missing: ${context.signature.missingDomainFields.join(", ")}`
-    );
+  switch (status) {
+    case "block":
+      return "Transaction blocked by policy";
+    case "warn":
+      return "Transaction requires review";
+    case "allow":
+      return "No blocking or warning conditions were detected";
   }
-  if (context.eventKind === "signature" && context.signature.normalizationState === "invalid_domain_fields") {
-    unknowns.push(
-      `Important signature domain fields were invalid: ${context.signature.invalidDomainFields.join(", ")}`
-    );
+}
+function secondaryReasonsForVerdict(verdict) {
+  if (!hasMatchedReasonFields(verdict)) {
+    return [];
   }
-  return unknowns;
+  const seen = /* @__PURE__ */ new Set();
+  const readableReasons = [];
+  for (const reason of verdict.secondaryReasons) {
+    const label = readableMatchedReason(reason);
+    if (!seen.has(label)) {
+      seen.add(label);
+      readableReasons.push(label);
+    }
+  }
+  return readableReasons;
 }
-function explainApprove(context, signals) {
-  const spender = shortAddress(context.decoded.spender);
-  const summary = signals.isUnlimitedApproval ? `Approve unlimited token spending by contract ${spender}` : `Approve token spending by contract ${spender}`;
-  return {
-    headline: signals.isUnlimitedApproval ? "Unlimited token approval" : "Token approval",
-    summary,
-    details: [
-      "This gives the contract permission to spend this token balance without another approval."
-    ],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context)
-  };
-}
-function explainSetApprovalForAll(context) {
-  const approved = context.decoded.params.approved === true;
-  return {
-    headline: approved ? "Full NFT collection access" : "NFT collection approval revoked",
-    summary: approved ? "Allow this contract to transfer all NFTs in this collection." : "Remove this contract's permission to transfer NFTs in this collection.",
-    details: [
-      `Operator: ${shortAddress(context.decoded.operator)}`,
-      approved ? "This grants collection-wide NFT transfer permission." : "This removes collection-wide NFT transfer permission."
-    ],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context)
-  };
-}
-function explainPermitSignature(context) {
-  return {
-    headline: "Token permission signature",
-    summary: `Sign a permission that lets contract ${shortAddress(
-      context.signature.verifyingContract
-    )} spend tokens without an on-chain approval transaction.`,
-    details: [
-      "This signature can authorize token spending without sending a separate approval transaction first."
-    ],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context)
-  };
-}
-function explainMulticall(context, signals) {
-  const summary = signals.containsApprovalAndTransfer ? "This batch both grants token permission and moves assets in one request." : `Execute a batch of ${context.batch.actions.length} contract actions in one request.`;
-  return {
-    headline: signals.containsApprovalAndTransfer ? "Batch transaction with approval and transfer" : "Batch contract transaction",
-    summary,
-    details: [`Batch action count: ${context.batch.actions.length}`],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context)
-  };
-}
-function explainUnknown(context) {
-  return {
-    headline: context.eventKind === "signature" ? "Unknown typed-data signature" : "Unknown contract interaction",
-    summary: context.eventKind === "signature" ? "ClickShield could not fully normalize this typed-data request." : "ClickShield could not fully decode this contract call.",
-    details: [
-      `Destination contract: ${shortAddress(context.to)}`,
-      `Chain: ${context.chainId}`,
-      `Origin: ${context.originDomain}`,
-      `Native value: ${context.valueWei}`,
-      `Malicious-contract intel match: ${context.intel.contractDisposition === "malicious" ? "yes" : "no"}`
-    ],
-    unknowns: buildUnknowns(context),
-    technical: buildTechnicalFacts(context)
-  };
-}
-function buildTransactionExplanation(context) {
+function detailMethod(context) {
   const signals = context.signals ?? buildTransactionSignals(context);
-  if (context.eventKind === "signature" && signals.isPermitSignature) {
-    return explainPermitSignature(context);
+  if (signals.methodName) {
+    return signals.methodName;
   }
-  switch (context.actionType) {
-    case "approve":
-    case "increaseAllowance":
-      return explainApprove(context, signals);
-    case "setApprovalForAll":
-      return explainSetApprovalForAll(context);
-    case "multicall":
-      return explainMulticall(context, signals);
-    case "permit":
-      return {
-        headline: "Token permission transaction",
-        summary: `Submit an on-chain permit that grants token spending permission to contract ${shortAddress(
-          context.decoded.spender
-        )}.`,
-        details: [],
-        unknowns: buildUnknowns(context),
-        technical: buildTechnicalFacts(context)
-      };
-    case "transfer":
-      return {
-        headline: "Token transfer",
-        summary: `Transfer tokens to ${shortAddress(context.decoded.recipient)}.`,
-        details: [],
-        unknowns: buildUnknowns(context),
-        technical: buildTechnicalFacts(context)
-      };
-    case "transferFrom":
-      return {
-        headline: "Delegated token transfer",
-        summary: `Transfer tokens from ${shortAddress(
-          context.decoded.owner
-        )} to ${shortAddress(context.decoded.recipient)}.`,
-        details: [],
-        unknowns: buildUnknowns(context),
-        technical: buildTechnicalFacts(context)
-      };
-    default:
-      return explainUnknown(context);
+  if (context.eventKind === "signature") {
+    return context.signature.primaryType ?? void 0;
   }
+  return void 0;
+}
+function detailTarget(context) {
+  const signals = context.signals ?? buildTransactionSignals(context);
+  return signals.targetAddress;
+}
+function detailValue(context) {
+  if (context.eventKind !== "transaction") {
+    return void 0;
+  }
+  return context.valueWei;
+}
+function explainTransaction(ctx, verdict) {
+  const signals = ctx.signals ?? buildTransactionSignals(ctx);
+  const status = toExplanationStatus(verdict.status);
+  return {
+    status,
+    summary: summaryForStatus(status),
+    primaryReason: primaryReasonForVerdict(verdict, status),
+    secondaryReasons: secondaryReasonsForVerdict(verdict),
+    riskLevel: explanationRiskLevel(status),
+    details: {
+      method: detailMethod(ctx),
+      target: detailTarget(ctx),
+      value: detailValue(ctx),
+      isContractInteraction: signals.isContractInteraction
+    }
+  };
+}
+
+// src/intel/hash.ts
+var SHA256_K = new Uint32Array([
+  1116352408,
+  1899447441,
+  3049323471,
+  3921009573,
+  961987163,
+  1508970993,
+  2453635748,
+  2870763221,
+  3624381080,
+  310598401,
+  607225278,
+  1426881987,
+  1925078388,
+  2162078206,
+  2614888103,
+  3248222580,
+  3835390401,
+  4022224774,
+  264347078,
+  604807628,
+  770255983,
+  1249150122,
+  1555081692,
+  1996064986,
+  2554220882,
+  2821834349,
+  2952996808,
+  3210313671,
+  3336571891,
+  3584528711,
+  113926993,
+  338241895,
+  666307205,
+  773529912,
+  1294757372,
+  1396182291,
+  1695183700,
+  1986661051,
+  2177026350,
+  2456956037,
+  2730485921,
+  2820302411,
+  3259730800,
+  3345764771,
+  3516065817,
+  3600352804,
+  4094571909,
+  275423344,
+  430227734,
+  506948616,
+  659060556,
+  883997877,
+  958139571,
+  1322822218,
+  1537002063,
+  1747873779,
+  1955562222,
+  2024104815,
+  2227730452,
+  2361852424,
+  2428436474,
+  2756734187,
+  3204031479,
+  3329325298
+]);
+function rotateRight(value, bits) {
+  return value >>> bits | value << 32 - bits;
+}
+function canonicalizeNumber(value) {
+  if (!Number.isFinite(value)) {
+    throw new Error("Canonical serialization does not support non-finite numbers");
+  }
+  return JSON.stringify(value);
+}
+function isCanonicalObject(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function serializeCanonicalJson(value) {
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    return canonicalizeNumber(value);
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(serializeCanonicalJson).join(",")}]`;
+  }
+  if (!isCanonicalObject(value)) {
+    throw new Error("Canonical serialization received an unsupported object value");
+  }
+  const objectValue = value;
+  const keys = Object.keys(objectValue).sort();
+  const entries = keys.map((key) => {
+    const nested = objectValue[key];
+    return `${JSON.stringify(key)}:${serializeCanonicalJson(nested)}`;
+  });
+  return `{${entries.join(",")}}`;
+}
+function sha256Hex(input) {
+  const source = new TextEncoder().encode(input);
+  const bitLength = source.length * 8;
+  const paddedLength = source.length + 9 + 63 >> 6 << 6;
+  const padded = new Uint8Array(paddedLength);
+  padded.set(source);
+  padded[source.length] = 128;
+  const view = new DataView(padded.buffer);
+  const upperBits = Math.floor(bitLength / 4294967296);
+  const lowerBits = bitLength >>> 0;
+  view.setUint32(paddedLength - 8, upperBits, false);
+  view.setUint32(paddedLength - 4, lowerBits, false);
+  let h0 = 1779033703;
+  let h1 = 3144134277;
+  let h2 = 1013904242;
+  let h3 = 2773480762;
+  let h4 = 1359893119;
+  let h5 = 2600822924;
+  let h6 = 528734635;
+  let h7 = 1541459225;
+  const schedule = new Uint32Array(64);
+  for (let offset = 0; offset < paddedLength; offset += 64) {
+    for (let index = 0; index < 16; index += 1) {
+      schedule[index] = view.getUint32(offset + index * 4, false);
+    }
+    for (let index = 16; index < 64; index += 1) {
+      const s0 = rotateRight(schedule[index - 15], 7) ^ rotateRight(schedule[index - 15], 18) ^ schedule[index - 15] >>> 3;
+      const s1 = rotateRight(schedule[index - 2], 17) ^ rotateRight(schedule[index - 2], 19) ^ schedule[index - 2] >>> 10;
+      schedule[index] = schedule[index - 16] + s0 + schedule[index - 7] + s1 >>> 0;
+    }
+    let a = h0;
+    let b = h1;
+    let c = h2;
+    let d = h3;
+    let e = h4;
+    let f = h5;
+    let g = h6;
+    let h = h7;
+    for (let index = 0; index < 64; index += 1) {
+      const sum1 = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25);
+      const choice = e & f ^ ~e & g;
+      const temp1 = h + sum1 + choice + SHA256_K[index] + schedule[index] >>> 0;
+      const sum0 = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22);
+      const majority = a & b ^ a & c ^ b & c;
+      const temp2 = sum0 + majority >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = d + temp1 >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = temp1 + temp2 >>> 0;
+    }
+    h0 = h0 + a >>> 0;
+    h1 = h1 + b >>> 0;
+    h2 = h2 + c >>> 0;
+    h3 = h3 + d >>> 0;
+    h4 = h4 + e >>> 0;
+    h5 = h5 + f >>> 0;
+    h6 = h6 + g >>> 0;
+    h7 = h7 + h >>> 0;
+  }
+  return [h0, h1, h2, h3, h4, h5, h6, h7].map((value) => value.toString(16).padStart(8, "0")).join("");
+}
+
+// src/transaction/audit.ts
+var DETERMINISTIC_AUDIT_TIMESTAMP = "1970-01-01T00:00:00.000Z";
+function toCanonicalJsonValue(value) {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value.toString(10);
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => toCanonicalJsonValue(entry));
+  }
+  if (typeof value !== "object") {
+    throw new Error("Audit serialization received an unsupported value");
+  }
+  const record = value;
+  const canonicalRecord = {};
+  for (const key of Object.keys(record)) {
+    const entry = record[key];
+    if (entry !== void 0) {
+      canonicalRecord[key] = toCanonicalJsonValue(entry);
+    }
+  }
+  return canonicalRecord;
+}
+function cloneCanonical(value) {
+  return JSON.parse(
+    serializeCanonicalJson(toCanonicalJsonValue(value))
+  );
+}
+function toAuditStatus(status) {
+  switch (status) {
+    case "ALLOW":
+    case "allow":
+      return "allow";
+    case "WARN":
+    case "warn":
+      return "warn";
+    case "BLOCK":
+    case "block":
+      return "block";
+  }
+}
+function hasTransactionExplanation(verdict) {
+  return "explanation" in verdict;
+}
+function resolveExplanation(ctx, verdict) {
+  if (hasTransactionExplanation(verdict)) {
+    return verdict.explanation;
+  }
+  return explainTransaction(ctx, verdict);
+}
+function inferAuditSource(ctx) {
+  const surface = ctx.provider.surface.trim().toLowerCase();
+  const platform = ctx.provider.platform.trim().toLowerCase();
+  if (surface.includes("mobile") || platform === "mobile" || platform === "ios" || platform === "android") {
+    return "mobile";
+  }
+  if (surface.includes("desktop") || platform === "desktop" || platform === "electron") {
+    return "desktop";
+  }
+  return "extension";
+}
+function buildAuditId(ctx, verdict, status, explanation, source) {
+  const verdictPayload = {
+    status,
+    riskLevel: verdict.riskLevel,
+    reasonCodes: verdict.reasonCodes,
+    matchedRules: verdict.matchedRules,
+    evidence: verdict.evidence,
+    ruleSetVersion: verdict.ruleSetVersion,
+    explanation,
+    ...!("feedVersion" in verdict) || verdict.feedVersion === void 0 ? {} : { feedVersion: verdict.feedVersion },
+    ...hasTransactionExplanation(verdict) ? {
+      intelVersions: verdict.intelVersions,
+      overrideAllowed: verdict.overrideAllowed,
+      overrideLevel: verdict.overrideLevel,
+      primaryReason: verdict.primaryReason,
+      primaryRuleId: verdict.primaryRuleId,
+      secondaryReasons: verdict.secondaryReasons
+    } : {}
+  };
+  return sha256Hex(
+    serializeCanonicalJson(
+      toCanonicalJsonValue({
+        transaction: ctx,
+        verdict: verdictPayload,
+        metadata: {
+          source
+        }
+      })
+    )
+  );
+}
+function createAuditRecord(ctx, verdict) {
+  const status = toAuditStatus(verdict.status);
+  const explanation = cloneCanonical(resolveExplanation(ctx, verdict));
+  const signals = cloneCanonical(ctx.signals);
+  const classification = cloneCanonical(ctx.riskClassification);
+  const source = inferAuditSource(ctx);
+  return {
+    id: buildAuditId(ctx, verdict, status, explanation, source),
+    // The shipped evaluation contract must be time-invariant. Real telemetry
+    // timestamps belong to the caller or persistence layer, not pure evaluation.
+    timestamp: DETERMINISTIC_AUDIT_TIMESTAMP,
+    status,
+    explanation,
+    signals,
+    classification,
+    metadata: {
+      source
+    }
+  };
 }
 
 // src/engine/verdict.ts
@@ -547,8 +817,7 @@ function assembleTransactionVerdict(input, matches) {
   const overrideLevel = overrideLevelForStatus(status);
   const signals = input.signals;
   const riskClassification = input.riskClassification;
-  const explanation = buildTransactionExplanation(input);
-  const verdict = {
+  const verdictBase = {
     status,
     riskLevel: base2.riskLevel,
     reasonCodes: base2.reasonCodes,
@@ -557,7 +826,6 @@ function assembleTransactionVerdict(input, matches) {
     primaryReason,
     secondaryReasons,
     evidence: base2.evidence,
-    explanation,
     ruleSetVersion: base2.ruleSetVersion,
     intelVersions: {
       contractFeedVersion: input.intel.contractFeedVersion,
@@ -566,6 +834,16 @@ function assembleTransactionVerdict(input, matches) {
     },
     overrideAllowed: overrideLevel !== "none",
     overrideLevel
+  };
+  const explanation = explainTransaction(input, verdictBase);
+  const audit = createAuditRecord(input, {
+    ...verdictBase,
+    explanation
+  });
+  const verdict = {
+    ...verdictBase,
+    explanation,
+    audit
   };
   return {
     verdict,
@@ -3243,7 +3521,8 @@ function createUnavailableScamSignatureResult(sectionState) {
     matched: false,
     disposition: "unavailable",
     feedVersion: null,
-    sectionState
+    sectionState,
+    record: null
   });
 }
 function createNoMatchMaliciousContractResult(feedVersion, sectionState) {
@@ -3262,7 +3541,24 @@ function createNoMatchScamSignatureResult(feedVersion, sectionState) {
     matched: false,
     disposition: "no_match",
     feedVersion,
-    sectionState
+    sectionState,
+    record: null
+  });
+}
+function createMatchedScamSignatureResult(entry, feedVersion, sectionState) {
+  return freezeObject({
+    lookupFamily: "scam_signature",
+    matched: true,
+    disposition: "malicious",
+    matchedSection: "scamSignatures",
+    feedVersion,
+    sectionState,
+    record: freezeObject({
+      signatureHash: entry.signatureHash,
+      source: entry.source,
+      confidence: entry.confidence,
+      reason: entry.reason
+    })
   });
 }
 function createMatchedMaliciousContractResult(entry, feedVersion, sectionState) {
@@ -3282,8 +3578,14 @@ function createCanonicalTransactionIntelLookupResult(maliciousContract, scamSign
     scamSignature
   });
 }
-function canonicalLookupCacheKey(eventKind, targetAddress) {
-  return `${eventKind}:${targetAddress ?? "null"}`;
+function canonicalLookupCacheKey(eventKind, targetAddress, signatureHash) {
+  return `${eventKind}:${targetAddress ?? "null"}:${signatureHash ?? "null"}`;
+}
+function normalizeScamSignatureKey(value) {
+  if (value === null || !/^0x[0-9a-f]{64}$/.test(value)) {
+    return null;
+  }
+  return value;
 }
 function createTransactionIntelProvider(snapshot) {
   if (snapshot === null) {
@@ -3307,8 +3609,6 @@ function createTransactionIntelProvider(snapshot) {
   const scamSignaturesState = mapSnapshotSectionState(
     snapshot.sectionStates.scamSignatures
   );
-  const maliciousContractsMissing = snapshot.sectionStates.maliciousContracts === "missing";
-  const scamSignaturesMissing = snapshot.sectionStates.scamSignatures === "missing";
   const maliciousContractResults = /* @__PURE__ */ new Map();
   snapshot.maliciousContracts.forEach((entry) => {
     maliciousContractResults.set(
@@ -3320,41 +3620,48 @@ function createTransactionIntelProvider(snapshot) {
       )
     );
   });
-  const lookupMaliciousContract = maliciousContractsMissing ? (() => {
-    const unavailableResult = createUnavailableMaliciousContractResult(maliciousContractsState);
-    return () => unavailableResult;
-  })() : (() => {
-    const noMatchResult = createNoMatchMaliciousContractResult(
-      snapshot.version,
-      maliciousContractsState
+  const noMatchMaliciousContractResult = createNoMatchMaliciousContractResult(
+    snapshot.version,
+    maliciousContractsState
+  );
+  const lookupMaliciousContract = (lookup) => {
+    const normalizedAddress = normalizeMaliciousContractAddress(lookup.address);
+    if (normalizedAddress === null) {
+      return noMatchMaliciousContractResult;
+    }
+    return maliciousContractResults.get(`${lookup.chain}:${normalizedAddress}`) ?? noMatchMaliciousContractResult;
+  };
+  const scamSignatureResults = /* @__PURE__ */ new Map();
+  snapshot.scamSignatures.forEach((entry) => {
+    scamSignatureResults.set(
+      entry.signatureHash,
+      createMatchedScamSignatureResult(
+        entry,
+        snapshot.version,
+        scamSignaturesState
+      )
     );
-    return (lookup) => {
-      const normalizedAddress = normalizeMaliciousContractAddress(
-        lookup.address
-      );
-      if (normalizedAddress === null) {
-        return noMatchResult;
-      }
-      return maliciousContractResults.get(`${lookup.chain}:${normalizedAddress}`) ?? noMatchResult;
-    };
-  })();
-  const lookupScamSignature = scamSignaturesMissing ? (() => {
-    const unavailableResult = createUnavailableScamSignatureResult(scamSignaturesState);
-    return () => unavailableResult;
-  })() : (() => {
-    const noMatchResult = createNoMatchScamSignatureResult(
-      snapshot.version,
-      scamSignaturesState
-    );
-    return (lookup) => {
-      void lookup;
-      return noMatchResult;
-    };
-  })();
+  });
+  const noMatchScamSignatureResult = createNoMatchScamSignatureResult(
+    snapshot.version,
+    scamSignaturesState
+  );
+  const lookupScamSignature = (lookup) => {
+    const normalizedKey = normalizeScamSignatureKey(lookup.normalizedKey);
+    if (normalizedKey === null) {
+      return noMatchScamSignatureResult;
+    }
+    return scamSignatureResults.get(normalizedKey) ?? noMatchScamSignatureResult;
+  };
   const canonicalLookupResults = /* @__PURE__ */ new Map();
   const lookupCanonicalTransactionIntel = (lookup) => {
     const normalizedAddress = normalizeMaliciousContractAddress(lookup.targetAddress);
-    const cacheKey = canonicalLookupCacheKey(lookup.eventKind, normalizedAddress);
+    const normalizedSignatureHash = normalizeScamSignatureKey(lookup.signatureHash);
+    const cacheKey = canonicalLookupCacheKey(
+      lookup.eventKind,
+      normalizedAddress,
+      normalizedSignatureHash
+    );
     const cached = canonicalLookupResults.get(cacheKey);
     if (cached !== void 0) {
       return cached;
@@ -3365,7 +3672,7 @@ function createTransactionIntelProvider(snapshot) {
         address: lookup.targetAddress
       }),
       lookupScamSignature({
-        normalizedKey: null
+        normalizedKey: normalizedSignatureHash
       })
     );
     canonicalLookupResults.set(cacheKey, canonicalResult);
@@ -3383,179 +3690,8 @@ function resolveCanonicalTransactionIntel(provider, lookup) {
   return provider.lookupCanonicalTransactionIntel(lookup);
 }
 
-// src/intel/hash.ts
-var SHA256_K = new Uint32Array([
-  1116352408,
-  1899447441,
-  3049323471,
-  3921009573,
-  961987163,
-  1508970993,
-  2453635748,
-  2870763221,
-  3624381080,
-  310598401,
-  607225278,
-  1426881987,
-  1925078388,
-  2162078206,
-  2614888103,
-  3248222580,
-  3835390401,
-  4022224774,
-  264347078,
-  604807628,
-  770255983,
-  1249150122,
-  1555081692,
-  1996064986,
-  2554220882,
-  2821834349,
-  2952996808,
-  3210313671,
-  3336571891,
-  3584528711,
-  113926993,
-  338241895,
-  666307205,
-  773529912,
-  1294757372,
-  1396182291,
-  1695183700,
-  1986661051,
-  2177026350,
-  2456956037,
-  2730485921,
-  2820302411,
-  3259730800,
-  3345764771,
-  3516065817,
-  3600352804,
-  4094571909,
-  275423344,
-  430227734,
-  506948616,
-  659060556,
-  883997877,
-  958139571,
-  1322822218,
-  1537002063,
-  1747873779,
-  1955562222,
-  2024104815,
-  2227730452,
-  2361852424,
-  2428436474,
-  2756734187,
-  3204031479,
-  3329325298
-]);
-function rotateRight(value, bits) {
-  return value >>> bits | value << 32 - bits;
-}
-function canonicalizeNumber(value) {
-  if (!Number.isFinite(value)) {
-    throw new Error("Canonical serialization does not support non-finite numbers");
-  }
-  return JSON.stringify(value);
-}
-function isCanonicalObject(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-function serializeCanonicalJson(value) {
-  if (value === null) {
-    return "null";
-  }
-  if (typeof value === "string") {
-    return JSON.stringify(value);
-  }
-  if (typeof value === "number") {
-    return canonicalizeNumber(value);
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(serializeCanonicalJson).join(",")}]`;
-  }
-  if (!isCanonicalObject(value)) {
-    throw new Error("Canonical serialization received an unsupported object value");
-  }
-  const objectValue = value;
-  const keys = Object.keys(objectValue).sort();
-  const entries = keys.map((key) => {
-    const nested = objectValue[key];
-    return `${JSON.stringify(key)}:${serializeCanonicalJson(nested)}`;
-  });
-  return `{${entries.join(",")}}`;
-}
-function sha256Hex(input) {
-  const source = new TextEncoder().encode(input);
-  const bitLength = source.length * 8;
-  const paddedLength = source.length + 9 + 63 >> 6 << 6;
-  const padded = new Uint8Array(paddedLength);
-  padded.set(source);
-  padded[source.length] = 128;
-  const view = new DataView(padded.buffer);
-  const upperBits = Math.floor(bitLength / 4294967296);
-  const lowerBits = bitLength >>> 0;
-  view.setUint32(paddedLength - 8, upperBits, false);
-  view.setUint32(paddedLength - 4, lowerBits, false);
-  let h0 = 1779033703;
-  let h1 = 3144134277;
-  let h2 = 1013904242;
-  let h3 = 2773480762;
-  let h4 = 1359893119;
-  let h5 = 2600822924;
-  let h6 = 528734635;
-  let h7 = 1541459225;
-  const schedule = new Uint32Array(64);
-  for (let offset = 0; offset < paddedLength; offset += 64) {
-    for (let index = 0; index < 16; index += 1) {
-      schedule[index] = view.getUint32(offset + index * 4, false);
-    }
-    for (let index = 16; index < 64; index += 1) {
-      const s0 = rotateRight(schedule[index - 15], 7) ^ rotateRight(schedule[index - 15], 18) ^ schedule[index - 15] >>> 3;
-      const s1 = rotateRight(schedule[index - 2], 17) ^ rotateRight(schedule[index - 2], 19) ^ schedule[index - 2] >>> 10;
-      schedule[index] = schedule[index - 16] + s0 + schedule[index - 7] + s1 >>> 0;
-    }
-    let a = h0;
-    let b = h1;
-    let c = h2;
-    let d = h3;
-    let e = h4;
-    let f = h5;
-    let g = h6;
-    let h = h7;
-    for (let index = 0; index < 64; index += 1) {
-      const sum1 = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25);
-      const choice = e & f ^ ~e & g;
-      const temp1 = h + sum1 + choice + SHA256_K[index] + schedule[index] >>> 0;
-      const sum0 = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22);
-      const majority = a & b ^ a & c ^ b & c;
-      const temp2 = sum0 + majority >>> 0;
-      h = g;
-      g = f;
-      f = e;
-      e = d + temp1 >>> 0;
-      d = c;
-      c = b;
-      b = a;
-      a = temp1 + temp2 >>> 0;
-    }
-    h0 = h0 + a >>> 0;
-    h1 = h1 + b >>> 0;
-    h2 = h2 + c >>> 0;
-    h3 = h3 + d >>> 0;
-    h4 = h4 + e >>> 0;
-    h5 = h5 + f >>> 0;
-    h6 = h6 + g >>> 0;
-    h7 = h7 + h >>> 0;
-  }
-  return [h0, h1, h2, h3, h4, h5, h6, h7].map((value) => value.toString(16).padStart(8, "0")).join("");
-}
-
 // src/transaction/intel-snapshot.ts
+var EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT = "1970-01-01T00:00:00.000Z";
 var ROOT_KEYS = [
   "version",
   "generatedAt",
@@ -4340,20 +4476,79 @@ function validateTransactionLayer2Snapshot(input) {
     issues
   };
 }
+function buildEmptyValidatedTransactionLayer2Snapshot(generatedAt = EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT) {
+  const canonicalGeneratedAt = isValidUtcTimestamp(generatedAt) ? generatedAt : EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT;
+  const snapshotBody = {
+    generatedAt: canonicalGeneratedAt,
+    maliciousContracts: [],
+    scamSignatures: [],
+    metadata: {
+      generatedAt: canonicalGeneratedAt,
+      sources: []
+    },
+    sectionStates: {
+      maliciousContracts: "missing",
+      scamSignatures: "missing"
+    }
+  };
+  return deepFreeze({
+    version: buildSnapshotVersion(snapshotBody),
+    ...snapshotBody
+  });
+}
 
 // src/transaction/hydrate.ts
 var UNAVAILABLE_ORIGIN_INTEL = Object.freeze({
   allowlistFeedVersion: null,
   originDisposition: "unavailable"
 });
-function loadCanonicalTransactionSnapshot() {
-  const result = validateTransactionLayer2Snapshot(layer2_snapshot_default);
-  return result.ok ? result.snapshot : null;
+function isRecord2(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
-var CANONICAL_TRANSACTION_SNAPSHOT = loadCanonicalTransactionSnapshot();
-var CANONICAL_TRANSACTION_INTEL_PROVIDER = createTransactionIntelProvider(
-  CANONICAL_TRANSACTION_SNAPSHOT
-);
+function isValidUtcTimestamp2(value) {
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value)) {
+    return false;
+  }
+  return !Number.isNaN(Date.parse(value));
+}
+function readFallbackGeneratedAt(value) {
+  if (!isRecord2(value) || typeof value.generatedAt !== "string") {
+    return EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT;
+  }
+  return isValidUtcTimestamp2(value.generatedAt) ? value.generatedAt : EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT;
+}
+function activateCanonicalTransactionSnapshot(snapshotSource) {
+  const validation = validateTransactionLayer2Snapshot(snapshotSource);
+  if (validation.ok) {
+    const provider2 = createTransactionIntelProvider(validation.snapshot);
+    return Object.freeze({
+      state: validation.status === "empty" ? "empty" : "valid",
+      rejectionStatus: null,
+      issues: validation.issues,
+      snapshot: validation.snapshot,
+      provider: provider2
+    });
+  }
+  const fallbackSnapshot = buildEmptyValidatedTransactionLayer2Snapshot(
+    readFallbackGeneratedAt(snapshotSource)
+  );
+  const provider = createTransactionIntelProvider(fallbackSnapshot);
+  return Object.freeze({
+    state: "rejected",
+    rejectionStatus: validation.status,
+    issues: validation.issues,
+    snapshot: fallbackSnapshot,
+    provider
+  });
+}
+function buildCanonicalSignatureHash(input) {
+  if (input.eventKind !== "signature" || input.signature.isTypedData !== true) {
+    return null;
+  }
+  return `0x${sha256Hex(input.signature.canonicalJson)}`;
+}
+var CANONICAL_TRANSACTION_SNAPSHOT_ACTIVATION = activateCanonicalTransactionSnapshot(layer2_snapshot_default);
+var CANONICAL_TRANSACTION_INTEL_PROVIDER = CANONICAL_TRANSACTION_SNAPSHOT_ACTIVATION.provider;
 function isTransactionIntelProvider(provider) {
   return provider !== null && typeof provider === "object" && "lookupCanonicalTransactionIntel" in provider && typeof provider.lookupCanonicalTransactionIntel === "function";
 }
@@ -4371,7 +4566,8 @@ function getLookupProvider(provider) {
 function buildHydratedIntel(input, provider) {
   const lookup = {
     eventKind: input.eventKind,
-    targetAddress: input.eventKind === "signature" ? input.signature.verifyingContract : input.to
+    targetAddress: input.eventKind === "signature" ? input.signature.verifyingContract : input.to,
+    signatureHash: buildCanonicalSignatureHash(input)
   };
   const resolved = resolveCanonicalTransactionIntel(
     getLookupProvider(provider),
@@ -4413,19 +4609,22 @@ function hydrateNormalizedTransactionContext(input, provider) {
 function getDefaultTransactionIntelProvider() {
   return CANONICAL_TRANSACTION_INTEL_PROVIDER;
 }
+function getCanonicalTransactionSnapshotActivation() {
+  return CANONICAL_TRANSACTION_SNAPSHOT_ACTIVATION;
+}
 
 // src/transaction/typed-data.ts
-function isRecord2(value) {
+function isRecord3(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function isTypedDataField(value) {
-  if (!isRecord2(value)) return false;
+  if (!isRecord3(value)) return false;
   return typeof value.name === "string" && typeof value.type === "string";
 }
 function parseTypedDataPayload(input) {
   if (typeof input === "string") {
     const parsed = JSON.parse(input);
-    if (!isRecord2(parsed)) {
+    if (!isRecord3(parsed)) {
       throw new Error("Typed data payload must be an object.");
     }
     return parsed;
@@ -4433,7 +4632,7 @@ function parseTypedDataPayload(input) {
   return input;
 }
 function normalizeTypes(value) {
-  if (!value || !isRecord2(value)) {
+  if (!value || !isRecord3(value)) {
     return {};
   }
   const entries = [];
@@ -4525,14 +4724,14 @@ function normalizeTypedDataValue(value, solidityType, types) {
     if (solidityType === "string" || solidityType.startsWith("bytes")) {
       return normalizeString(value);
     }
-    if (types[solidityType] && isRecord2(value)) {
+    if (types[solidityType] && isRecord3(value)) {
       return normalizeStructuredValue(value, solidityType, types);
     }
   }
   if (Array.isArray(value)) {
     return value.map((item) => normalizeTypedDataValue(item, null, types));
   }
-  if (isRecord2(value)) {
+  if (isRecord3(value)) {
     return normalizeUnknownObject(value);
   }
   if (typeof value === "boolean") return value;
@@ -4581,8 +4780,8 @@ function normalizeTypedData(input) {
   const payload = parseTypedDataPayload(input);
   const types = normalizeTypes(payload.types ?? null);
   const primaryType = normalizeString(payload.primaryType);
-  const domainInput = isRecord2(payload.domain) ? payload.domain : {};
-  const messageInput = isRecord2(payload.message) ? payload.message : {};
+  const domainInput = isRecord3(payload.domain) ? payload.domain : {};
+  const messageInput = isRecord3(payload.message) ? payload.message : {};
   const domainType = types.EIP712Domain ? "EIP712Domain" : null;
   const normalizedDomain = normalizeTypedDataValue(
     domainInput,
@@ -5111,6 +5310,185 @@ function normalizeTypedDataRequest(input, options) {
     },
     options?.intelProvider
   );
+}
+
+// src/transaction/analytics.ts
+function getRecordTarget(record) {
+  const target = record.signals.targetAddress ?? record.explanation.details.target;
+  if (typeof target !== "string") {
+    return null;
+  }
+  const normalizedTarget = target.trim().toLowerCase();
+  return normalizedTarget.length > 0 ? normalizedTarget : null;
+}
+function analyzeTransactions(records) {
+  let blockedCount = 0;
+  let warnedCount = 0;
+  const repeatedTargetMap = /* @__PURE__ */ new Map();
+  for (const record of records) {
+    if (record.status === "block") {
+      blockedCount += 1;
+    }
+    if (record.status === "warn") {
+      warnedCount += 1;
+    }
+    const target = getRecordTarget(record);
+    if (target !== null) {
+      repeatedTargetMap.set(target, (repeatedTargetMap.get(target) ?? 0) + 1);
+    }
+  }
+  const repeatedTargetCount = Object.fromEntries(
+    [...repeatedTargetMap.entries()].sort(
+      ([left], [right]) => left.localeCompare(right)
+    )
+  );
+  const totalTransactions = records.length;
+  const highRiskFrequency = totalTransactions === 0 ? 0 : blockedCount / totalTransactions;
+  const repeatedTarget = Object.values(repeatedTargetCount).some(
+    (count) => count > 3
+  );
+  return {
+    totalTransactions,
+    blockedCount,
+    warnedCount,
+    repeatedTargetCount,
+    highRiskFrequency,
+    patterns: {
+      repeatedTarget,
+      frequentHighRisk: highRiskFrequency > 0.5
+    }
+  };
+}
+
+// src/transaction/protection.ts
+var WARN_ESCALATION_MIN_COUNT = 3;
+var WARN_ESCALATION_MIN_RATIO = 0.5;
+var COOLDOWN_RECENT_WINDOW_SIZE = 5;
+var COOLDOWN_MIN_RECENT_RECORDS = 4;
+var COOLDOWN_MIN_RISK_RATIO = 0.8;
+function getMaxRepeatedTargetCount(records) {
+  let maxCount = 0;
+  for (const count of Object.values(records)) {
+    if (count > maxCount) {
+      maxCount = count;
+    }
+  }
+  return maxCount;
+}
+function compareRecordsByRecency(left, right) {
+  if (left.timestamp === right.timestamp) {
+    if (left.id === right.id) {
+      return 0;
+    }
+    return left.id < right.id ? -1 : 1;
+  }
+  return left.timestamp < right.timestamp ? 1 : -1;
+}
+function getRecentRiskRatio(records) {
+  const recentRecords = [...records].sort(compareRecordsByRecency).slice(0, COOLDOWN_RECENT_WINDOW_SIZE);
+  if (recentRecords.length < COOLDOWN_MIN_RECENT_RECORDS) {
+    return 0;
+  }
+  let riskyCount = 0;
+  for (const record of recentRecords) {
+    if (record.status !== "allow") {
+      riskyCount += 1;
+    }
+  }
+  return riskyCount / recentRecords.length;
+}
+function deriveUserProtectionProfile(records) {
+  const analytics = analyzeTransactions(records);
+  const repeatedTargetCount = getMaxRepeatedTargetCount(
+    analytics.repeatedTargetCount
+  );
+  const warnEscalationSuggested = analytics.warnedCount >= WARN_ESCALATION_MIN_COUNT && analytics.totalTransactions > 0 && analytics.warnedCount / analytics.totalTransactions >= WARN_ESCALATION_MIN_RATIO;
+  const cooldownSuggested = getRecentRiskRatio(records) >= COOLDOWN_MIN_RISK_RATIO;
+  const controls = {
+    repeatedTargetCaution: analytics.patterns.repeatedTarget,
+    frequentHighRiskCaution: analytics.patterns.frequentHighRisk,
+    warnEscalationSuggested,
+    cooldownSuggested
+  };
+  return {
+    heightenedProtection: Object.values(controls).some(Boolean),
+    controls,
+    summary: {
+      totalTransactions: analytics.totalTransactions,
+      blockedCount: analytics.blockedCount,
+      warnedCount: analytics.warnedCount,
+      repeatedTargetCount,
+      highRiskFrequency: analytics.highRiskFrequency
+    }
+  };
+}
+
+// src/transaction/orchestration.ts
+function isRecord4(value) {
+  return typeof value === "object" && value !== null;
+}
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+function isValidExplanationStatus(value) {
+  return value === "block" || value === "warn" || value === "allow";
+}
+function isValidExplanationRiskLevel(value) {
+  return value === "high" || value === "medium" || value === "low";
+}
+function isValidAuditStatus(value) {
+  return value === "block" || value === "warn" || value === "allow";
+}
+function isValidSignalActionType(value) {
+  return value === "approve" || value === "setApprovalForAll" || value === "increaseAllowance" || value === "permit" || value === "transfer" || value === "transferFrom" || value === "multicall" || value === "unknown";
+}
+function isValidApprovalDirection(value) {
+  return value === "grant" || value === "revoke" || value === "not_applicable";
+}
+function isTransactionSignals(value) {
+  return isRecord4(value) && typeof value.isContractInteraction === "boolean" && typeof value.isNativeTransfer === "boolean" && (value.methodName === void 0 || typeof value.methodName === "string") && typeof value.isApproval === "boolean" && isValidSignalActionType(value.actionType) && typeof value.isApprovalMethod === "boolean" && typeof value.isUnlimitedApproval === "boolean" && typeof value.hasValueTransfer === "boolean" && typeof value.isHighValue === "boolean" && (value.targetAddress === void 0 || typeof value.targetAddress === "string") && typeof value.isPermitSignature === "boolean" && typeof value.isSetApprovalForAll === "boolean" && isValidApprovalDirection(value.approvalDirection) && (typeof value.spenderTrusted === "boolean" || value.spenderTrusted === null) && (typeof value.recipientIsNew === "boolean" || value.recipientIsNew === null) && typeof value.isTransfer === "boolean" && typeof value.isTransferFrom === "boolean" && typeof value.isMulticall === "boolean" && typeof value.containsApprovalAndTransfer === "boolean" && typeof value.containsApproval === "boolean" && typeof value.containsTransfer === "boolean" && typeof value.containsTransferFrom === "boolean" && typeof value.batchActionCount === "number" && Number.isFinite(value.batchActionCount) && typeof value.hasNativeValue === "boolean" && typeof value.touchesMaliciousContract === "boolean" && typeof value.targetAllowlisted === "boolean" && typeof value.signatureIntelMatch === "boolean" && typeof value.verifyingContractKnown === "boolean" && typeof value.hasUnknownInnerCall === "boolean";
+}
+function isTransactionRiskClassification(value) {
+  return isRecord4(value) && typeof value.hasMaliciousTarget === "boolean" && typeof value.hasKnownScamSignature === "boolean" && typeof value.isApprovalRisk === "boolean" && typeof value.isUnlimitedApprovalRisk === "boolean" && typeof value.isPermitRisk === "boolean" && typeof value.isHighValueTransferRisk === "boolean" && typeof value.isUnknownMethodRisk === "boolean" && typeof value.requiresUserAttention === "boolean";
+}
+function isTransactionExplanation(value) {
+  if (!isRecord4(value) || !isRecord4(value.details)) {
+    return false;
+  }
+  return isValidExplanationStatus(value.status) && isNonEmptyString(value.summary) && isNonEmptyString(value.primaryReason) && Array.isArray(value.secondaryReasons) && isValidExplanationRiskLevel(value.riskLevel) && typeof value.details.isContractInteraction === "boolean";
+}
+function isTransactionAuditRecord(value) {
+  return isRecord4(value) && isNonEmptyString(value.id) && isNonEmptyString(value.timestamp) && isValidAuditStatus(value.status) && isTransactionExplanation(value.explanation) && isTransactionSignals(value.signals) && isTransactionRiskClassification(value.classification) && isRecord4(value.metadata) && (value.metadata.source === "extension" || value.metadata.source === "mobile" || value.metadata.source === "desktop");
+}
+function isTransactionAnalytics(value) {
+  return isRecord4(value) && typeof value.totalTransactions === "number" && typeof value.blockedCount === "number" && typeof value.warnedCount === "number" && isRecord4(value.repeatedTargetCount) && typeof value.highRiskFrequency === "number" && isRecord4(value.patterns) && typeof value.patterns.repeatedTarget === "boolean" && typeof value.patterns.frequentHighRisk === "boolean";
+}
+function isUserProtectionProfile(value) {
+  return isRecord4(value) && typeof value.heightenedProtection === "boolean" && isRecord4(value.controls) && typeof value.controls.repeatedTargetCaution === "boolean" && typeof value.controls.frequentHighRiskCaution === "boolean" && typeof value.controls.warnEscalationSuggested === "boolean" && typeof value.controls.cooldownSuggested === "boolean" && isRecord4(value.summary) && typeof value.summary.totalTransactions === "number" && typeof value.summary.blockedCount === "number" && typeof value.summary.warnedCount === "number" && typeof value.summary.repeatedTargetCount === "number" && typeof value.summary.highRiskFrequency === "number";
+}
+function buildTransactionDecisionPackage(records, verdict) {
+  const analytics = analyzeTransactions([...records]);
+  const protection = deriveUserProtectionProfile([...records]);
+  const explanation = verdict.explanation;
+  const audit = verdict.audit;
+  const hasExplanation = isTransactionExplanation(explanation);
+  const hasAudit = isTransactionAuditRecord(audit);
+  const hasAnalytics = isTransactionAnalytics(analytics);
+  const hasProtectionProfile = isUserProtectionProfile(protection);
+  return {
+    verdict,
+    explanation,
+    audit,
+    analytics,
+    protection,
+    readiness: {
+      hasExplanation,
+      hasAudit,
+      hasAnalytics,
+      hasProtectionProfile,
+      complete: hasExplanation && hasAudit && hasAnalytics && hasProtectionProfile
+    }
+  };
 }
 
 // node_modules/.pnpm/tldts-core@7.0.27/node_modules/tldts-core/dist/es6/src/domain.js
@@ -5697,7 +6075,7 @@ var ALLOWLIST_ITEM_KEYS = [
   "scope",
   "justification"
 ];
-function isRecord3(value) {
+function isRecord5(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 function pushIssue2(issues, path, message) {
@@ -5727,7 +6105,7 @@ function readRequiredNumber(value, key, path, issues) {
   }
   return candidate;
 }
-function isValidUtcTimestamp2(value) {
+function isValidUtcTimestamp3(value) {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/.test(value)) {
     return false;
   }
@@ -5738,14 +6116,14 @@ function readRequiredTimestamp(value, key, path, issues) {
   if (candidate === null) {
     return null;
   }
-  if (!isValidUtcTimestamp2(candidate)) {
+  if (!isValidUtcTimestamp3(candidate)) {
     pushIssue2(issues, `${path}.${key}`, "Expected an ISO-8601 UTC timestamp");
     return null;
   }
   return candidate;
 }
 function readMetadata(value, path, issues) {
-  if (!isRecord3(value)) {
+  if (!isRecord5(value)) {
     pushIssue2(issues, path, "Expected section metadata object");
     return null;
   }
@@ -5784,7 +6162,7 @@ function parseSchemaVersion(value, issues) {
 }
 function parseEnvelope(bundle, options) {
   const issues = [];
-  if (!isRecord3(bundle)) {
+  if (!isRecord5(bundle)) {
     pushIssue2(issues, "", "Expected bundle object");
     return {
       metadata: {
@@ -5827,7 +6205,7 @@ function parseEnvelope(bundle, options) {
   }
   const rawSections = bundle.sections;
   const sections = {};
-  if (!isRecord3(rawSections)) {
+  if (!isRecord5(rawSections)) {
     pushIssue2(issues, "sections", "Expected sections metadata object");
   } else {
     const allowedSections = [
@@ -5966,7 +6344,7 @@ function parseMaliciousItems(rawItems, path, issues) {
   const seenIdentities = /* @__PURE__ */ new Set();
   rawItems.forEach((rawItem, index) => {
     const itemPath = `${path}.items[${index}]`;
-    if (!isRecord3(rawItem)) {
+    if (!isRecord5(rawItem)) {
       pushIssue2(issues, itemPath, "Expected malicious-domain item object");
       return;
     }
@@ -6052,7 +6430,7 @@ function parseAllowlistItems(rawItems, path, issues) {
   const seenIdentities = /* @__PURE__ */ new Set();
   rawItems.forEach((rawItem, index) => {
     const itemPath = `${path}.items[${index}]`;
-    if (!isRecord3(rawItem)) {
+    if (!isRecord5(rawItem)) {
       pushIssue2(issues, itemPath, "Expected allowlist item object");
       return;
     }
@@ -6162,7 +6540,7 @@ function parseMaliciousDomainsSection(bundle, metadata) {
       issues: [{ path, message: "Section metadata exists but payload is missing" }]
     };
   }
-  if (!isRecord3(section)) {
+  if (!isRecord5(section)) {
     pushIssue2(issues, path, "Expected maliciousDomains section object");
     return { state: "invalid", metadata: sectionMetadata, items: [], issues };
   }
@@ -6222,7 +6600,7 @@ function parseAllowlistsSection(bundle, metadata) {
       issues: [{ path, message: "Section metadata exists but payload is missing" }]
     };
   }
-  if (!isRecord3(section)) {
+  if (!isRecord5(section)) {
     pushIssue2(issues, path, "Expected allowlists section object");
     return { state: "invalid", metadata: sectionMetadata, items: [], issues };
   }
@@ -10624,9 +11002,11 @@ export {
   RULE_SET_VERSION,
   SUSPICIOUS_TLDS,
   TRANSACTION_SELECTOR_REGISTRY,
+  analyzeTransactions,
+  buildEmptyValidatedTransactionLayer2Snapshot,
   buildEvmCleanupPlan,
   buildNavigationContext,
-  buildTransactionExplanation,
+  buildTransactionDecisionPackage,
   buildTransactionSignals,
   buildWalletReportId,
   classifyPermitKind,
@@ -10637,18 +11017,22 @@ export {
   containsMintKeyword,
   containsWalletConnectPattern,
   contextToInput,
+  createAuditRecord,
   createTransactionIntelProvider,
   decodeTransactionCalldata,
   deconfuseHostname,
+  deriveUserProtectionProfile,
   domainSimilarityScore,
   evaluate,
   evaluateBitcoinWalletScan,
   evaluateEvmWalletScan,
   evaluateSolanaWalletScan,
   evaluateTransaction,
+  explainTransaction,
   extractHostname,
   extractRegistrableDomain,
   extractTld,
+  getCanonicalTransactionSnapshotActivation,
   getDefaultTransactionIntelProvider,
   getEvmCleanupEligibility,
   getReasonMessage,

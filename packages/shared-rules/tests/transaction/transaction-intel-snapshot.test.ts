@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 
 import {
+  buildEmptyValidatedTransactionLayer2Snapshot,
   createTransactionIntelProvider,
   resolveCanonicalTransactionIntel,
   validateTransactionLayer2Snapshot,
@@ -163,6 +164,7 @@ describe("transaction Layer 2 snapshot validation", () => {
     const intel = resolveCanonicalTransactionIntel(provider, {
       eventKind: "transaction",
       targetAddress: "0x9999999999999999999999999999999999999999",
+      signatureHash: null,
     });
 
     expect(intel.maliciousContract.disposition).toBe("malicious");
@@ -292,5 +294,23 @@ describe("transaction Layer 2 snapshot validation", () => {
     expect(Object.isFrozen(first.snapshot)).toBe(true);
     expect(Object.isFrozen(first.snapshot.metadata)).toBe(true);
     expect(Object.isFrozen(first.snapshot.maliciousContracts[0]!)).toBe(true);
+  });
+
+  it("builds a deterministic empty validated snapshot for fail-safe activation", () => {
+    const first = buildEmptyValidatedTransactionLayer2Snapshot(
+      "2026-03-24T00:00:00.000Z"
+    );
+    const second = buildEmptyValidatedTransactionLayer2Snapshot(
+      "2026-03-24T00:00:00.000Z"
+    );
+
+    expect(second).toEqual(first);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(first.maliciousContracts).toEqual([]);
+    expect(first.scamSignatures).toEqual([]);
+    expect(first.sectionStates).toEqual({
+      maliciousContracts: "missing",
+      scamSignatures: "missing",
+    });
   });
 });

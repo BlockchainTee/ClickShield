@@ -61,21 +61,31 @@ function buildSnapshotVersion(snapshotBody: {
   ).slice(0, 16)}`;
 }
 
-function buildSnapshot(
-  maliciousContracts: readonly unknown[],
-  sectionState: "ready" | "stale" | "missing"
-) {
+function buildSnapshot(input: {
+  readonly maliciousContracts: readonly unknown[];
+  readonly maliciousContractsState: "ready" | "stale" | "missing";
+  readonly scamSignatures?: readonly unknown[];
+  readonly scamSignaturesState?: "ready" | "stale" | "missing";
+}) {
+  const scamSignatures = input.scamSignatures ?? [];
   const snapshotBody = {
     generatedAt: "2026-03-24T00:00:00.000Z",
-    maliciousContracts,
-    scamSignatures: [],
+    maliciousContracts: input.maliciousContracts,
+    scamSignatures,
     metadata: {
       generatedAt: "2026-03-24T00:00:00.000Z",
       sources:
-        maliciousContracts.length === 0
+        input.maliciousContracts.length === 0 && scamSignatures.length === 0
           ? []
           : ["chainabuse", "internal", "ofac"].filter((source) =>
-              maliciousContracts.some(
+              input.maliciousContracts.some(
+                (entry) =>
+                  typeof entry === "object" &&
+                  entry !== null &&
+                  "source" in entry &&
+                  entry.source === source
+              ) ||
+              scamSignatures.some(
                 (entry) =>
                   typeof entry === "object" &&
                   entry !== null &&
@@ -85,8 +95,10 @@ function buildSnapshot(
             ),
     } as const,
     sectionStates: {
-      maliciousContracts: sectionState,
-      scamSignatures: "missing",
+      maliciousContracts: input.maliciousContractsState,
+      scamSignatures:
+        input.scamSignaturesState ??
+        (scamSignatures.length === 0 ? "missing" : "ready"),
     } as const,
   };
 
@@ -96,13 +108,13 @@ function buildSnapshot(
   };
 }
 
-function buildValidatedSnapshot(
-  maliciousContracts: readonly unknown[],
-  sectionState: "ready" | "stale" | "missing"
-) {
-  const result = validateTransactionLayer2Snapshot(
-    buildSnapshot(maliciousContracts, sectionState)
-  );
+function buildValidatedSnapshot(input: {
+  readonly maliciousContracts: readonly unknown[];
+  readonly maliciousContractsState: "ready" | "stale" | "missing";
+  readonly scamSignatures?: readonly unknown[];
+  readonly scamSignaturesState?: "ready" | "stale" | "missing";
+}) {
+  const result = validateTransactionLayer2Snapshot(buildSnapshot(input));
 
   expect(result.ok).toBe(true);
   if (!result.ok) {
@@ -121,18 +133,20 @@ describe("transaction intel provider", () => {
   it("resolves exact malicious-contract matches and stable no-match results", () => {
     const provider = createTransactionIntelProvider(
       buildValidatedSnapshot(
-        [
-          {
-            chain: "evm",
-            address: "0x9999999999999999999999999999999999999999",
-            source: "ofac",
-            disposition: "block",
-            confidence: "high",
-            reason: "OFAC sanctions address",
-            reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
-          },
-        ],
-        "ready"
+        {
+          maliciousContracts: [
+            {
+              chain: "evm",
+              address: "0x9999999999999999999999999999999999999999",
+              source: "ofac",
+              disposition: "block",
+              confidence: "high",
+              reason: "OFAC sanctions address",
+              reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
+            },
+          ],
+          maliciousContractsState: "ready",
+        }
       )
     );
 
@@ -182,58 +196,120 @@ describe("transaction intel provider", () => {
 
   it("keeps empty validated snapshots deterministic and fail-safe", () => {
     const provider = createTransactionIntelProvider(
-      buildValidatedSnapshot([], "missing")
+      buildValidatedSnapshot({
+        maliciousContracts: [],
+        maliciousContractsState: "missing",
+      })
     );
 
     const firstCanonicalLookup = provider.lookupCanonicalTransactionIntel({
       eventKind: "transaction",
       targetAddress: "0x9999999999999999999999999999999999999999",
+      signatureHash: null,
     });
     const secondCanonicalLookup = provider.lookupCanonicalTransactionIntel({
       eventKind: "transaction",
       targetAddress: "0x9999999999999999999999999999999999999999",
+      signatureHash: null,
     });
 
     expect(firstCanonicalLookup).toBe(secondCanonicalLookup);
     expect(firstCanonicalLookup).toMatchObject({
       maliciousContract: {
         matched: false,
-        disposition: "unavailable",
-        feedVersion: null,
+        disposition: "no_match",
+        feedVersion: provider.snapshotVersion,
         sectionState: "missing",
         record: null,
       },
       scamSignature: {
         lookupFamily: "scam_signature",
         matched: false,
-        disposition: "unavailable",
-        feedVersion: null,
+        disposition: "no_match",
+        feedVersion: provider.snapshotVersion,
         sectionState: "missing",
+        record: null,
       },
+    });
+  });
+
+  it("resolves exact scam-signature matches with stable exact-key behavior", () => {
+    const signatureHash =
+      "0x1111111111111111111111111111111111111111111111111111111111111111";
+    const provider = createTransactionIntelProvider(
+      buildValidatedSnapshot({
+        maliciousContracts: [],
+        maliciousContractsState: "missing",
+        scamSignatures: [
+          {
+            signatureHash,
+            source: "internal",
+            confidence: "high",
+            reason: "Known scam typed-data signature",
+          },
+        ],
+        scamSignaturesState: "ready",
+      })
+    );
+
+    const firstMatch = provider.lookupScamSignature({
+      normalizedKey: signatureHash,
+    });
+    const secondMatch = provider.lookupScamSignature({
+      normalizedKey: signatureHash,
+    });
+    const miss = provider.lookupScamSignature({
+      normalizedKey:
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+
+    expect(firstMatch).toBe(secondMatch);
+    expect(firstMatch).toMatchObject({
+      lookupFamily: "scam_signature",
+      matched: true,
+      disposition: "malicious",
+      matchedSection: "scamSignatures",
+      sectionState: "fresh",
+      record: {
+        signatureHash,
+        source: "internal",
+        confidence: "high",
+        reason: "Known scam typed-data signature",
+      },
+    });
+    expect(miss).toMatchObject({
+      lookupFamily: "scam_signature",
+      matched: false,
+      disposition: "no_match",
+      sectionState: "fresh",
+      record: null,
     });
   });
 
   it("returns frozen provider results that cannot mutate active state", () => {
     const provider = createTransactionIntelProvider(
       buildValidatedSnapshot(
-        [
-          {
-            chain: "evm",
-            address: "0x9999999999999999999999999999999999999999",
-            source: "ofac",
-            disposition: "block",
-            confidence: "high",
-            reason: "OFAC sanctions address",
-            reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
-          },
-        ],
-        "ready"
+        {
+          maliciousContracts: [
+            {
+              chain: "evm",
+              address: "0x9999999999999999999999999999999999999999",
+              source: "ofac",
+              disposition: "block",
+              confidence: "high",
+              reason: "OFAC sanctions address",
+              reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
+            },
+          ],
+          maliciousContractsState: "ready",
+        }
       )
     );
 
     const lookup = provider.lookupCanonicalTransactionIntel({
       eventKind: "signature",
       targetAddress: "0x9999999999999999999999999999999999999999",
+      signatureHash: null,
     });
 
     expect(Object.isFrozen(lookup)).toBe(true);
@@ -251,6 +327,7 @@ describe("transaction intel provider", () => {
     const repeatedLookup = provider.lookupCanonicalTransactionIntel({
       eventKind: "signature",
       targetAddress: "0x9999999999999999999999999999999999999999",
+      signatureHash: null,
     });
 
     expect(repeatedLookup).toBe(lookup);
@@ -265,23 +342,26 @@ describe("transaction intel provider", () => {
   it("makes resolveCanonicalTransactionIntel a transparent provider passthrough", () => {
     const provider = createTransactionIntelProvider(
       buildValidatedSnapshot(
-        [
-          {
-            chain: "evm",
-            address: "0x9999999999999999999999999999999999999999",
-            source: "chainabuse",
-            disposition: "warn",
-            confidence: "medium",
-            reason: "Chainabuse reports indicate elevated risk",
-            reasonCodes: ["CHAINABUSE_REPORTED_ADDRESS"],
-          },
-        ],
-        "stale"
+        {
+          maliciousContracts: [
+            {
+              chain: "evm",
+              address: "0x9999999999999999999999999999999999999999",
+              source: "chainabuse",
+              disposition: "warn",
+              confidence: "medium",
+              reason: "Chainabuse reports indicate elevated risk",
+              reasonCodes: ["CHAINABUSE_REPORTED_ADDRESS"],
+            },
+          ],
+          maliciousContractsState: "stale",
+        }
       )
     );
     const lookup = {
       eventKind: "transaction" as const,
       targetAddress: "0x9999999999999999999999999999999999999999",
+      signatureHash: null,
     };
 
     const providerLookup = provider.lookupCanonicalTransactionIntel(lookup);
@@ -298,9 +378,10 @@ describe("transaction intel provider", () => {
         sectionState: "stale",
       },
       scamSignature: {
-        disposition: "unavailable",
-        feedVersion: null,
+        disposition: "no_match",
+        feedVersion: provider.snapshotVersion,
         sectionState: "missing",
+        record: null,
       },
     });
   });
@@ -327,24 +408,27 @@ describe("transaction intel provider", () => {
 
     const provider = createTransactionIntelProvider(
       buildValidatedSnapshot(
-        [
-          {
-            chain: "evm",
-            address: "0x9999999999999999999999999999999999999999",
-            source: "chainabuse",
-            disposition: "warn",
-            confidence: "medium",
-            reason: "Chainabuse reports indicate elevated risk",
-            reasonCodes: ["CHAINABUSE_REPORTED_ADDRESS"],
-          },
-        ],
-        "stale"
+        {
+          maliciousContracts: [
+            {
+              chain: "evm",
+              address: "0x9999999999999999999999999999999999999999",
+              source: "chainabuse",
+              disposition: "warn",
+              confidence: "medium",
+              reason: "Chainabuse reports indicate elevated risk",
+              reasonCodes: ["CHAINABUSE_REPORTED_ADDRESS"],
+            },
+          ],
+          maliciousContractsState: "stale",
+        }
       )
     );
 
     const result = provider.lookupCanonicalTransactionIntel({
       eventKind: "transaction",
       targetAddress: "0x9999999999999999999999999999999999999999",
+      signatureHash: null,
     });
 
     expect(result).not.toBeInstanceOf(Promise);

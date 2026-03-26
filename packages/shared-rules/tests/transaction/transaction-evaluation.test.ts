@@ -106,21 +106,6 @@ function buildSnapshot(
   };
 }
 
-function withNormalizedAuditTimestamp<
-  TResult extends { verdict: { audit: { timestamp: string } } }
->(result: TResult): TResult {
-  return {
-    ...result,
-    verdict: {
-      ...result.verdict,
-      audit: {
-        ...result.verdict.audit,
-        timestamp: "<timestamp>",
-      },
-    },
-  };
-}
-
 function buildValidatedProvider(
   maliciousContracts: readonly unknown[]
 ): TransactionIntelProvider {
@@ -711,6 +696,89 @@ describe("Layer 3 Phase B transaction evaluation", () => {
     ]);
   });
 
+  it("hydrates scam-signature blocks end-to-end through a real validated snapshot", () => {
+    const input = {
+      eventKind: "signature" as const,
+      rpcMethod: "eth_signTypedData_v4" as const,
+      chainFamily: "evm" as const,
+      chainId: 1,
+      from: "0x1111111111111111111111111111111111111111",
+      typedData: {
+        domain: {
+          name: "Permit2",
+          chainId: 1,
+          verifyingContract: "0x3333333333333333333333333333333333333333",
+        },
+        types: {
+          EIP712Domain: [
+            { name: "name", type: "string" },
+            { name: "chainId", type: "uint256" },
+            { name: "verifyingContract", type: "address" },
+          ],
+          PermitSingle: [{ name: "spender", type: "address" }],
+        },
+        primaryType: "PermitSingle",
+        message: {
+          spender: "0x4444444444444444444444444444444444444444",
+        },
+      },
+      originDomain: "app.example.com",
+      walletProvider: "injected",
+      walletMetadata: WALLET_METADATA,
+    };
+    const baselineContext = normalizeTypedDataRequest(input);
+    const snapshotBody = {
+      generatedAt: "2026-03-24T00:00:00.000Z",
+      maliciousContracts: [],
+      scamSignatures: [
+        {
+          signatureHash: `0x${sha256Hex(baselineContext.signature.canonicalJson)}`,
+          source: "internal",
+          confidence: "high",
+          reason: "Known scam typed-data signature",
+        },
+      ],
+      metadata: {
+        generatedAt: "2026-03-24T00:00:00.000Z",
+        sources: ["internal"],
+      },
+      sectionStates: {
+        maliciousContracts: "missing",
+        scamSignatures: "ready",
+      },
+    } as const;
+    const validatedSnapshot = validateTransactionLayer2Snapshot({
+      version: buildSnapshotVersion(snapshotBody),
+      ...snapshotBody,
+    });
+
+    expect(validatedSnapshot.ok).toBe(true);
+    if (!validatedSnapshot.ok) {
+      throw new Error("expected validated transaction snapshot");
+    }
+
+    const provider = createTransactionIntelProvider(validatedSnapshot.snapshot);
+    const context = normalizeTypedDataRequest(input, {
+      intelProvider: provider,
+    });
+    const result = evaluateTransaction(context);
+
+    expect(context.signature.canonicalJson).toBe(
+      baselineContext.signature.canonicalJson
+    );
+    expect(context.intel.contractDisposition).toBe("no_match");
+    expect(context.intel.signatureDisposition).toBe("malicious");
+    expect(context.intel.signatureFeedVersion).toBe(
+      validatedSnapshot.snapshot.version
+    );
+    expect(result.verdict.status).toBe("BLOCK");
+    expect(result.verdict.primaryRuleId).toBe("TX_BLOCK_SCAM_SIGNATURE_MATCH");
+    expect(result.reasonCodes).toEqual([
+      "TX_SCAM_SIGNATURE_MATCH",
+      "TX_PERMIT_SIGNATURE",
+    ]);
+  });
+
   it("uses the hydrated input contract only during evaluation", () => {
     const baseContext = normalizeTransactionRequest(
       {
@@ -807,7 +875,7 @@ describe("Layer 3 Phase B transaction evaluation", () => {
     );
 
     expect(context.intel.contractDisposition).toBe("no_match");
-    expect(context.intel.signatureDisposition).toBe("unavailable");
+    expect(context.intel.signatureDisposition).toBe("no_match");
     expect(context.intel.sectionStates.maliciousContracts).toBe("fresh");
   });
 
@@ -844,11 +912,8 @@ describe("Layer 3 Phase B transaction evaluation", () => {
     const second = evaluateTransaction(secondContext);
 
     expect(secondContext).toEqual(firstContext);
-    expect(second.verdict.audit.id).toBe(first.verdict.audit.id);
-    expect(second.verdict.audit.timestamp).toEqual(expect.any(String));
-    expect(withNormalizedAuditTimestamp(second)).toEqual(
-      withNormalizedAuditTimestamp(first)
-    );
+    expect(second).toEqual(first);
+    expect(second.verdict.audit.timestamp).toBe("1970-01-01T00:00:00.000Z");
   });
 
   it("reuses the canonical default provider lifecycle across repeated runtime calls", () => {

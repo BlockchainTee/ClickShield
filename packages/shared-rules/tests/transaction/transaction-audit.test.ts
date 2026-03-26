@@ -82,9 +82,6 @@ afterEach(() => {
 
 describe("transaction audit logging", () => {
   it("creates a structured audit record with all required fields", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-26T12:00:00.000Z"));
-
     const context = buildTransactionContext();
     const verdict = assembleTransactionVerdict(context, [
       match({
@@ -104,7 +101,7 @@ describe("transaction audit logging", () => {
     const audit = createAuditRecord(context, verdict);
 
     expect(audit.id).toMatch(/^[0-9a-f]{64}$/);
-    expect(audit.timestamp).toBe("2026-03-26T12:00:00.000Z");
+    expect(audit.timestamp).toBe("1970-01-01T00:00:00.000Z");
     expect(audit.status).toBe("warn");
     expect(audit.explanation).toEqual(verdict.explanation);
     expect(audit.signals).toEqual(context.signals);
@@ -115,8 +112,6 @@ describe("transaction audit logging", () => {
   });
 
   it("uses a deterministic ID for the same transaction and verdict", () => {
-    vi.useFakeTimers();
-
     const context = buildTransactionContext();
     const verdict = assembleTransactionVerdict(context, [
       match({
@@ -133,19 +128,14 @@ describe("transaction audit logging", () => {
       }),
     ]).verdict;
 
-    vi.setSystemTime(new Date("2026-03-26T12:00:00.000Z"));
     const first = createAuditRecord(context, verdict);
-    vi.setSystemTime(new Date("2026-03-26T12:05:00.000Z"));
     const second = createAuditRecord(context, verdict);
 
+    expect(second.timestamp).toBe(first.timestamp);
     expect(second.id).toBe(first.id);
-    expect(second.timestamp).toBe("2026-03-26T12:05:00.000Z");
   });
 
   it("does not mutate the verdict while recording the audit", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-26T12:00:00.000Z"));
-
     const context = buildTransactionContext();
     const verdict = assembleTransactionVerdict(context, [
       match({
@@ -171,9 +161,6 @@ describe("transaction audit logging", () => {
   });
 
   it("attaches the audit record to the assembled verdict", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-26T12:00:00.000Z"));
-
     const context = buildTransactionContext();
     const result = assembleTransactionVerdict(context, [
       match({
