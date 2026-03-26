@@ -11,6 +11,7 @@ import {
   evaluateEvmWalletScan,
   evaluateSolanaWalletScan,
   evaluateTransaction,
+  getDefaultTransactionIntelProvider,
   getTransactionSelectorDefinition,
   evaluate,
   getReasonMessage,
@@ -60,6 +61,7 @@ describe("root public API", () => {
     expect(typeof normalizeTypedDataRequest).toBe("function");
     expect(typeof validateTransactionLayer2Snapshot).toBe("function");
     expect(typeof createTransactionIntelProvider).toBe("function");
+    expect(typeof getDefaultTransactionIntelProvider).toBe("function");
     expect(typeof resolveCanonicalTransactionIntel).toBe("function");
     expect(typeof buildTransactionExplanation).toBe("function");
     expect(typeof buildTransactionSignals).toBe("function");
@@ -139,5 +141,12 @@ describe("root public API", () => {
     expect(tx.actionType).toBe("approve");
     expect(sig.eventKind).toBe("signature");
     expect(sig.signature.normalizationState).toBe("missing_domain_fields");
+  });
+
+  it("reuses one canonical default transaction intel provider across runtime calls", () => {
+    const first = getDefaultTransactionIntelProvider();
+    const second = getDefaultTransactionIntelProvider();
+
+    expect(second).toBe(first);
   });
 });

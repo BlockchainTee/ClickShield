@@ -73,6 +73,9 @@ export {
   normalizeTypedDataRequest,
 } from "./transaction/decode.js";
 export {
+  getDefaultTransactionIntelProvider,
+} from "./transaction/hydrate.js";
+export {
   createTransactionIntelProvider,
   resolveCanonicalTransactionIntel,
 } from "./transaction/intel-provider.js";

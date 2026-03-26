@@ -185,17 +185,6 @@ function createCanonicalTransactionIntelLookupResult(
   });
 }
 
-function isTransactionIntelProvider(
-  value: TransactionIntelProvider | ValidatedTransactionLayer2Snapshot | null
-): value is TransactionIntelProvider {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    "lookupCanonicalTransactionIntel" in value &&
-    typeof value.lookupCanonicalTransactionIntel === "function"
-  );
-}
-
 function canonicalLookupCacheKey(
   eventKind: TransactionEventKind,
   targetAddress: string | null
@@ -340,15 +329,8 @@ export function resolveCanonicalTransactionIntel(
   lookup: CanonicalTransactionIntelLookup
 ): CanonicalTransactionIntelLookupResult;
 export function resolveCanonicalTransactionIntel(
-  snapshot: ValidatedTransactionLayer2Snapshot | null,
-  lookup: CanonicalTransactionIntelLookup
-): CanonicalTransactionIntelLookupResult;
-export function resolveCanonicalTransactionIntel(
-  input: TransactionIntelProvider | ValidatedTransactionLayer2Snapshot | null,
+  provider: TransactionIntelProvider,
   lookup: CanonicalTransactionIntelLookup
 ): CanonicalTransactionIntelLookupResult {
-  const provider = isTransactionIntelProvider(input)
-    ? input
-    : createTransactionIntelProvider(input);
   return provider.lookupCanonicalTransactionIntel(lookup);
 }

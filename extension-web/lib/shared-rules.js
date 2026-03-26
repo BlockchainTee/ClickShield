@@ -3215,448 +3215,17 @@ function riskBadgeLabel(riskLevel) {
   }
 }
 
-// src/transaction/decode.ts
-function normalizeHex(calldata) {
-  const trimmed = calldata.trim().toLowerCase();
-  if (trimmed === "") return "0x";
-  return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
-}
-function stripHexPrefix(value) {
-  return value.startsWith("0x") ? value.slice(2) : value;
-}
-function getBody(calldata) {
-  const clean = stripHexPrefix(normalizeHex(calldata));
-  return clean.length <= 8 ? "" : clean.slice(8);
-}
-function getWord(body, index) {
-  const start = index * 64;
-  const end = start + 64;
-  if (body.length < end) return null;
-  return body.slice(start, end);
-}
-function decodeAddressWord(word) {
-  if (word === null || word.length !== 64) return null;
-  return normalizeEvmAddress(`0x${word.slice(24)}`);
-}
-function decodeUintWord(word) {
-  if (word === null || word.length !== 64) return null;
-  return BigInt(`0x${word}`).toString(10);
-}
-function decodeBoolWord(word) {
-  if (word === null || word.length !== 64) return null;
-  return BigInt(`0x${word}`) !== 0n;
-}
-function quantityToDecimal(value) {
-  if (value === null || value === void 0) return "0";
-  if (typeof value === "bigint") return value.toString(10);
-  if (typeof value === "number") return BigInt(value).toString(10);
-  const trimmed = value.trim();
-  if (trimmed === "") return "0";
-  if (/^0x[0-9a-fA-F]+$/.test(trimmed)) {
-    return BigInt(trimmed).toString(10);
-  }
-  return BigInt(trimmed).toString(10);
-}
-function defaultCounterparty(input) {
-  return {
-    spenderTrusted: input?.spenderTrusted ?? null,
-    recipientIsNew: input?.recipientIsNew ?? null
-  };
-}
-function defaultIntel() {
-  return {
-    contractDisposition: "unavailable",
-    contractFeedVersion: null,
-    allowlistFeedVersion: null,
-    signatureDisposition: "unavailable",
-    signatureFeedVersion: null,
-    originDisposition: "unavailable",
-    sectionStates: {}
-  };
-}
-function resolveIntel(input) {
-  const defaults = defaultIntel();
-  return {
-    contractDisposition: input?.contractDisposition ?? defaults.contractDisposition,
-    contractFeedVersion: input?.contractFeedVersion ?? defaults.contractFeedVersion,
-    allowlistFeedVersion: input?.allowlistFeedVersion ?? defaults.allowlistFeedVersion,
-    signatureDisposition: input?.signatureDisposition ?? defaults.signatureDisposition,
-    signatureFeedVersion: input?.signatureFeedVersion ?? defaults.signatureFeedVersion,
-    originDisposition: input?.originDisposition ?? defaults.originDisposition,
-    sectionStates: input?.sectionStates ?? defaults.sectionStates
-  };
-}
-function buildProvider(surface, walletProvider, walletMetadata) {
-  return {
-    surface: surface ?? "unknown",
-    walletProvider,
-    walletName: walletMetadata.walletName,
-    platform: walletMetadata.platform
-  };
-}
-function buildDecodedAction(input) {
-  return {
-    functionName: input.functionName ?? null,
-    selector: input.selector ?? null,
-    actionType: input.actionType,
-    params: input.params ?? {},
-    tokenAddress: input.tokenAddress ?? null,
-    spender: input.spender ?? null,
-    operator: input.operator ?? null,
-    recipient: input.recipient ?? null,
-    owner: input.owner ?? null,
-    amount: input.amount ?? null,
-    amountKind: input.amountKind ?? "not_applicable",
-    approvalScope: input.approvalScope ?? "not_applicable",
-    approvalDirection: input.approvalDirection ?? "not_applicable"
-  };
-}
-function buildApprovalAmountKind(amountHex) {
-  if (amountHex === null) return "not_applicable";
-  return amountHex.toLowerCase() === MAX_UINT256_HEX ? "unlimited" : "exact";
-}
-function decodeBytesArray(body, offsetWord) {
-  if (offsetWord === null) return [];
-  const arrayStart = Number(BigInt(`0x${offsetWord}`)) * 2;
-  const lengthWord = body.slice(arrayStart, arrayStart + 64);
-  if (lengthWord.length !== 64) return [];
-  const itemCount = Number(BigInt(`0x${lengthWord}`));
-  const results = [];
-  for (let index = 0; index < itemCount; index += 1) {
-    const itemOffsetWord = body.slice(
-      arrayStart + 64 + index * 64,
-      arrayStart + 64 + (index + 1) * 64
-    );
-    if (itemOffsetWord.length !== 64) {
-      results.push("0x");
-      continue;
-    }
-    const relativeOffset = Number(BigInt(`0x${itemOffsetWord}`)) * 2;
-    const itemStart = arrayStart + relativeOffset;
-    const itemLengthWord = body.slice(itemStart, itemStart + 64);
-    if (itemLengthWord.length !== 64) {
-      results.push("0x");
-      continue;
-    }
-    const byteLength = Number(BigInt(`0x${itemLengthWord}`));
-    const dataStart = itemStart + 64;
-    const dataEnd = dataStart + byteLength * 2;
-    if (body.length < dataEnd) {
-      results.push("0x");
-      continue;
-    }
-    results.push(`0x${body.slice(dataStart, dataEnd)}`);
-  }
-  return results;
-}
-function decodeSimpleCall(selector, body, toAddress) {
-  const word0 = getWord(body, 0);
-  const word1 = getWord(body, 1);
-  const word2 = getWord(body, 2);
-  const word3 = getWord(body, 3);
-  const word4 = getWord(body, 4);
-  const word5 = getWord(body, 5);
-  const word6 = getWord(body, 6);
-  switch (selector) {
-    case APPROVE_SELECTOR: {
-      const amountHex = word1?.toLowerCase() ?? null;
-      return {
-        decoded: buildDecodedAction({
-          functionName: "approve",
-          selector,
-          actionType: "approve",
-          tokenAddress: toAddress,
-          spender: decodeAddressWord(word0),
-          amount: decodeUintWord(word1),
-          amountKind: buildApprovalAmountKind(amountHex),
-          approvalScope: "single_token",
-          approvalDirection: "grant",
-          params: {
-            spender: decodeAddressWord(word0),
-            amount: decodeUintWord(word1)
-          }
-        }),
-        batch: { isMulticall: false, batchSelector: null, actions: [] }
-      };
-    }
-    case SET_APPROVAL_FOR_ALL_SELECTOR: {
-      const approved = decodeBoolWord(word1);
-      return {
-        decoded: buildDecodedAction({
-          functionName: "setApprovalForAll",
-          selector,
-          actionType: "setApprovalForAll",
-          tokenAddress: toAddress,
-          operator: decodeAddressWord(word0),
-          approvalScope: "collection_all",
-          approvalDirection: approved === false ? "revoke" : "grant",
-          params: {
-            operator: decodeAddressWord(word0),
-            approved
-          }
-        }),
-        batch: { isMulticall: false, batchSelector: null, actions: [] }
-      };
-    }
-    case INCREASE_ALLOWANCE_SELECTOR: {
-      const amountHex = word1?.toLowerCase() ?? null;
-      return {
-        decoded: buildDecodedAction({
-          functionName: "increaseAllowance",
-          selector,
-          actionType: "increaseAllowance",
-          tokenAddress: toAddress,
-          spender: decodeAddressWord(word0),
-          amount: decodeUintWord(word1),
-          amountKind: buildApprovalAmountKind(amountHex),
-          approvalScope: "single_token",
-          approvalDirection: "grant",
-          params: {
-            spender: decodeAddressWord(word0),
-            amount: decodeUintWord(word1)
-          }
-        }),
-        batch: { isMulticall: false, batchSelector: null, actions: [] }
-      };
-    }
-    case TRANSFER_SELECTOR: {
-      return {
-        decoded: buildDecodedAction({
-          functionName: "transfer",
-          selector,
-          actionType: "transfer",
-          tokenAddress: toAddress,
-          recipient: decodeAddressWord(word0),
-          amount: decodeUintWord(word1),
-          amountKind: "exact",
-          approvalScope: "not_applicable",
-          params: {
-            recipient: decodeAddressWord(word0),
-            amount: decodeUintWord(word1)
-          }
-        }),
-        batch: { isMulticall: false, batchSelector: null, actions: [] }
-      };
-    }
-    case TRANSFER_FROM_SELECTOR: {
-      return {
-        decoded: buildDecodedAction({
-          functionName: "transferFrom",
-          selector,
-          actionType: "transferFrom",
-          tokenAddress: toAddress,
-          owner: decodeAddressWord(word0),
-          recipient: decodeAddressWord(word1),
-          amount: decodeUintWord(word2),
-          amountKind: "exact",
-          approvalScope: "not_applicable",
-          params: {
-            owner: decodeAddressWord(word0),
-            recipient: decodeAddressWord(word1),
-            amount: decodeUintWord(word2)
-          }
-        }),
-        batch: { isMulticall: false, batchSelector: null, actions: [] }
-      };
-    }
-    case ERC20_PERMIT_SELECTOR: {
-      return {
-        decoded: buildDecodedAction({
-          functionName: "permit",
-          selector,
-          actionType: "permit",
-          tokenAddress: toAddress,
-          owner: decodeAddressWord(word0),
-          spender: decodeAddressWord(word1),
-          amount: decodeUintWord(word2),
-          amountKind: "exact",
-          approvalScope: "single_token",
-          approvalDirection: "grant",
-          params: {
-            owner: decodeAddressWord(word0),
-            spender: decodeAddressWord(word1),
-            amount: decodeUintWord(word2),
-            deadline: decodeUintWord(word3),
-            v: decodeUintWord(word4),
-            r: word5 === null ? null : `0x${word5}`,
-            s: word6 === null ? null : `0x${word6}`
-          }
-        }),
-        batch: { isMulticall: false, batchSelector: null, actions: [] }
-      };
-    }
-    case ALLOWED_BOOL_PERMIT_SELECTOR: {
-      return {
-        decoded: buildDecodedAction({
-          functionName: "permit",
-          selector,
-          actionType: "permit",
-          tokenAddress: toAddress,
-          owner: decodeAddressWord(word0),
-          spender: decodeAddressWord(word1),
-          amount: null,
-          amountKind: "not_applicable",
-          approvalScope: "single_token",
-          approvalDirection: "grant",
-          params: {
-            owner: decodeAddressWord(word0),
-            spender: decodeAddressWord(word1),
-            nonce: decodeUintWord(word2),
-            expiry: decodeUintWord(word3),
-            allowed: decodeBoolWord(word4),
-            v: decodeUintWord(word5),
-            r: word6 === null ? null : `0x${word6}`,
-            s: getWord(body, 7) === null ? null : `0x${getWord(body, 7)}`
-          }
-        }),
-        batch: { isMulticall: false, batchSelector: null, actions: [] }
-      };
-    }
-    case MULTICALL_BYTES_SELECTOR:
-    case MULTICALL_DEADLINE_BYTES_SELECTOR: {
-      const bytesOffsetWord = selector === MULTICALL_BYTES_SELECTOR ? word0 : word1;
-      const rawCalls = decodeBytesArray(body, bytesOffsetWord);
-      const actions = rawCalls.map((rawCall) => decodeTransactionCalldata(rawCall).decoded);
-      const params = {
-        actionCount: `${actions.length}`
-      };
-      if (selector === MULTICALL_DEADLINE_BYTES_SELECTOR) {
-        params.deadline = decodeUintWord(word0);
-      }
-      return {
-        decoded: buildDecodedAction({
-          functionName: "multicall",
-          selector,
-          actionType: "multicall",
-          tokenAddress: toAddress,
-          params
-        }),
-        batch: {
-          isMulticall: true,
-          batchSelector: selector,
-          actions
-        }
-      };
-    }
-    default:
-      return {
-        decoded: buildDecodedAction({
-          selector,
-          actionType: "unknown",
-          tokenAddress: toAddress
-        }),
-        batch: { isMulticall: false, batchSelector: null, actions: [] }
-      };
-  }
-}
-function decodeTransactionCalldata(calldata, toAddress = null) {
-  const normalizedCalldata = normalizeHex(calldata);
-  const selector = extractSelector(normalizedCalldata);
-  const definition = getTransactionSelectorDefinition(selector);
-  const body = getBody(normalizedCalldata);
-  if (definition === null) {
-    return {
-      decoded: buildDecodedAction({
-        selector: selector === "0x" ? null : selector,
-        actionType: "unknown",
-        tokenAddress: toAddress
-      }),
-      batch: { isMulticall: false, batchSelector: null, actions: [] }
-    };
-  }
-  return decodeSimpleCall(selector, body, toAddress);
-}
-function normalizeTransactionRequest(input) {
-  const to = normalizeEvmAddress(input.to);
-  const from = normalizeEvmAddress(input.from);
-  const normalizedCalldata = normalizeHex(input.calldata);
-  const methodSelector = normalizedCalldata === "0x" ? null : extractSelector(normalizedCalldata);
-  const { decoded, batch } = decodeTransactionCalldata(normalizedCalldata, to);
-  return {
-    eventKind: "transaction",
-    rpcMethod: input.rpcMethod,
-    chainFamily: input.chainFamily,
-    chainId: input.chainId,
-    originDomain: input.originDomain,
-    from,
-    to,
-    valueWei: quantityToDecimal(input.value),
-    calldata: normalizedCalldata,
-    methodSelector,
-    actionType: decoded.actionType,
-    decoded,
-    batch,
-    signature: {
-      isTypedData: false,
-      primaryType: null,
-      domainName: null,
-      domainVersion: null,
-      domainChainId: null,
-      domainChainIdPresent: false,
-      verifyingContract: null,
-      verifyingContractPresent: false,
-      message: {},
-      domain: {},
-      types: {},
-      canonicalJson: "{}",
-      normalizationState: "normalized",
-      missingDomainFields: [],
-      invalidDomainFields: [],
-      permitKind: "none"
-    },
-    intel: resolveIntel(input.intel),
-    provider: buildProvider(
-      input.surface,
-      input.walletProvider,
-      input.walletMetadata
-    ),
-    counterparty: defaultCounterparty(input.counterparty),
-    meta: {
-      selectorRecognized: methodSelector !== null && getTransactionSelectorDefinition(methodSelector) !== null,
-      typedDataNormalized: false
-    }
-  };
-}
-function normalizeTypedDataRequest(input) {
-  const from = normalizeEvmAddress(input.from);
-  const signature = normalizeTypedData(input.typedData);
-  return {
-    eventKind: "signature",
-    rpcMethod: input.rpcMethod,
-    chainFamily: input.chainFamily,
-    chainId: input.chainId,
-    originDomain: input.originDomain,
-    from,
-    to: signature.verifyingContract,
-    valueWei: "0",
-    calldata: "0x",
-    methodSelector: null,
-    actionType: signature.permitKind === "none" ? "unknown" : "permit",
-    decoded: buildDecodedAction({
-      actionType: signature.permitKind === "none" ? "unknown" : "permit",
-      functionName: signature.permitKind === "none" ? null : "permit",
-      tokenAddress: signature.verifyingContract,
-      selector: null
-    }),
-    batch: {
-      isMulticall: false,
-      batchSelector: null,
-      actions: []
-    },
-    signature,
-    intel: resolveIntel(input.intel),
-    provider: buildProvider(
-      input.surface,
-      input.walletProvider,
-      input.walletMetadata
-    ),
-    counterparty: defaultCounterparty(input.counterparty),
-    meta: {
-      selectorRecognized: false,
-      typedDataNormalized: signature.normalizationState === "normalized"
-    }
-  };
-}
+// src/intel/generated/layer2-snapshot.json
+var layer2_snapshot_default = {
+  generatedAt: "2026-03-24T00:00:00.000Z",
+  maliciousContracts: [],
+  scamSignatures: [],
+  sectionStates: {
+    maliciousContracts: "missing",
+    scamSignatures: "missing"
+  },
+  version: "layer2.f0f054496c4fda37"
+};
 
 // src/transaction/intel-provider.ts
 var ZERO_EVM_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -3744,9 +3313,6 @@ function createCanonicalTransactionIntelLookupResult(maliciousContract, scamSign
     maliciousContract,
     scamSignature
   });
-}
-function isTransactionIntelProvider(value) {
-  return value !== null && typeof value === "object" && "lookupCanonicalTransactionIntel" in value && typeof value.lookupCanonicalTransactionIntel === "function";
 }
 function canonicalLookupCacheKey(eventKind, targetAddress) {
   return `${eventKind}:${targetAddress ?? "null"}`;
@@ -3845,8 +3411,7 @@ function createTransactionIntelProvider(snapshot) {
     lookupScamSignature
   });
 }
-function resolveCanonicalTransactionIntel(input, lookup) {
-  const provider = isTransactionIntelProvider(input) ? input : createTransactionIntelProvider(input);
+function resolveCanonicalTransactionIntel(provider, lookup) {
   return provider.lookupCanonicalTransactionIntel(lookup);
 }
 
@@ -4506,6 +4071,507 @@ function validateTransactionLayer2Snapshot(input) {
     snapshot,
     issues
   };
+}
+
+// src/transaction/hydrate.ts
+var UNAVAILABLE_ORIGIN_INTEL = Object.freeze({
+  allowlistFeedVersion: null,
+  originDisposition: "unavailable"
+});
+function loadCanonicalTransactionSnapshot() {
+  const result = validateTransactionLayer2Snapshot(layer2_snapshot_default);
+  return result.ok ? result.snapshot : null;
+}
+var CANONICAL_TRANSACTION_SNAPSHOT = loadCanonicalTransactionSnapshot();
+var CANONICAL_TRANSACTION_INTEL_PROVIDER = createTransactionIntelProvider(
+  CANONICAL_TRANSACTION_SNAPSHOT
+);
+function isTransactionIntelProvider(provider) {
+  return provider !== null && typeof provider === "object" && "lookupCanonicalTransactionIntel" in provider && typeof provider.lookupCanonicalTransactionIntel === "function";
+}
+function getLookupProvider(provider) {
+  if (provider === void 0 || provider === null) {
+    return CANONICAL_TRANSACTION_INTEL_PROVIDER;
+  }
+  if (!isTransactionIntelProvider(provider)) {
+    throw new TypeError(
+      "Transaction intel runtime overrides must be prebuilt providers."
+    );
+  }
+  return provider;
+}
+function buildHydratedIntel(input, provider) {
+  const lookup = {
+    eventKind: input.eventKind,
+    targetAddress: input.eventKind === "signature" ? input.signature.verifyingContract : input.to
+  };
+  const resolved = resolveCanonicalTransactionIntel(
+    getLookupProvider(provider),
+    lookup
+  );
+  return {
+    contractDisposition: resolved.maliciousContract.disposition,
+    contractFeedVersion: resolved.maliciousContract.feedVersion,
+    allowlistFeedVersion: UNAVAILABLE_ORIGIN_INTEL.allowlistFeedVersion,
+    signatureDisposition: resolved.scamSignature.disposition,
+    signatureFeedVersion: resolved.scamSignature.feedVersion,
+    originDisposition: UNAVAILABLE_ORIGIN_INTEL.originDisposition,
+    sectionStates: {
+      maliciousContracts: resolved.maliciousContract.sectionState,
+      scamSignatures: resolved.scamSignature.sectionState
+    }
+  };
+}
+function hydrateNormalizedTransactionContext(input, provider) {
+  return {
+    ...input,
+    intel: buildHydratedIntel(input, provider)
+  };
+}
+function getDefaultTransactionIntelProvider() {
+  return CANONICAL_TRANSACTION_INTEL_PROVIDER;
+}
+
+// src/transaction/decode.ts
+function normalizeHex(calldata) {
+  const trimmed = calldata.trim().toLowerCase();
+  if (trimmed === "") return "0x";
+  return trimmed.startsWith("0x") ? trimmed : `0x${trimmed}`;
+}
+function stripHexPrefix(value) {
+  return value.startsWith("0x") ? value.slice(2) : value;
+}
+function getBody(calldata) {
+  const clean = stripHexPrefix(normalizeHex(calldata));
+  return clean.length <= 8 ? "" : clean.slice(8);
+}
+function getWord(body, index) {
+  const start = index * 64;
+  const end = start + 64;
+  if (body.length < end) return null;
+  return body.slice(start, end);
+}
+function decodeAddressWord(word) {
+  if (word === null || word.length !== 64) return null;
+  return normalizeEvmAddress(`0x${word.slice(24)}`);
+}
+function decodeUintWord(word) {
+  if (word === null || word.length !== 64) return null;
+  return BigInt(`0x${word}`).toString(10);
+}
+function decodeBoolWord(word) {
+  if (word === null || word.length !== 64) return null;
+  return BigInt(`0x${word}`) !== 0n;
+}
+function quantityToDecimal(value) {
+  if (value === null || value === void 0) return "0";
+  if (typeof value === "bigint") return value.toString(10);
+  if (typeof value === "number") return BigInt(value).toString(10);
+  const trimmed = value.trim();
+  if (trimmed === "") return "0";
+  if (/^0x[0-9a-fA-F]+$/.test(trimmed)) {
+    return BigInt(trimmed).toString(10);
+  }
+  return BigInt(trimmed).toString(10);
+}
+function defaultCounterparty(input) {
+  return {
+    spenderTrusted: input?.spenderTrusted ?? null,
+    recipientIsNew: input?.recipientIsNew ?? null
+  };
+}
+function buildProvider(surface, walletProvider, walletMetadata) {
+  return {
+    surface: surface ?? "unknown",
+    walletProvider,
+    walletName: walletMetadata.walletName,
+    platform: walletMetadata.platform
+  };
+}
+function buildDecodedAction(input) {
+  return {
+    functionName: input.functionName ?? null,
+    selector: input.selector ?? null,
+    actionType: input.actionType,
+    params: input.params ?? {},
+    tokenAddress: input.tokenAddress ?? null,
+    spender: input.spender ?? null,
+    operator: input.operator ?? null,
+    recipient: input.recipient ?? null,
+    owner: input.owner ?? null,
+    amount: input.amount ?? null,
+    amountKind: input.amountKind ?? "not_applicable",
+    approvalScope: input.approvalScope ?? "not_applicable",
+    approvalDirection: input.approvalDirection ?? "not_applicable"
+  };
+}
+function buildApprovalAmountKind(amountHex) {
+  if (amountHex === null) return "not_applicable";
+  return amountHex.toLowerCase() === MAX_UINT256_HEX ? "unlimited" : "exact";
+}
+function decodeBytesArray(body, offsetWord) {
+  if (offsetWord === null) return [];
+  const arrayStart = Number(BigInt(`0x${offsetWord}`)) * 2;
+  const lengthWord = body.slice(arrayStart, arrayStart + 64);
+  if (lengthWord.length !== 64) return [];
+  const itemCount = Number(BigInt(`0x${lengthWord}`));
+  const results = [];
+  for (let index = 0; index < itemCount; index += 1) {
+    const itemOffsetWord = body.slice(
+      arrayStart + 64 + index * 64,
+      arrayStart + 64 + (index + 1) * 64
+    );
+    if (itemOffsetWord.length !== 64) {
+      results.push("0x");
+      continue;
+    }
+    const relativeOffset = Number(BigInt(`0x${itemOffsetWord}`)) * 2;
+    const itemStart = arrayStart + relativeOffset;
+    const itemLengthWord = body.slice(itemStart, itemStart + 64);
+    if (itemLengthWord.length !== 64) {
+      results.push("0x");
+      continue;
+    }
+    const byteLength = Number(BigInt(`0x${itemLengthWord}`));
+    const dataStart = itemStart + 64;
+    const dataEnd = dataStart + byteLength * 2;
+    if (body.length < dataEnd) {
+      results.push("0x");
+      continue;
+    }
+    results.push(`0x${body.slice(dataStart, dataEnd)}`);
+  }
+  return results;
+}
+function decodeSimpleCall(selector, body, toAddress) {
+  const word0 = getWord(body, 0);
+  const word1 = getWord(body, 1);
+  const word2 = getWord(body, 2);
+  const word3 = getWord(body, 3);
+  const word4 = getWord(body, 4);
+  const word5 = getWord(body, 5);
+  const word6 = getWord(body, 6);
+  switch (selector) {
+    case APPROVE_SELECTOR: {
+      const amountHex = word1?.toLowerCase() ?? null;
+      return {
+        decoded: buildDecodedAction({
+          functionName: "approve",
+          selector,
+          actionType: "approve",
+          tokenAddress: toAddress,
+          spender: decodeAddressWord(word0),
+          amount: decodeUintWord(word1),
+          amountKind: buildApprovalAmountKind(amountHex),
+          approvalScope: "single_token",
+          approvalDirection: "grant",
+          params: {
+            spender: decodeAddressWord(word0),
+            amount: decodeUintWord(word1)
+          }
+        }),
+        batch: { isMulticall: false, batchSelector: null, actions: [] }
+      };
+    }
+    case SET_APPROVAL_FOR_ALL_SELECTOR: {
+      const approved = decodeBoolWord(word1);
+      return {
+        decoded: buildDecodedAction({
+          functionName: "setApprovalForAll",
+          selector,
+          actionType: "setApprovalForAll",
+          tokenAddress: toAddress,
+          operator: decodeAddressWord(word0),
+          approvalScope: "collection_all",
+          approvalDirection: approved === false ? "revoke" : "grant",
+          params: {
+            operator: decodeAddressWord(word0),
+            approved
+          }
+        }),
+        batch: { isMulticall: false, batchSelector: null, actions: [] }
+      };
+    }
+    case INCREASE_ALLOWANCE_SELECTOR: {
+      const amountHex = word1?.toLowerCase() ?? null;
+      return {
+        decoded: buildDecodedAction({
+          functionName: "increaseAllowance",
+          selector,
+          actionType: "increaseAllowance",
+          tokenAddress: toAddress,
+          spender: decodeAddressWord(word0),
+          amount: decodeUintWord(word1),
+          amountKind: buildApprovalAmountKind(amountHex),
+          approvalScope: "single_token",
+          approvalDirection: "grant",
+          params: {
+            spender: decodeAddressWord(word0),
+            amount: decodeUintWord(word1)
+          }
+        }),
+        batch: { isMulticall: false, batchSelector: null, actions: [] }
+      };
+    }
+    case TRANSFER_SELECTOR: {
+      return {
+        decoded: buildDecodedAction({
+          functionName: "transfer",
+          selector,
+          actionType: "transfer",
+          tokenAddress: toAddress,
+          recipient: decodeAddressWord(word0),
+          amount: decodeUintWord(word1),
+          amountKind: "exact",
+          approvalScope: "not_applicable",
+          params: {
+            recipient: decodeAddressWord(word0),
+            amount: decodeUintWord(word1)
+          }
+        }),
+        batch: { isMulticall: false, batchSelector: null, actions: [] }
+      };
+    }
+    case TRANSFER_FROM_SELECTOR: {
+      return {
+        decoded: buildDecodedAction({
+          functionName: "transferFrom",
+          selector,
+          actionType: "transferFrom",
+          tokenAddress: toAddress,
+          owner: decodeAddressWord(word0),
+          recipient: decodeAddressWord(word1),
+          amount: decodeUintWord(word2),
+          amountKind: "exact",
+          approvalScope: "not_applicable",
+          params: {
+            owner: decodeAddressWord(word0),
+            recipient: decodeAddressWord(word1),
+            amount: decodeUintWord(word2)
+          }
+        }),
+        batch: { isMulticall: false, batchSelector: null, actions: [] }
+      };
+    }
+    case ERC20_PERMIT_SELECTOR: {
+      return {
+        decoded: buildDecodedAction({
+          functionName: "permit",
+          selector,
+          actionType: "permit",
+          tokenAddress: toAddress,
+          owner: decodeAddressWord(word0),
+          spender: decodeAddressWord(word1),
+          amount: decodeUintWord(word2),
+          amountKind: "exact",
+          approvalScope: "single_token",
+          approvalDirection: "grant",
+          params: {
+            owner: decodeAddressWord(word0),
+            spender: decodeAddressWord(word1),
+            amount: decodeUintWord(word2),
+            deadline: decodeUintWord(word3),
+            v: decodeUintWord(word4),
+            r: word5 === null ? null : `0x${word5}`,
+            s: word6 === null ? null : `0x${word6}`
+          }
+        }),
+        batch: { isMulticall: false, batchSelector: null, actions: [] }
+      };
+    }
+    case ALLOWED_BOOL_PERMIT_SELECTOR: {
+      return {
+        decoded: buildDecodedAction({
+          functionName: "permit",
+          selector,
+          actionType: "permit",
+          tokenAddress: toAddress,
+          owner: decodeAddressWord(word0),
+          spender: decodeAddressWord(word1),
+          amount: null,
+          amountKind: "not_applicable",
+          approvalScope: "single_token",
+          approvalDirection: "grant",
+          params: {
+            owner: decodeAddressWord(word0),
+            spender: decodeAddressWord(word1),
+            nonce: decodeUintWord(word2),
+            expiry: decodeUintWord(word3),
+            allowed: decodeBoolWord(word4),
+            v: decodeUintWord(word5),
+            r: word6 === null ? null : `0x${word6}`,
+            s: getWord(body, 7) === null ? null : `0x${getWord(body, 7)}`
+          }
+        }),
+        batch: { isMulticall: false, batchSelector: null, actions: [] }
+      };
+    }
+    case MULTICALL_BYTES_SELECTOR:
+    case MULTICALL_DEADLINE_BYTES_SELECTOR: {
+      const bytesOffsetWord = selector === MULTICALL_BYTES_SELECTOR ? word0 : word1;
+      const rawCalls = decodeBytesArray(body, bytesOffsetWord);
+      const actions = rawCalls.map((rawCall) => decodeTransactionCalldata(rawCall).decoded);
+      const params = {
+        actionCount: `${actions.length}`
+      };
+      if (selector === MULTICALL_DEADLINE_BYTES_SELECTOR) {
+        params.deadline = decodeUintWord(word0);
+      }
+      return {
+        decoded: buildDecodedAction({
+          functionName: "multicall",
+          selector,
+          actionType: "multicall",
+          tokenAddress: toAddress,
+          params
+        }),
+        batch: {
+          isMulticall: true,
+          batchSelector: selector,
+          actions
+        }
+      };
+    }
+    default:
+      return {
+        decoded: buildDecodedAction({
+          selector,
+          actionType: "unknown",
+          tokenAddress: toAddress
+        }),
+        batch: { isMulticall: false, batchSelector: null, actions: [] }
+      };
+  }
+}
+function decodeTransactionCalldata(calldata, toAddress = null) {
+  const normalizedCalldata = normalizeHex(calldata);
+  const selector = extractSelector(normalizedCalldata);
+  const definition = getTransactionSelectorDefinition(selector);
+  const body = getBody(normalizedCalldata);
+  if (definition === null) {
+    return {
+      decoded: buildDecodedAction({
+        selector: selector === "0x" ? null : selector,
+        actionType: "unknown",
+        tokenAddress: toAddress
+      }),
+      batch: { isMulticall: false, batchSelector: null, actions: [] }
+    };
+  }
+  return decodeSimpleCall(selector, body, toAddress);
+}
+function normalizeTransactionRequest(input, options) {
+  const to = normalizeEvmAddress(input.to);
+  const from = normalizeEvmAddress(input.from);
+  const normalizedCalldata = normalizeHex(input.calldata);
+  const methodSelector = normalizedCalldata === "0x" ? null : extractSelector(normalizedCalldata);
+  const { decoded, batch } = decodeTransactionCalldata(normalizedCalldata, to);
+  return hydrateNormalizedTransactionContext(
+    {
+      eventKind: "transaction",
+      rpcMethod: input.rpcMethod,
+      chainFamily: input.chainFamily,
+      chainId: input.chainId,
+      originDomain: input.originDomain,
+      from,
+      to,
+      valueWei: quantityToDecimal(input.value),
+      calldata: normalizedCalldata,
+      methodSelector,
+      actionType: decoded.actionType,
+      decoded,
+      batch,
+      signature: {
+        isTypedData: false,
+        primaryType: null,
+        domainName: null,
+        domainVersion: null,
+        domainChainId: null,
+        domainChainIdPresent: false,
+        verifyingContract: null,
+        verifyingContractPresent: false,
+        message: {},
+        domain: {},
+        types: {},
+        canonicalJson: "{}",
+        normalizationState: "normalized",
+        missingDomainFields: [],
+        invalidDomainFields: [],
+        permitKind: "none"
+      },
+      intel: {
+        contractDisposition: "unavailable",
+        contractFeedVersion: null,
+        allowlistFeedVersion: null,
+        signatureDisposition: "unavailable",
+        signatureFeedVersion: null,
+        originDisposition: "unavailable",
+        sectionStates: {}
+      },
+      provider: buildProvider(
+        input.surface,
+        input.walletProvider,
+        input.walletMetadata
+      ),
+      counterparty: defaultCounterparty(input.counterparty),
+      meta: {
+        selectorRecognized: methodSelector !== null && getTransactionSelectorDefinition(methodSelector) !== null,
+        typedDataNormalized: false
+      }
+    },
+    options?.intelProvider
+  );
+}
+function normalizeTypedDataRequest(input, options) {
+  const from = normalizeEvmAddress(input.from);
+  const signature = normalizeTypedData(input.typedData);
+  return hydrateNormalizedTransactionContext(
+    {
+      eventKind: "signature",
+      rpcMethod: input.rpcMethod,
+      chainFamily: input.chainFamily,
+      chainId: input.chainId,
+      originDomain: input.originDomain,
+      from,
+      to: signature.verifyingContract,
+      valueWei: "0",
+      calldata: "0x",
+      methodSelector: null,
+      actionType: signature.permitKind === "none" ? "unknown" : "permit",
+      decoded: buildDecodedAction({
+        actionType: signature.permitKind === "none" ? "unknown" : "permit",
+        functionName: signature.permitKind === "none" ? null : "permit",
+        tokenAddress: signature.verifyingContract,
+        selector: null
+      }),
+      batch: {
+        isMulticall: false,
+        batchSelector: null,
+        actions: []
+      },
+      signature,
+      intel: {
+        contractDisposition: "unavailable",
+        contractFeedVersion: null,
+        allowlistFeedVersion: null,
+        signatureDisposition: "unavailable",
+        signatureFeedVersion: null,
+        originDisposition: "unavailable",
+        sectionStates: {}
+      },
+      provider: buildProvider(
+        input.surface,
+        input.walletProvider,
+        input.walletMetadata
+      ),
+      counterparty: defaultCounterparty(input.counterparty),
+      meta: {
+        selectorRecognized: false,
+        typedDataNormalized: signature.normalizationState === "normalized"
+      }
+    },
+    options?.intelProvider
+  );
 }
 
 // node_modules/.pnpm/tldts-core@7.0.27/node_modules/tldts-core/dist/es6/src/domain.js
@@ -10043,6 +10109,7 @@ export {
   extractHostname,
   extractRegistrableDomain,
   extractTld,
+  getDefaultTransactionIntelProvider,
   getEvmCleanupEligibility,
   getReasonMessage,
   getTransactionSelectorDefinition,

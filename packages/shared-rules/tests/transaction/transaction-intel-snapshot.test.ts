@@ -183,7 +183,8 @@ describe("transaction Layer 2 snapshot validation", () => {
       return;
     }
 
-    const intel = resolveCanonicalTransactionIntel(first.snapshot, {
+    const provider = createTransactionIntelProvider(first.snapshot);
+    const intel = resolveCanonicalTransactionIntel(provider, {
       eventKind: "transaction",
       targetAddress: "0x9999999999999999999999999999999999999999",
     });

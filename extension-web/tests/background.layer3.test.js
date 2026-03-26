@@ -6,6 +6,67 @@ import {
   evaluateLayer3RpcRequest,
 } from '../layer3.js';
 
+function buildIntelProvider({
+  contractDisposition = 'no_match',
+  contractFeedVersion = 'layer2.extension-test',
+  contractSectionState = 'fresh',
+  signatureDisposition = 'no_match',
+  signatureFeedVersion = 'layer2.extension-test',
+  signatureSectionState = 'fresh',
+} = {}) {
+  const maliciousContract = Object.freeze({
+    lookupFamily: 'contract',
+    matched: contractDisposition === 'malicious',
+    disposition: contractDisposition,
+    matchedSection: contractDisposition === 'malicious' ? 'maliciousContracts' : undefined,
+    feedVersion: contractFeedVersion,
+    sectionState: contractSectionState,
+    record:
+      contractDisposition === 'malicious'
+        ? Object.freeze({
+            chain: 'evm',
+            address: '0x9999999999999999999999999999999999999999',
+            source: 'ofac',
+            disposition: 'block',
+            confidence: 1,
+            reasonCodes: Object.freeze(['OFAC_SANCTIONS_ADDRESS']),
+          })
+        : null,
+  });
+  const scamSignature = Object.freeze({
+    lookupFamily: 'scam_signature',
+    matched: signatureDisposition === 'malicious',
+    disposition: signatureDisposition,
+    matchedSection: signatureDisposition === 'malicious' ? 'scamSignatures' : undefined,
+    feedVersion: signatureFeedVersion,
+    sectionState: signatureSectionState,
+  });
+  const canonicalResult = Object.freeze({
+    maliciousContract,
+    scamSignature,
+  });
+
+  return {
+    snapshotVersion: 'layer2.extension-test',
+    generatedAt: '2026-03-24T00:00:00.000Z',
+    lookupCanonicalTransactionIntel() {
+      return canonicalResult;
+    },
+    lookupMaliciousContract() {
+      return maliciousContract;
+    },
+    lookupScamSignature() {
+      return scamSignature;
+    },
+  };
+}
+
+const NO_MATCH_PROVIDER = buildIntelProvider();
+const MALICIOUS_PROVIDER = buildIntelProvider({
+  contractDisposition: 'malicious',
+  contractFeedVersion: 'contracts@2026-03-22',
+});
+
 function buildApproveCalldata(spender, amountHex) {
   const normalizedSpender = spender.toLowerCase().replace(/^0x/, '').padStart(64, '0');
   const normalizedAmount = amountHex.replace(/^0x/, '').padStart(64, '0');
@@ -60,16 +121,14 @@ test('eth_sendTransaction approval requests are normalized and gated as WARN', (
     },
     selectedAddress: '0x1111111111111111111111111111111111111111',
     chainId: '0x1',
-    intel: {
-      contractDisposition: 'no_match',
-      signatureDisposition: 'no_match',
-      originDisposition: 'no_match',
-    },
+  }, {
+    intelProvider: NO_MATCH_PROVIDER,
   });
 
   assert.equal(decision.normalizedContext.eventKind, 'transaction');
   assert.equal(decision.normalizedContext.rpcMethod, 'eth_sendTransaction');
   assert.equal(decision.normalizedContext.actionType, 'approve');
+  assert.equal(decision.normalizedContext.intel.contractDisposition, 'no_match');
   assert.equal(decision.verdict.status, 'WARN');
   assert.equal(decision.verdict.overrideLevel, 'confirm');
   assert.equal(decision.action, 'gate');
@@ -99,16 +158,14 @@ test('eth_signTypedData and eth_signTypedData_v4 are normalized as signature req
       },
       selectedAddress: '0x1111111111111111111111111111111111111111',
       chainId: '0x1',
-      intel: {
-        contractDisposition: 'no_match',
-        signatureDisposition: 'no_match',
-        originDisposition: 'no_match',
-      },
+    }, {
+      intelProvider: NO_MATCH_PROVIDER,
     });
 
     assert.equal(decision.normalizedContext.eventKind, 'signature');
     assert.equal(decision.normalizedContext.rpcMethod, rpcMethod);
     assert.equal(decision.normalizedContext.signature.primaryType, 'PermitSingle');
+    assert.equal(decision.normalizedContext.intel.contractDisposition, 'no_match');
     assert.equal(decision.verdict.status, 'WARN');
     assert.equal(decision.modal.primaryAddressLabel, 'Verifying contract');
     assert.equal(decision.modal.confirmation.kind, 'confirm');
@@ -139,14 +196,11 @@ test('safe transfer requests stay ALLOW and forward without a modal', () => {
     },
     selectedAddress: '0x1111111111111111111111111111111111111111',
     chainId: 1,
-    intel: {
-      contractDisposition: 'allowlisted',
-      signatureDisposition: 'no_match',
-      originDisposition: 'no_match',
-    },
     counterparty: {
       recipientIsNew: false,
     },
+  }, {
+    intelProvider: NO_MATCH_PROVIDER,
   });
 
   assert.equal(decision.verdict.status, 'ALLOW');
@@ -155,7 +209,7 @@ test('safe transfer requests stay ALLOW and forward without a modal', () => {
   assert.equal(decision.audit.finalUserAction, 'auto-allowed');
 });
 
-test('malicious contract intel drives BLOCK and the stronger override contract', () => {
+test('provider-fed malicious contract intel drives BLOCK and request intel cannot override it', () => {
   const decision = evaluateLayer3RpcRequest({
     requestId: 'block-malicious',
     rpcMethod: 'eth_sendTransaction',
@@ -179,18 +233,15 @@ test('malicious contract intel drives BLOCK and the stronger override contract',
     selectedAddress: '0x1111111111111111111111111111111111111111',
     chainId: '0x1',
     intel: {
-      contractDisposition: 'malicious',
-      contractFeedVersion: 'contracts@2026-03-22',
-      signatureDisposition: 'no_match',
-      originDisposition: 'no_match',
-      sectionStates: {
-        maliciousContracts: 'fresh',
-        scamSignatures: 'missing',
-        allowlists: 'missing',
-      },
+      contractDisposition: 'no_match',
+      contractFeedVersion: 'request@conflict',
     },
+  }, {
+    intelProvider: MALICIOUS_PROVIDER,
   });
 
+  assert.equal(decision.normalizedContext.intel.contractDisposition, 'malicious');
+  assert.equal(decision.normalizedContext.intel.contractFeedVersion, 'contracts@2026-03-22');
   assert.equal(decision.verdict.status, 'BLOCK');
   assert.equal(decision.verdict.overrideLevel, 'high_friction_confirm');
   assert.equal(decision.modal.verdictLabel, 'Blocked');

@@ -49,6 +49,58 @@ function readNullableString(value) {
   return typeof value === "string" && value.trim() !== "" ? value.trim() : null;
 }
 
+function stableStringify(value) {
+  if (value === null) {
+    return "null";
+  }
+
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return JSON.stringify(value);
+  }
+
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringify(entry)).join(",")}]`;
+  }
+
+  if (!isRecord(value)) {
+    return JSON.stringify(value);
+  }
+
+  const keys = Object.keys(value).sort();
+  return `{${keys
+    .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+    .join(",")}}`;
+}
+
+function hashString(value) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function buildDeterministicRequestId(input) {
+  return `clickshield-${hashString(
+    stableStringify({
+      rpcMethod: input.rpcMethod,
+      rpcParams: input.rpcParams,
+      originUrl: input.originUrl,
+      originDomain: input.originDomain,
+      walletProvider: input.walletProvider,
+      walletMetadata: input.walletMetadata,
+      selectedAddress: input.selectedAddress,
+      chainId: input.chainId,
+      counterparty: input.counterparty,
+    }),
+  )}`;
+}
+
 function safeHostname(rawUrl) {
   try {
     return new URL(rawUrl).hostname.toLowerCase();
@@ -147,66 +199,6 @@ function normalizeCounterparty(value) {
   };
 }
 
-function readDisposition(value, allowed, fallback) {
-  return typeof value === "string" && allowed.includes(value) ? value : fallback;
-}
-
-function normalizeSectionStates(value) {
-  const defaults = {
-    maliciousContracts: "missing",
-    scamSignatures: "missing",
-    allowlists: "missing",
-  };
-
-  if (!isRecord(value)) {
-    return defaults;
-  }
-
-  const output = { ...defaults };
-  for (const [key, state] of Object.entries(value)) {
-    if (typeof state === "string" && state.trim() !== "") {
-      output[key] = state.trim();
-    }
-  }
-  return output;
-}
-
-function normalizeIntel(value) {
-  if (!isRecord(value)) {
-    return {
-      contractDisposition: "unavailable",
-      contractFeedVersion: null,
-      allowlistFeedVersion: null,
-      signatureDisposition: "unavailable",
-      signatureFeedVersion: null,
-      originDisposition: "unavailable",
-      sectionStates: normalizeSectionStates(null),
-    };
-  }
-
-  return {
-    contractDisposition: readDisposition(
-      value.contractDisposition,
-      ["malicious", "allowlisted", "no_match", "unavailable"],
-      "unavailable",
-    ),
-    contractFeedVersion: readNullableString(value.contractFeedVersion),
-    allowlistFeedVersion: readNullableString(value.allowlistFeedVersion),
-    signatureDisposition: readDisposition(
-      value.signatureDisposition,
-      ["malicious", "allowlisted", "no_match", "unavailable"],
-      "unavailable",
-    ),
-    signatureFeedVersion: readNullableString(value.signatureFeedVersion),
-    originDisposition: readDisposition(
-      value.originDisposition,
-      ["allowlisted", "no_match", "unavailable"],
-      "unavailable",
-    ),
-    sectionStates: normalizeSectionStates(value.sectionStates),
-  };
-}
-
 function readTypedDataParam(rpcParams) {
   if (!Array.isArray(rpcParams) || rpcParams.length === 0) {
     return {};
@@ -269,28 +261,44 @@ function extractTypedDataChainId(value) {
 function buildRawRequest(rawRequest) {
   const originUrl = readString(rawRequest?.originUrl);
   const originDomain = readString(rawRequest?.originDomain, safeHostname(originUrl));
+  const rpcParams = Array.isArray(rawRequest?.rpcParams)
+    ? sanitizeJsonValue(rawRequest.rpcParams)
+    : [];
+  const walletMetadata = normalizeWalletMetadata(rawRequest?.walletMetadata);
+  const counterparty = normalizeCounterparty(rawRequest?.counterparty);
 
   return {
-    requestId: readString(rawRequest?.requestId, `clickshield-${Date.now()}`),
+    requestId:
+      readString(rawRequest?.requestId) ||
+      buildDeterministicRequestId({
+        rpcMethod: readString(rawRequest?.rpcMethod),
+        rpcParams,
+        originUrl,
+        originDomain,
+        walletProvider: readString(rawRequest?.walletProvider, "unknown_injected"),
+        walletMetadata,
+        selectedAddress: isAddress(rawRequest?.selectedAddress)
+          ? rawRequest.selectedAddress.trim()
+          : ZERO_ADDRESS,
+        chainId: rawRequest?.chainId ?? null,
+        counterparty,
+      }),
     surface: "extension",
     rpcMethod: readString(rawRequest?.rpcMethod),
-    rpcParams: Array.isArray(rawRequest?.rpcParams)
-      ? sanitizeJsonValue(rawRequest.rpcParams)
-      : [],
+    rpcParams,
     originUrl,
     originDomain,
     walletProvider: readString(rawRequest?.walletProvider, "unknown_injected"),
-    walletMetadata: normalizeWalletMetadata(rawRequest?.walletMetadata),
+    walletMetadata,
     selectedAddress: isAddress(rawRequest?.selectedAddress)
       ? rawRequest.selectedAddress.trim()
       : ZERO_ADDRESS,
     chainId: rawRequest?.chainId ?? null,
-    intel: normalizeIntel(rawRequest?.intel),
-    counterparty: normalizeCounterparty(rawRequest?.counterparty),
+    counterparty,
   };
 }
 
-function buildNormalizedContext(rawRequest) {
+function buildNormalizedContext(rawRequest, options = {}) {
   const baseRequest = buildRawRequest(rawRequest);
   if (!isLayer3RpcMethod(baseRequest.rpcMethod)) {
     throw new Error(`Unsupported Layer 3 RPC method: ${baseRequest.rpcMethod}`);
@@ -328,8 +336,9 @@ function buildNormalizedContext(rawRequest) {
         walletProvider: baseRequest.walletProvider,
         walletMetadata: baseRequest.walletMetadata,
         surface: "extension",
-        intel: baseRequest.intel,
         counterparty: baseRequest.counterparty,
+      }, {
+        intelProvider: options.intelProvider ?? null,
       }),
     };
   }
@@ -353,8 +362,9 @@ function buildNormalizedContext(rawRequest) {
       walletProvider: baseRequest.walletProvider,
       walletMetadata: baseRequest.walletMetadata,
       surface: "extension",
-      intel: baseRequest.intel,
       counterparty: baseRequest.counterparty,
+    }, {
+      intelProvider: options.intelProvider ?? null,
     }),
   };
 }
@@ -536,9 +546,10 @@ export function isLayer3RpcMethod(method) {
   return LAYER3_RPC_METHOD_SET.has(method);
 }
 
-export function evaluateLayer3RpcRequest(rawRequest) {
+export function evaluateLayer3RpcRequest(rawRequest, options = {}) {
   const { rawRequest: normalizedRawRequest, normalizedContext } = buildNormalizedContext(
     rawRequest,
+    options,
   );
   const evaluation = evaluateTransaction(normalizedContext);
   const verdict = evaluation.verdict;

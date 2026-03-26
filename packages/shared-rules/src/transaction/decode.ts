@@ -12,7 +12,9 @@ import {
   TRANSFER_FROM_SELECTOR,
   TRANSFER_SELECTOR,
 } from "./selectors.js";
+import { hydrateNormalizedTransactionContext } from "./hydrate.js";
 import { normalizeTypedData } from "./typed-data.js";
+import type { TransactionIntelProvider } from "./intel-provider.js";
 import type {
   ApprovalAmountKind,
   DecodedTransactionAction,
@@ -21,7 +23,6 @@ import type {
   RawTransactionRequest,
   TransactionBatchContext,
   TransactionCounterpartyContext,
-  TransactionIntelContext,
   TransactionProviderContext,
   TransactionParamValue,
 } from "./types.js";
@@ -83,36 +84,6 @@ function defaultCounterparty(
   return {
     spenderTrusted: input?.spenderTrusted ?? null,
     recipientIsNew: input?.recipientIsNew ?? null,
-  };
-}
-
-function defaultIntel(): TransactionIntelContext {
-  return {
-    contractDisposition: "unavailable",
-    contractFeedVersion: null,
-    allowlistFeedVersion: null,
-    signatureDisposition: "unavailable",
-    signatureFeedVersion: null,
-    originDisposition: "unavailable",
-    sectionStates: {},
-  };
-}
-
-function resolveIntel(
-  input: Partial<TransactionIntelContext> | undefined
-): TransactionIntelContext {
-  const defaults = defaultIntel();
-  return {
-    contractDisposition: input?.contractDisposition ?? defaults.contractDisposition,
-    contractFeedVersion: input?.contractFeedVersion ?? defaults.contractFeedVersion,
-    allowlistFeedVersion:
-      input?.allowlistFeedVersion ?? defaults.allowlistFeedVersion,
-    signatureDisposition:
-      input?.signatureDisposition ?? defaults.signatureDisposition,
-    signatureFeedVersion:
-      input?.signatureFeedVersion ?? defaults.signatureFeedVersion,
-    originDisposition: input?.originDisposition ?? defaults.originDisposition,
-    sectionStates: input?.sectionStates ?? defaults.sectionStates,
   };
 }
 
@@ -429,7 +400,10 @@ export function decodeTransactionCalldata(
 }
 
 export function normalizeTransactionRequest(
-  input: RawTransactionRequest
+  input: RawTransactionRequest,
+  options?: {
+    readonly intelProvider?: TransactionIntelProvider | null;
+  }
 ): NormalizedTransactionContext {
   const to = normalizeEvmAddress(input.to);
   const from = normalizeEvmAddress(input.from);
@@ -437,7 +411,8 @@ export function normalizeTransactionRequest(
   const methodSelector = normalizedCalldata === "0x" ? null : extractSelector(normalizedCalldata);
   const { decoded, batch } = decodeTransactionCalldata(normalizedCalldata, to);
 
-  return {
+  return hydrateNormalizedTransactionContext(
+    {
     eventKind: "transaction",
     rpcMethod: input.rpcMethod,
     chainFamily: input.chainFamily,
@@ -469,7 +444,15 @@ export function normalizeTransactionRequest(
       invalidDomainFields: [],
       permitKind: "none",
     },
-    intel: resolveIntel(input.intel),
+    intel: {
+      contractDisposition: "unavailable",
+      contractFeedVersion: null,
+      allowlistFeedVersion: null,
+      signatureDisposition: "unavailable",
+      signatureFeedVersion: null,
+      originDisposition: "unavailable",
+      sectionStates: {},
+    },
     provider: buildProvider(
       input.surface,
       input.walletProvider,
@@ -480,16 +463,22 @@ export function normalizeTransactionRequest(
       selectorRecognized: methodSelector !== null && getTransactionSelectorDefinition(methodSelector) !== null,
       typedDataNormalized: false,
     },
-  };
+    },
+    options?.intelProvider
+  );
 }
 
 export function normalizeTypedDataRequest(
-  input: RawSignatureRequest
+  input: RawSignatureRequest,
+  options?: {
+    readonly intelProvider?: TransactionIntelProvider | null;
+  }
 ): NormalizedTransactionContext {
   const from = normalizeEvmAddress(input.from);
   const signature = normalizeTypedData(input.typedData);
 
-  return {
+  return hydrateNormalizedTransactionContext(
+    {
     eventKind: "signature",
     rpcMethod: input.rpcMethod,
     chainFamily: input.chainFamily,
@@ -513,7 +502,15 @@ export function normalizeTypedDataRequest(
       actions: [],
     },
     signature,
-    intel: resolveIntel(input.intel),
+    intel: {
+      contractDisposition: "unavailable",
+      contractFeedVersion: null,
+      allowlistFeedVersion: null,
+      signatureDisposition: "unavailable",
+      signatureFeedVersion: null,
+      originDisposition: "unavailable",
+      sectionStates: {},
+    },
     provider: buildProvider(
       input.surface,
       input.walletProvider,
@@ -524,5 +521,7 @@ export function normalizeTypedDataRequest(
       selectorRecognized: false,
       typedDataNormalized: signature.normalizationState === "normalized",
     },
-  };
+    },
+    options?.intelProvider
+  );
 }
