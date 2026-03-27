@@ -15,6 +15,31 @@ import {
 
 const WALLET_LAYER4_OUTPUT_EVENT = "clickshield:wallet-layer4-output";
 
+function buildLayer4ThreatLogState(params: {
+  readonly previousState?: ReturnType<typeof createEmptyThreatLogState> | null;
+  readonly reports: readonly ReturnType<typeof createWalletLayer4Report>[];
+}) {
+  return buildThreatLogState({
+    previousState: params.previousState ?? createEmptyThreatLogState(),
+    scans: [],
+    layer4Reports: params.reports,
+    scanHistoryTruthState: "unknown",
+    systemStatus: createThreatSystemStatus(),
+    manifest: null,
+    engine: null,
+    healthSnapshot: null,
+    referenceTime: null,
+  });
+}
+
+function getLayer4ReportIds(
+  state: ReturnType<typeof buildThreatLogState>,
+): string[] {
+  return state.entries
+    .filter((entry) => entry.layer === "layer4" && entry.reportId)
+    .map((entry) => entry.reportId as string);
+}
+
 describe("dashboard Layer 4 runtime validator", () => {
   it("accepts a canonical payload and preserves exact Layer 4 truth fields without mutating input", () => {
     const report = createWalletLayer4Report({
@@ -88,6 +113,31 @@ describe("dashboard Layer 4 runtime validator", () => {
 });
 
 describe("dashboard Layer 4 runtime ingestion", () => {
+  it("fails safe for null, undefined, and empty array inputs without appending reports", () => {
+    const existingReport = createWalletLayer4Report({
+      reportId: "wallet-report-empty-input-existing",
+      generatedAt: "2026-03-26T12:05:00.000Z",
+    });
+    const previousReports = [existingReport];
+    const inputCases = [
+      { label: "null", input: null },
+      { label: "undefined", input: undefined },
+      { label: "empty array", input: [] },
+    ];
+
+    for (const inputCase of inputCases) {
+      const ingestion = ingestLayer4RuntimeReports({
+        previousReports,
+        input: inputCase.input,
+      });
+
+      expect(ingestion.invalidCode, inputCase.label).toBe(
+        DEFAULT_LAYER4_RUNTIME_INVALID_CODE,
+      );
+      expect(ingestion.reports, inputCase.label).toEqual(previousReports);
+    }
+  });
+
   it("rejects invalid persisted payloads while keeping valid load-path payloads", () => {
     const validReport = createWalletLayer4Report({
       reportId: "wallet-report-load-valid",
@@ -123,6 +173,91 @@ describe("dashboard Layer 4 runtime ingestion", () => {
     expect(state.entries.filter((entry) => entry.layer === "layer4").map((entry) => entry.reportId)).toEqual([
       validReport.reportId,
     ]);
+  });
+
+  it("dedupes duplicate report ids deterministically and keeps the newest payload", () => {
+    const newestReport = createWalletLayer4Report({
+      reportId: "wallet-report-duplicate",
+      generatedAt: "2026-03-26T12:45:00.000Z",
+      classification: "manual_action_required",
+      statusLabel: "Scan completed. Issues detected. Manual action required.",
+      cleanupActionCount: 0,
+    });
+    const olderReport = createWalletLayer4Report({
+      reportId: newestReport.reportId,
+      generatedAt: "2026-03-26T12:15:00.000Z",
+    });
+    const duplicateNewestReport = structuredClone(newestReport);
+
+    const ingestion = ingestLayer4RuntimeReports({
+      previousReports: [],
+      input: [olderReport, newestReport, duplicateNewestReport],
+    });
+    const state = buildLayer4ThreatLogState({
+      reports: ingestion.reports,
+    });
+
+    expect(ingestion.invalidCode).toBe(DEFAULT_LAYER4_RUNTIME_INVALID_CODE);
+    expect(ingestion.reports).toEqual([newestReport]);
+    expect(getLayer4ReportIds(state)).toEqual([newestReport.reportId]);
+  });
+
+  it("keeps valid reports from mixed payloads, drops invalid entries, and preserves deterministic ordering", () => {
+    const olderValidReport = createWalletLayer4Report({
+      reportId: "wallet-report-mixed-older",
+      generatedAt: "2026-03-26T12:20:00.000Z",
+    });
+    const invalidReport = createWalletLayer4Report({
+      reportId: "wallet-report-mixed-invalid",
+      generatedAt: "2026-03-26T12:25:00.000Z",
+      findingSpecs: [{ findingId: "   " }],
+    });
+    const newestValidReport = createWalletLayer4Report({
+      reportId: "wallet-report-mixed-newest",
+      generatedAt: "2026-03-26T12:30:00.000Z",
+    });
+
+    const ingestion = ingestLayer4RuntimeReports({
+      previousReports: [],
+      input: [olderValidReport, invalidReport, newestValidReport],
+    });
+    const state = buildLayer4ThreatLogState({
+      reports: ingestion.reports,
+    });
+
+    expect(ingestion.invalidCode).toBe("invalid_layer4_reason_code");
+    expect(ingestion.reports).toEqual([newestValidReport, olderValidReport]);
+    expect(getLayer4ReportIds(state)).toEqual([
+      newestValidReport.reportId,
+      olderValidReport.reportId,
+    ]);
+  });
+
+  it("rejects partial structures without crashing or mutating prior runtime state", () => {
+    const existingReport = createWalletLayer4Report({
+      reportId: "wallet-report-partial-existing",
+      generatedAt: "2026-03-26T12:05:00.000Z",
+    });
+    const previousReports = [existingReport];
+    const baseReport = createWalletLayer4Report({
+      reportId: "wallet-report-partial-base",
+      generatedAt: "2026-03-26T12:10:00.000Z",
+    });
+    const partialInputs: unknown[] = [
+      { ...baseReport, result: undefined },
+      { ...baseReport, request: { ...baseReport.request, walletAddress: undefined } },
+      { ...baseReport, summary: undefined },
+    ];
+
+    for (const partialInput of partialInputs) {
+      const ingestion = ingestLayer4RuntimeReports({
+        previousReports,
+        input: partialInput,
+      });
+
+      expect(ingestion.invalidCode).toBe(DEFAULT_LAYER4_RUNTIME_INVALID_CODE);
+      expect(ingestion.reports).toEqual(previousReports);
+    }
   });
 
   it("appends valid runtime events and blocks invalid runtime events on the App event path", () => {
@@ -206,6 +341,146 @@ describe("dashboard Layer 4 runtime ingestion", () => {
     expect(firstIngestion.invalidCode).toBe(DEFAULT_LAYER4_RUNTIME_INVALID_CODE);
     expect(secondIngestion.invalidCode).toBe(DEFAULT_LAYER4_RUNTIME_INVALID_CODE);
     expect(secondIngestion.reports).toEqual(firstIngestion.reports);
+  });
+
+  it("stays stable across repeated ingestion of the same valid payload", () => {
+    const report = createWalletLayer4Report({
+      reportId: "wallet-report-runtime-repeat-many",
+      generatedAt: "2026-03-26T12:40:00.000Z",
+    });
+
+    let reports: ReturnType<typeof createWalletLayer4Report>[] = [];
+    for (let index = 0; index < 5; index += 1) {
+      const ingestion = ingestLayer4RuntimeReports({
+        previousReports: reports,
+        input: { reports: [report] },
+      });
+
+      expect(ingestion.invalidCode).toBe(DEFAULT_LAYER4_RUNTIME_INVALID_CODE);
+      reports = ingestion.reports;
+    }
+
+    const state = buildLayer4ThreatLogState({
+      reports,
+    });
+
+    expect(reports).toEqual([report]);
+    expect(getLayer4ReportIds(state)).toEqual([report.reportId]);
+  });
+
+  it("handles high-volume runtime payloads deterministically without mutating input", () => {
+    const highVolumeReports = Array.from({ length: 250 }, (_, index) =>
+      createWalletLayer4Report({
+        reportId: `wallet-report-batch-${String(index + 1).padStart(3, "0")}`,
+        generatedAt: new Date(
+          Date.UTC(2026, 2, 26, 12, Math.floor(index / 60), index % 60),
+        ).toISOString(),
+      }),
+    );
+    const highVolumeSnapshot = structuredClone(highVolumeReports);
+
+    const firstIngestion = ingestLayer4RuntimeReports({
+      previousReports: [],
+      input: highVolumeReports,
+    });
+    const secondIngestion = ingestLayer4RuntimeReports({
+      previousReports: [],
+      input: highVolumeReports,
+    });
+    const state = buildLayer4ThreatLogState({
+      reports: firstIngestion.reports,
+    });
+
+    expect(firstIngestion.invalidCode).toBe(DEFAULT_LAYER4_RUNTIME_INVALID_CODE);
+    expect(secondIngestion.invalidCode).toBe(DEFAULT_LAYER4_RUNTIME_INVALID_CODE);
+    expect(firstIngestion.reports).toEqual(secondIngestion.reports);
+    expect(firstIngestion.reports).toHaveLength(highVolumeReports.length);
+    expect(getLayer4ReportIds(state)).toHaveLength(highVolumeReports.length);
+    expect(highVolumeReports).toEqual(highVolumeSnapshot);
+  });
+
+  it("remains deterministic under a rapid runtime event storm", () => {
+    const olderDuplicateReport = createWalletLayer4Report({
+      reportId: "wallet-report-storm-duplicate",
+      generatedAt: "2026-03-26T12:15:00.000Z",
+    });
+    const invalidStormReport = createWalletLayer4Report({
+      reportId: "wallet-report-storm-invalid",
+      generatedAt: "2026-03-26T12:20:00.000Z",
+      findingSpecs: [{ findingId: "   " }],
+    });
+    const middleReport = createWalletLayer4Report({
+      reportId: "wallet-report-storm-middle",
+      generatedAt: "2026-03-26T12:30:00.000Z",
+    });
+    const newestDuplicateReport = createWalletLayer4Report({
+      reportId: olderDuplicateReport.reportId,
+      generatedAt: "2026-03-26T12:45:00.000Z",
+      classification: "execution_reported",
+      statusLabel: "Scan completed. Cleanup execution was reported.",
+    });
+    const newestReport = createWalletLayer4Report({
+      reportId: "wallet-report-storm-newest",
+      generatedAt: "2026-03-26T12:50:00.000Z",
+    });
+    const eventDetails = [
+      { report: olderDuplicateReport },
+      { report: invalidStormReport },
+      { report: middleReport },
+      { report: olderDuplicateReport },
+      { report: newestDuplicateReport },
+      { report: newestReport },
+    ];
+
+    const replayStorm = () => {
+      const runtimeTarget = new EventTarget();
+      let reports: ReturnType<typeof createWalletLayer4Report>[] = [];
+
+      const handleWalletLayer4Output = (event: Event) => {
+        reports = ingestLayer4RuntimeReports({
+          previousReports: reports,
+          input: (event as CustomEvent<unknown>).detail,
+        }).reports;
+      };
+
+      runtimeTarget.addEventListener(
+        WALLET_LAYER4_OUTPUT_EVENT,
+        handleWalletLayer4Output as EventListener,
+      );
+
+      try {
+        for (const detail of eventDetails) {
+          runtimeTarget.dispatchEvent(
+            new CustomEvent(WALLET_LAYER4_OUTPUT_EVENT, { detail }),
+          );
+        }
+      } finally {
+        runtimeTarget.removeEventListener(
+          WALLET_LAYER4_OUTPUT_EVENT,
+          handleWalletLayer4Output as EventListener,
+        );
+      }
+
+      return reports;
+    };
+
+    const firstStormReports = replayStorm();
+    const secondStormReports = replayStorm();
+    const state = buildLayer4ThreatLogState({
+      reports: firstStormReports,
+    });
+
+    expect(firstStormReports).toEqual([
+      newestReport,
+      newestDuplicateReport,
+      middleReport,
+    ]);
+    expect(secondStormReports).toEqual(firstStormReports);
+    expect(getLayer4ReportIds(state)).toEqual([
+      newestReport.reportId,
+      newestDuplicateReport.reportId,
+      middleReport.reportId,
+    ]);
   });
 });
 
