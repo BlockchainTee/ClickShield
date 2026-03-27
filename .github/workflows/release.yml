@@ -91,6 +91,85 @@ jobs:
           chmod 600 private_keys/AuthKey.p8
           echo "APPLE_API_KEY_PATH=private_keys/AuthKey.p8" >> "$GITHUB_ENV"
 
+      - name: Compare updater pubkey with active signing secret
+        working-directory: desktop
+        shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "TAURI_SIGNING_PRIVATE_KEY_PRESENT=no"
+            echo "UPDATER_PUBKEY_RESULT=BLOCKED"
+            exit 1
+          fi
+
+          echo "TAURI_SIGNING_PRIVATE_KEY_PRESENT=yes"
+
+          committed_pubkey="$(node -e "const fs=require('fs');const cfg=JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json','utf8'));const key=cfg?.plugins?.updater?.pubkey;if(typeof key!=='string'||key.length===0){process.exit(1)}process.stdout.write(key)")"
+
+          temp_root="$(mktemp -d "${RUNNER_TEMP:-/tmp}/updater-pubkey-check.XXXXXX")"
+          cleanup() {
+            rm -rf "$temp_root"
+          }
+          trap cleanup EXIT
+
+          mkdir -p "$temp_root/src"
+
+          printf '%s\n' '[package]' \
+            'name = "updater-pubkey-check"' \
+            'version = "0.1.0"' \
+            'edition = "2021"' \
+            '' \
+            '[dependencies]' \
+            'base64 = "0.22.1"' \
+            'minisign = "0.9.1"' > "$temp_root/Cargo.toml"
+
+          printf '%s\n' \
+            'use base64::Engine;' \
+            'use minisign::{PublicKey, SecretKeyBox};' \
+            '' \
+            'fn main() {' \
+            '    let secret_b64 = std::env::var("TAURI_SIGNING_PRIVATE_KEY").expect("missing TAURI_SIGNING_PRIVATE_KEY");' \
+            '    let password = std::env::var("TAURI_SIGNING_PRIVATE_KEY_PASSWORD").ok();' \
+            '    let secret_box = base64::engine::general_purpose::STANDARD' \
+            '        .decode(secret_b64.trim())' \
+            '        .expect("unable to base64 decode TAURI_SIGNING_PRIVATE_KEY");' \
+            '    let secret_box = String::from_utf8(secret_box).expect("TAURI_SIGNING_PRIVATE_KEY did not decode to UTF-8");' \
+            '    let sk_box = SecretKeyBox::from_string(secret_box.trim_end()).expect("unable to parse minisign secret key box");' \
+            '    let sk = sk_box.into_secret_key(password).expect("unable to decrypt minisign secret key");' \
+            '    let pk = PublicKey::from_secret_key(&sk).expect("unable to derive minisign public key");' \
+            '    let pk_box = pk.to_box().expect("unable to serialize minisign public key box").to_string();' \
+            '    let encoded = base64::engine::general_purpose::STANDARD.encode(pk_box);' \
+            '    println!("{encoded}");' \
+            '}' > "$temp_root/src/main.rs"
+
+          derived_pubkey="$(cargo run --quiet --manifest-path "$temp_root/Cargo.toml")"
+
+          if [ -z "${derived_pubkey}" ]; then
+            echo "UPDATER_PUBKEY_RESULT=BLOCKED"
+            exit 1
+          fi
+
+          prefix_len=16
+          suffix_len=16
+
+          echo "COMMITTED_PUBKEY_PREFIX=${committed_pubkey:0:prefix_len}"
+          echo "COMMITTED_PUBKEY_SUFFIX=${committed_pubkey: -suffix_len}"
+          echo "DERIVED_PUBKEY_PREFIX=${derived_pubkey:0:prefix_len}"
+          echo "DERIVED_PUBKEY_SUFFIX=${derived_pubkey: -suffix_len}"
+
+          if [ "$committed_pubkey" = "$derived_pubkey" ]; then
+            echo "UPDATER_PUBKEY_RESULT=MATCH"
+            exit 0
+          fi
+
+          echo "UPDATER_PUBKEY_RESULT=MISMATCH"
+          echo "DERIVED_PUBKEY=${derived_pubkey}"
+          exit 1
+
       - name: Build watchdog sidecar
         working-directory: desktop
         shell: bash
