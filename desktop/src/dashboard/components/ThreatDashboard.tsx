@@ -256,7 +256,7 @@ function FeedPanel(props: {
   return (
     <ThreatDashboardCard
       title="Recent Threat Activity"
-      subtitle="Deterministic activity feed from restored desktop history and current status snapshots."
+      subtitle="Deterministic activity feed derived from the normalized desktop threat log."
     >
       {props.isLoading && props.entries.length === 0 ? (
         <DashboardLoadingState />
@@ -339,6 +339,9 @@ function DetailsPanel(props: {
           ) : null}
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-2">
+              <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-1 text-[11px] text-slate-200">
+                {props.details.eventKindLabel}
+              </span>
               <span className="rounded-full border border-sky-500/40 bg-sky-500/10 px-2 py-1 text-[11px] text-sky-200">
                 {props.details.layerLabel}
               </span>
@@ -347,6 +350,9 @@ function DetailsPanel(props: {
               </span>
               <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-1 text-[11px] text-slate-200">
                 {props.details.severityLabel}
+              </span>
+              <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-1 text-[11px] text-slate-200">
+                {props.details.sourceSurfaceLabel}
               </span>
             </div>
             <div className="text-sm font-medium text-slate-100">{props.details.title}</div>
@@ -357,7 +363,12 @@ function DetailsPanel(props: {
             <div className="rounded-xl border border-slate-800 bg-slate-950/35 px-3 py-3">
               <div className="text-[11px] uppercase tracking-wide text-slate-500">Observed</div>
               <div className="mt-2 text-slate-100">{props.details.occurredAtLabel}</div>
-              <div className="mt-1 text-slate-400">{props.details.surfaceLabel}</div>
+              <div className="mt-1 text-slate-400">
+                Source: {props.details.sourceSurfaceLabel}
+              </div>
+              <div className="mt-1 text-slate-500">
+                Target: {props.details.surfaceLabel}
+              </div>
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-950/35 px-3 py-3">
               <div className="text-[11px] uppercase tracking-wide text-slate-500">Related Report</div>
@@ -371,6 +382,18 @@ function DetailsPanel(props: {
             <div className="text-[11px] uppercase tracking-wide text-slate-500">Target</div>
             <div className="rounded-xl border border-slate-800 bg-slate-950/35 px-3 py-3 font-mono text-[11px] text-slate-100 break-all">
               {props.details.targetLabel ?? "No target label recorded"}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="text-[11px] uppercase tracking-wide text-slate-500">Status Truth</div>
+            <div className="rounded-xl border border-slate-800 bg-slate-950/35 px-3 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="text-slate-100">{props.details.statusTruthLabel}</div>
+                <div className="font-mono text-[11px] text-slate-500 break-all">
+                  {props.details.sourceRef ?? "Unavailable"}
+                </div>
+              </div>
             </div>
           </div>
 
@@ -526,30 +549,32 @@ function LayerBreakdownPanel({ summary }: { readonly summary: ThreatDashboardSum
 function RecentScanSummaryPanel({ summary }: { readonly summary: ThreatDashboardSummary }) {
   return (
     <ThreatDashboardCard
-      title="Recent Scan Summary"
-      subtitle="Counts are computed from the currently loaded immutable dashboard entries."
+      title="Threat Log Summary"
+      subtitle="Counts are computed from the normalized desktop threat log."
     >
       <div className="grid grid-cols-2 gap-3 text-xs">
         <div className="rounded-xl border border-slate-800 bg-slate-950/35 px-3 py-3">
-          <div className="text-[11px] uppercase tracking-wide text-slate-500">Total loaded</div>
-          <div className="mt-2 text-lg font-medium text-slate-100">{summary.totalEntries}</div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">Blocked</div>
+          <div className="mt-2 text-lg font-medium text-slate-100">
+            {summary.actionBreakdown.blocked}
+          </div>
         </div>
         <div className="rounded-xl border border-slate-800 bg-slate-950/35 px-3 py-3">
-          <div className="text-[11px] uppercase tracking-wide text-slate-500">Reported</div>
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">Warned</div>
           <div className="mt-2 text-lg font-medium text-slate-100">
-            {summary.decisionBreakdown.reported}
+            {summary.actionBreakdown.warned}
+          </div>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/35 px-3 py-3">
+          <div className="text-[11px] uppercase tracking-wide text-slate-500">Allowed</div>
+          <div className="mt-2 text-lg font-medium text-slate-100">
+            {summary.actionBreakdown.allowed}
           </div>
         </div>
         <div className="rounded-xl border border-slate-800 bg-slate-950/35 px-3 py-3">
           <div className="text-[11px] uppercase tracking-wide text-slate-500">Unknown truth</div>
           <div className="mt-2 text-lg font-medium text-slate-100">
             {summary.entriesWithUnknownTruth}
-          </div>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-950/35 px-3 py-3">
-          <div className="text-[11px] uppercase tracking-wide text-slate-500">High severity</div>
-          <div className="mt-2 text-lg font-medium text-slate-100">
-            {summary.severityBreakdown.high + summary.severityBreakdown.critical}
           </div>
         </div>
       </div>
@@ -597,7 +622,7 @@ export function ThreatDashboard({
       <div className="mt-4">
         <ThreatDashboardCard
           title="Filter Activity"
-          subtitle="Refine the feed by layer, severity, decision, window, and surface."
+          subtitle="Refine the feed by layer, severity, decision, window, and source surface."
           actions={
             filtersActive ? (
               <button
@@ -654,6 +679,9 @@ export function ThreatDashboard({
               }
               options={[
                 { value: "all", label: "All decisions" },
+                { value: "blocked", label: "Blocked" },
+                { value: "warned", label: "Warned" },
+                { value: "allowed", label: "Allowed" },
                 { value: "observed", label: "Observed" },
                 { value: "reviewed", label: "Reviewed" },
                 { value: "reported", label: "Reported" },
@@ -678,21 +706,21 @@ export function ThreatDashboard({
               ]}
             />
             <FilterSelect
-              label="Surface"
-              value={filters.surface}
-              onChange={(surface) =>
+              label="Source"
+              value={filters.sourceSurface}
+              onChange={(sourceSurface) =>
                 onFiltersChange({
                   ...filters,
-                  surface: surface as ThreatDashboardFilterState["surface"],
+                  sourceSurface:
+                    sourceSurface as ThreatDashboardFilterState["sourceSurface"],
                 })
               }
               options={[
-                { value: "all", label: "All surfaces" },
-                { value: "browser", label: "Browser" },
-                { value: "wallet", label: "Wallet" },
+                { value: "all", label: "All sources" },
                 { value: "desktop", label: "Desktop" },
-                { value: "document", label: "Document" },
-                { value: "api", label: "API" },
+                { value: "extension", label: "Extension" },
+                { value: "mobile", label: "Mobile" },
+                { value: "manual_scan", label: "Manual Scan" },
                 { value: "unknown", label: "Unknown" },
               ]}
             />
@@ -724,7 +752,7 @@ export function ThreatDashboard({
 
       {entries.length > 0 ? (
         <p className="mt-4 text-[11px] text-slate-500">
-          Entries are append-only and ordered by observed timestamp, then id, for stable rendering.
+          Entries in the desktop threat log are ordered by observed timestamp, then id, for stable rendering.
         </p>
       ) : null}
     </section>

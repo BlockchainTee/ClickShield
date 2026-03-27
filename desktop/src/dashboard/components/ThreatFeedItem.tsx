@@ -21,6 +21,15 @@ function layerBadgeClass(layer: ThreatLogEntry["layer"]): string {
 }
 
 function decisionBadgeClass(decision: ThreatLogEntry["decision"]): string {
+  if (decision === "blocked") {
+    return "border-red-500/40 bg-red-500/10 text-red-200";
+  }
+  if (decision === "warned") {
+    return "border-amber-500/40 bg-amber-500/10 text-amber-200";
+  }
+  if (decision === "allowed") {
+    return "border-emerald-500/40 bg-emerald-500/10 text-emerald-200";
+  }
   if (decision === "reported") {
     return "border-red-500/40 bg-red-500/10 text-red-200";
   }
@@ -50,6 +59,22 @@ function severityAccentClass(severity: ThreatLogEntry["severity"]): string {
     return "bg-emerald-400";
   }
   return "bg-slate-500";
+}
+
+function sourceSurfaceBadgeClass(sourceSurface: ThreatLogEntry["sourceSurface"]): string {
+  if (sourceSurface === "desktop") {
+    return "border-sky-500/40 bg-sky-500/10 text-sky-200";
+  }
+  if (sourceSurface === "extension") {
+    return "border-violet-500/40 bg-violet-500/10 text-violet-200";
+  }
+  if (sourceSurface === "mobile") {
+    return "border-emerald-500/40 bg-emerald-500/10 text-emerald-200";
+  }
+  if (sourceSurface === "manual_scan") {
+    return "border-amber-500/40 bg-amber-500/10 text-amber-200";
+  }
+  return "border-slate-600 bg-slate-900/80 text-slate-200";
 }
 
 function titleLabel(value: string): string {
@@ -83,6 +108,13 @@ export function ThreatFeedItem({ entry, isSelected, onSelect }: ThreatFeedItemPr
               className={`inline-flex rounded-full border px-2 py-1 ${decisionBadgeClass(entry.decision)}`}
             >
               {entry.decision === "unknown" ? "Unknown decision" : titleLabel(entry.decision)}
+            </span>
+            <span
+              className={`inline-flex rounded-full border px-2 py-1 ${sourceSurfaceBadgeClass(entry.sourceSurface)}`}
+            >
+              {entry.sourceSurface === "unknown"
+                ? "Unknown source"
+                : titleLabel(entry.sourceSurface)}
             </span>
             <span className="inline-flex items-center gap-2 text-slate-400">
               <span className={`h-2 w-2 rounded-full ${severityAccentClass(entry.severity)}`} />

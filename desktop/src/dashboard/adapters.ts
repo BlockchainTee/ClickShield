@@ -1,15 +1,12 @@
 import type {
-  ThreatDecision,
   ThreatFailSafeState,
-  ThreatLayer,
   ThreatLogEntry,
   ThreatProviderState,
-  ThreatSeverity,
-  ThreatSurface,
   ThreatSystemStatus,
   ThreatTruthState,
 } from "./types";
-import { parseThreatTimestamp } from "./selectors";
+import { normalizeScanThreatLogEntries } from "./threatLog";
+import { parseThreatTimestamp } from "./time";
 
 export interface ThreatDashboardScanSource {
   readonly id: string;
@@ -76,163 +73,6 @@ function readBoolean(value: unknown): boolean | null {
   return typeof value === "boolean" ? value : null;
 }
 
-function normalizeThreatToken(value: string): string {
-  return value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "");
-}
-
-function formatThreatTypeLabel(value: string): string {
-  const normalized = value.trim();
-  if (!normalized) {
-    return "Unknown activity";
-  }
-
-  return normalized
-    .split(/[_\s-]+/)
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
-    .join(" ");
-}
-
-function readThreatLayer(value: string | null | undefined): ThreatLayer {
-  return value === "layer1" || value === "layer3" || value === "layer4" ? value : "unknown";
-}
-
-function readThreatDecision(value: string | null | undefined): ThreatDecision {
-  return value === "observed" ||
-    value === "reviewed" ||
-    value === "reported" ||
-    value === "degraded"
-    ? value
-    : "unknown";
-}
-
-function readThreatSeverity(value: string | null | undefined): ThreatSeverity {
-  return value === "low" ||
-    value === "medium" ||
-    value === "high" ||
-    value === "critical"
-    ? value
-    : "unknown";
-}
-
-function readThreatSurface(value: string | null | undefined): ThreatSurface {
-  if (
-    value === "browser" ||
-    value === "wallet" ||
-    value === "desktop" ||
-    value === "document" ||
-    value === "api"
-  ) {
-    return value;
-  }
-
-  return "unknown";
-}
-
-function buildEntryTitle(scan: ThreatDashboardScanSource, surface: ThreatSurface): string {
-  const threatLabel = formatThreatTypeLabel(scan.threatType);
-  if (surface === "document") {
-    return `Document activity loaded: ${threatLabel}`;
-  }
-  if (surface === "browser") {
-    return `Browser activity loaded: ${threatLabel}`;
-  }
-  if (surface === "wallet") {
-    return `Wallet activity loaded: ${threatLabel}`;
-  }
-  if (surface === "api") {
-    return `API activity loaded: ${threatLabel}`;
-  }
-  if (surface === "desktop") {
-    return `Desktop activity loaded: ${threatLabel}`;
-  }
-  return `Observed scan activity: ${threatLabel}`;
-}
-
-function buildEntrySummary(scan: ThreatDashboardScanSource): string {
-  if (scan.ruleReason && scan.ruleReason.trim()) {
-    return scan.ruleReason.trim();
-  }
-
-  if (scan.shortAdvice && scan.shortAdvice.trim()) {
-    return scan.shortAdvice.trim();
-  }
-
-  return "Dashboard entry loaded from the current desktop scan history.";
-}
-
-function buildReasonCodes(
-  scan: ThreatDashboardScanSource,
-  layer: ThreatLayer,
-  decision: ThreatDecision,
-  severity: ThreatSeverity,
-  surface: ThreatSurface,
-): readonly string[] {
-  const reasonCodes = new Set<string>();
-  const threatCode = normalizeThreatToken(scan.threatType);
-  if (threatCode) {
-    reasonCodes.add(`threat:${threatCode}`);
-  }
-
-  const detectedBy = normalizeThreatToken(scan.detectedBy ?? "");
-  if (detectedBy) {
-    reasonCodes.add(`detected_by:${detectedBy}`);
-  }
-
-  const detectedByType = normalizeThreatToken(scan.detectedByType ?? "");
-  if (detectedByType) {
-    reasonCodes.add(`detector_type:${detectedByType}`);
-  }
-
-  const ruleName = normalizeThreatToken(scan.ruleName ?? "");
-  if (ruleName) {
-    reasonCodes.add(`rule:${ruleName}`);
-  }
-
-  reasonCodes.add(`surface:${surface}`);
-  reasonCodes.add(`layer:${layer}`);
-  reasonCodes.add(`decision:${decision}`);
-  reasonCodes.add(`severity:${severity}`);
-
-  return Array.from(reasonCodes);
-}
-
-function buildEvidencePreview(
-  scan: ThreatDashboardScanSource,
-  surface: ThreatSurface,
-): readonly string[] {
-  const evidence: string[] = [];
-
-  evidence.push(`Surface: ${surface}.`);
-  evidence.push(`Source: ${scan.source || "unknown"}.`);
-  evidence.push(`Engine: ${scan.engine || "unknown"}.`);
-
-  if (scan.ruleName && scan.ruleName.trim()) {
-    evidence.push(`Rule: ${scan.ruleName.trim()}.`);
-  }
-
-  if (scan.detectedBy && scan.detectedBy.trim()) {
-    evidence.push(`Detector: ${scan.detectedBy.trim()}.`);
-  }
-
-  if (scan.deviceId && scan.deviceId.trim()) {
-    evidence.push(`Device: ${scan.deviceId.trim()}.`);
-  }
-
-  if (scan.userEmail && scan.userEmail.trim()) {
-    evidence.push(`User: ${scan.userEmail.trim()}.`);
-  }
-
-  evidence.push(`Risk level: ${scan.riskLevel || "unknown"}.`);
-  evidence.push(`Risk score: ${String(scan.riskScore)}.`);
-
-  return evidence;
-}
-
 /**
  * Maps restored desktop scan history into the normalized dashboard feed model without
  * inventing layer, decision, or severity truth.
@@ -240,33 +80,7 @@ function buildEvidencePreview(
 export function mapScansToThreatLogEntries(
   scans: readonly ThreatDashboardScanSource[],
 ): ThreatLogEntry[] {
-  return scans.map((scan) => {
-    const layer = readThreatLayer(scan.layer);
-    const decision = readThreatDecision(scan.decision);
-    const severity = readThreatSeverity(scan.severity);
-    const surface = readThreatSurface(scan.surface);
-    const targetLabel =
-      scan.url && scan.url !== "(document)"
-        ? scan.url
-        : scan.filename && scan.filename.trim()
-        ? scan.filename.trim()
-        : null;
-
-    return {
-      id: scan.id,
-      occurredAt: scan.checkedAt,
-      layer,
-      decision,
-      severity,
-      surface,
-      title: buildEntryTitle(scan, surface),
-      summary: buildEntrySummary(scan),
-      reasonCodes: buildReasonCodes(scan, layer, decision, severity, surface),
-      targetLabel,
-      reportId: scan.id || null,
-      evidencePreview: buildEvidencePreview(scan, surface),
-    };
-  });
+  return [...normalizeScanThreatLogEntries(scans)];
 }
 
 /**

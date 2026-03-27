@@ -1,20 +1,26 @@
+import {
+  selectThreatActivityEntries,
+  sliceThreatLogEntries,
+} from "./threatLog";
+import {
+  formatThreatTimestamp,
+  parseThreatTimestamp,
+} from "./time";
 import type {
   ThreatDashboardEmptyStateLabels,
   ThreatDashboardFilterState,
   ThreatDashboardSummary,
-  ThreatDetailsViewModel,
   ThreatDashboardViewModel,
   ThreatDecision,
+  ThreatDetailsViewModel,
+  ThreatEventKind,
   ThreatLayer,
   ThreatLogEntry,
+  ThreatLogState,
   ThreatSeverity,
+  ThreatSourceSurface,
   ThreatTimeWindow,
 } from "./types";
-
-const TIMESTAMP_FORMATTER = new Intl.DateTimeFormat("en-US", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
 
 const EMPTY_LAYER_BREAKDOWN: Record<ThreatLayer, number> = {
   layer1: 0,
@@ -32,6 +38,9 @@ const EMPTY_SEVERITY_BREAKDOWN: Record<ThreatSeverity, number> = {
 };
 
 const EMPTY_DECISION_BREAKDOWN: Record<ThreatDecision, number> = {
+  allowed: 0,
+  warned: 0,
+  blocked: 0,
   observed: 0,
   reviewed: 0,
   reported: 0,
@@ -39,29 +48,23 @@ const EMPTY_DECISION_BREAKDOWN: Record<ThreatDecision, number> = {
   unknown: 0,
 };
 
-/**
- * Returns a deterministic timestamp value for sorting and window comparisons.
- */
-export function parseThreatTimestamp(value: string | null | undefined): number {
-  if (!value) {
-    return 0;
-  }
+const EMPTY_SOURCE_SURFACE_BREAKDOWN: Record<ThreatSourceSurface, number> = {
+  desktop: 0,
+  extension: 0,
+  mobile: 0,
+  manual_scan: 0,
+  unknown: 0,
+};
 
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
+const EMPTY_EVENT_KIND_BREAKDOWN: Record<ThreatEventKind, number> = {
+  navigation_decision: 0,
+  transaction_decision: 0,
+  scan_result: 0,
+  intel_status: 0,
+  system_status: 0,
+};
 
-/**
- * Formats a dashboard timestamp into a stable, readable label.
- */
-export function formatThreatTimestamp(value: string): string {
-  const parsed = parseThreatTimestamp(value);
-  if (parsed === 0) {
-    return "Unavailable";
-  }
-
-  return TIMESTAMP_FORMATTER.format(new Date(parsed));
-}
+export { formatThreatTimestamp, parseThreatTimestamp };
 
 /**
  * Returns entries ordered newest-first, then by id for stable tie-breaking.
@@ -89,7 +92,7 @@ export function hasActiveThreatDashboardFilters(
     filters.severity !== "all" ||
     filters.decision !== "all" ||
     filters.timeWindow !== "all" ||
-    filters.surface !== "all"
+    filters.sourceSurface !== "all"
   );
 }
 
@@ -136,7 +139,7 @@ export function filterThreatLogEntries(
       return false;
     }
 
-    if (filters.surface !== "all" && entry.surface !== filters.surface) {
+    if (filters.sourceSurface !== "all" && entry.sourceSurface !== filters.sourceSurface) {
       return false;
     }
 
@@ -213,34 +216,35 @@ export function computeDecisionBreakdown(
 }
 
 /**
- * Builds the normalized dashboard summary strip and support-card metrics.
+ * Aggregates entries by source surface.
  */
-export function buildThreatDashboardSummary(
+export function computeSourceSurfaceBreakdown(
   entries: readonly ThreatLogEntry[],
-  referenceTime: string | null,
-  lastRefresh: string | null,
-): ThreatDashboardSummary {
-  let entriesWithUnknownTruth = 0;
+): Record<ThreatSourceSurface, number> {
+  const breakdown: Record<ThreatSourceSurface, number> = {
+    ...EMPTY_SOURCE_SURFACE_BREAKDOWN,
+  };
   for (const entry of entries) {
-    if (
-      entry.layer === "unknown" ||
-      entry.severity === "unknown" ||
-      entry.decision === "unknown"
-    ) {
-      entriesWithUnknownTruth += 1;
-    }
+    breakdown[entry.sourceSurface] += 1;
   }
 
-  return {
-    totalEntries: entries.length,
-    threatsLast24Hours: computeThreatsLast24Hours(entries, referenceTime),
-    scansRun: entries.length,
-    lastRefresh,
-    layerBreakdown: computeLayerBreakdown(entries),
-    severityBreakdown: computeSeverityBreakdown(entries),
-    decisionBreakdown: computeDecisionBreakdown(entries),
-    entriesWithUnknownTruth,
+  return breakdown;
+}
+
+/**
+ * Aggregates entries by event kind.
+ */
+export function computeEventKindBreakdown(
+  entries: readonly ThreatLogEntry[],
+): Record<ThreatEventKind, number> {
+  const breakdown: Record<ThreatEventKind, number> = {
+    ...EMPTY_EVENT_KIND_BREAKDOWN,
   };
+  for (const entry of entries) {
+    breakdown[entry.eventKind] += 1;
+  }
+
+  return breakdown;
 }
 
 function toTitleLabel(value: string): string {
@@ -249,6 +253,69 @@ function toTitleLabel(value: string): string {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function filterHiddenThreatEntries(
+  entries: readonly ThreatLogEntry[],
+  hiddenEntryIds: readonly string[],
+): readonly ThreatLogEntry[] {
+  if (hiddenEntryIds.length === 0) {
+    return entries;
+  }
+
+  const hidden = new Set(hiddenEntryIds);
+  return entries.filter(
+    (entry) =>
+      !hidden.has(entry.id) &&
+      !(entry.reportId && hidden.has(entry.reportId)) &&
+      !(entry.sourceRef && hidden.has(entry.sourceRef)),
+  );
+}
+
+/**
+ * Builds the normalized dashboard summary strip and support-card metrics.
+ */
+export function buildThreatDashboardSummary(params: {
+  readonly activityEntries: readonly ThreatLogEntry[];
+  readonly threatLog: ThreatLogState;
+  readonly referenceTime: string | null;
+}): ThreatDashboardSummary {
+  let entriesWithUnknownTruth = 0;
+  let scansRun = 0;
+
+  for (const entry of params.activityEntries) {
+    if (entry.statusTruth !== "available" && entry.statusTruth !== "loaded") {
+      entriesWithUnknownTruth += 1;
+    }
+    if (entry.eventKind === "scan_result") {
+      scansRun += 1;
+    }
+  }
+
+  const decisionBreakdown = computeDecisionBreakdown(params.activityEntries);
+
+  return {
+    totalEntries: params.threatLog.entries.length,
+    activityEntries: params.activityEntries.length,
+    statusEntries: params.threatLog.entries.length - params.activityEntries.length,
+    threatsLast24Hours: computeThreatsLast24Hours(
+      params.activityEntries,
+      params.referenceTime,
+    ),
+    scansRun,
+    lastRefresh: params.threatLog.lastUpdatedAt,
+    layerBreakdown: computeLayerBreakdown(params.activityEntries),
+    severityBreakdown: computeSeverityBreakdown(params.activityEntries),
+    decisionBreakdown,
+    sourceSurfaceBreakdown: computeSourceSurfaceBreakdown(params.activityEntries),
+    eventKindBreakdown: computeEventKindBreakdown(params.threatLog.entries),
+    actionBreakdown: {
+      allowed: decisionBreakdown.allowed,
+      warned: decisionBreakdown.warned,
+      blocked: decisionBreakdown.blocked,
+    },
+    entriesWithUnknownTruth,
+  };
 }
 
 /**
@@ -267,24 +334,12 @@ export function selectThreatDetailsViewModel(
     return null;
   }
 
-  const truthGaps: string[] = [];
-  if (entry.layer === "unknown") {
-    truthGaps.push("Layer identity is unavailable in the current dashboard source contract.");
-  }
-  if (entry.decision === "unknown") {
-    truthGaps.push("Decision state is unavailable in the current dashboard source contract.");
-  }
-  if (entry.severity === "unknown") {
-    truthGaps.push("Severity is unavailable in the current dashboard source contract.");
-  }
-  if (entry.surface === "unknown") {
-    truthGaps.push("Surface attribution is unavailable in the current dashboard source contract.");
-  }
-
   return {
     id: entry.id,
     occurredAt: entry.occurredAt,
     occurredAtLabel: formatThreatTimestamp(entry.occurredAt),
+    eventKind: entry.eventKind,
+    eventKindLabel: toTitleLabel(entry.eventKind),
     layer: entry.layer,
     layerLabel:
       entry.layer === "layer1"
@@ -300,13 +355,18 @@ export function selectThreatDetailsViewModel(
     severityLabel: toTitleLabel(entry.severity),
     surface: entry.surface,
     surfaceLabel: toTitleLabel(entry.surface),
+    sourceSurface: entry.sourceSurface,
+    sourceSurfaceLabel: toTitleLabel(entry.sourceSurface),
     title: entry.title,
     summary: entry.summary,
     reasonCodes: entry.reasonCodes,
     evidencePreview: entry.evidencePreview,
     targetLabel: entry.targetLabel,
     reportId: entry.reportId,
-    truthGaps,
+    statusTruth: entry.statusTruth,
+    statusTruthLabel: toTitleLabel(entry.statusTruth),
+    sourceRef: entry.sourceRef,
+    truthGaps: entry.truthGaps,
   };
 }
 
@@ -367,32 +427,37 @@ export function buildThreatDashboardEmptyState(params: {
  * Builds the derived dashboard state used by App.tsx.
  */
 export function buildThreatDashboardViewModel(params: {
-  readonly entries: readonly ThreatLogEntry[];
+  readonly threatLog: ThreatLogState;
   readonly filters: ThreatDashboardFilterState;
+  readonly hiddenEntryIds: readonly string[];
   readonly selectedEntryId: string | null;
   readonly referenceTime: string | null;
-  readonly lastRefresh: string | null;
   readonly isLoading: boolean;
 }): ThreatDashboardViewModel {
-  const entries = sortThreatLogEntries(params.entries);
-  const effectiveReferenceTime = params.referenceTime ?? entries[0]?.occurredAt ?? null;
+  const activityEntries = selectThreatActivityEntries(params.threatLog.entries);
+  const visibleEntries = sortThreatLogEntries(
+    filterHiddenThreatEntries(activityEntries, params.hiddenEntryIds),
+  );
+  const recentEntries = sliceThreatLogEntries(visibleEntries, visibleEntries.length);
+  const effectiveReferenceTime =
+    params.referenceTime ?? params.threatLog.lastUpdatedAt ?? recentEntries[0]?.occurredAt ?? null;
   const filteredEntries = filterThreatLogEntries(
-    entries,
+    recentEntries,
     params.filters,
     effectiveReferenceTime,
   );
-  const summary = buildThreatDashboardSummary(
-    entries,
-    effectiveReferenceTime,
-    params.lastRefresh,
-  );
+  const summary = buildThreatDashboardSummary({
+    activityEntries: recentEntries,
+    threatLog: params.threatLog,
+    referenceTime: effectiveReferenceTime,
+  });
   const selectedEntryId = resolveSelectedThreatEntryId(
     filteredEntries,
     params.selectedEntryId,
   );
   const feedEmptyState = buildThreatDashboardEmptyState({
     isLoading: params.isLoading,
-    hasEntries: entries.length > 0,
+    hasEntries: recentEntries.length > 0,
     hasFilteredEntries: filteredEntries.length > 0,
   });
   const detailsEmptyState =
@@ -405,7 +470,8 @@ export function buildThreatDashboardViewModel(params: {
         });
 
   return {
-    entries,
+    threatLog: params.threatLog,
+    entries: recentEntries,
     filteredEntries,
     summary,
     selectedEntryId,

@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   buildThreatSystemStatus,
-  mapScansToThreatLogEntries,
   parseBackendHealthSnapshot,
   parseEngineStatusSnapshot,
   parseNavigationManifestSnapshot,
@@ -13,7 +12,15 @@ import type {
 } from "./dashboard/adapters";
 import { ThreatDashboard } from "./dashboard/components/ThreatDashboard";
 import { buildThreatDashboardViewModel } from "./dashboard/selectors";
-import type { ThreatDashboardFilterState } from "./dashboard/types";
+import {
+  buildThreatLogState,
+  createEmptyThreatLogState,
+} from "./dashboard/threatLog";
+import type {
+  ThreatDashboardFilterState,
+  ThreatLogState,
+  ThreatTruthState,
+} from "./dashboard/types";
 
 // Prefer env override, fall back to localhost.
 // Example: VITE_BACKEND_BASE=http://127.0.0.1:4000
@@ -126,7 +133,7 @@ const DEFAULT_THREAT_DASHBOARD_FILTERS: ThreatDashboardFilterState = {
   severity: "all",
   decision: "all",
   timeWindow: "24h",
-  surface: "all",
+  sourceSurface: "all",
 };
 
 type UrlScanCacheEntry = {
@@ -582,6 +589,9 @@ const App: React.FC = () => {
   const [navigationManifestSnapshot, setNavigationManifestSnapshot] =
     useState<NavigationManifestSnapshot | null>(null);
   const [dashboardStatusLoading, setDashboardStatusLoading] = useState(false);
+  const [threatLogState, setThreatLogState] = useState<ThreatLogState>(() =>
+    createEmptyThreatLogState()
+  );
 
   // quick actions state
   const [rescanLoadingId, setRescanLoadingId] = useState<string | null>(null);
@@ -655,37 +665,79 @@ const App: React.FC = () => {
       dashboardStatusLoading,
     ]
   );
+  const scanHistoryTruthState = useMemo<ThreatTruthState>(() => {
+    if (recentLoading) {
+      return "loading";
+    }
+    if (recentError) {
+      return recentScans.length > 0 ? "partial" : "unavailable";
+    }
+    if (recentScans.length > 0) {
+      return "available";
+    }
+    if (health === "ok") {
+      return "available";
+    }
+    if (health === "error") {
+      return "unavailable";
+    }
+
+    return "unknown";
+  }, [health, recentError, recentLoading, recentScans]);
+
+  useEffect(() => {
+    setThreatLogState((previousState) =>
+      buildThreatLogState({
+        previousState,
+        scans: recentScans,
+        scanHistoryTruthState,
+        systemStatus: dashboardSystemStatus,
+        manifest: navigationManifestSnapshot,
+        engine: engineStatusSnapshot,
+        healthSnapshot: backendHealthSnapshot,
+        referenceTime: dashboardReferenceTime,
+      })
+    );
+  }, [
+    recentScans,
+    scanHistoryTruthState,
+    dashboardSystemStatus,
+    navigationManifestSnapshot,
+    engineStatusSnapshot,
+    backendHealthSnapshot,
+    dashboardReferenceTime,
+  ]);
+
   const dashboardView = useMemo(
     () =>
       buildThreatDashboardViewModel({
-        entries: mapScansToThreatLogEntries(visibleScans),
+        threatLog: threatLogState,
         filters: dashboardFilters,
+        hiddenEntryIds: hiddenIds,
         selectedEntryId: selectedThreatId,
         referenceTime: dashboardReferenceTime,
-        lastRefresh:
-          lastSyncAt ??
-          navigationManifestSnapshot?.generatedAt ??
-          engineStatusSnapshot?.checkedAt ??
-          backendHealthSnapshot?.checkedAt ??
-          null,
         isLoading: recentLoading || dashboardStatusLoading,
       }),
     [
-      visibleScans,
+      threatLogState,
       dashboardFilters,
+      hiddenIds,
       selectedThreatId,
       dashboardReferenceTime,
-      lastSyncAt,
-      navigationManifestSnapshot,
-      engineStatusSnapshot,
-      backendHealthSnapshot,
       recentLoading,
       dashboardStatusLoading,
     ]
   );
   const selectedThreatScan = useMemo(
-    () => visibleScans.find((scan) => scan.id === dashboardView.selectedEntryId) ?? null,
-    [visibleScans, dashboardView.selectedEntryId]
+    () => {
+      const reportId = dashboardView.selectedDetails?.reportId;
+      if (!reportId) {
+        return null;
+      }
+
+      return recentScans.find((scan) => scan.id === reportId) ?? null;
+    },
+    [recentScans, dashboardView.selectedDetails]
   );
 
   // =====================================================
