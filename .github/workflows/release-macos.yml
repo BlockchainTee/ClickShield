@@ -18,8 +18,10 @@ jobs:
         with:
           node-version: "20"
           cache: "npm"
+          cache-dependency-path: desktop/package-lock.json
 
       - name: Install deps
+        working-directory: desktop
         run: npm ci
 
       - name: Import Apple signing certificate
@@ -45,6 +47,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        working-directory: desktop
         run: npm run tauri:build
 
       - name: Notarize + Staple
@@ -52,6 +55,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+        working-directory: desktop
         run: |
           DMG_PATH=$(ls src-tauri/target/release/bundle/dmg/*.dmg | head -n 1)
 
