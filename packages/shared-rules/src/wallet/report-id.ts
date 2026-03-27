@@ -1,3 +1,4 @@
+import { assertWalletReportCapabilityTruth } from "./capabilities.js";
 import { serializeCanonicalJson, sha256Hex } from "../intel/hash.js";
 import type {
   EvmCleanupAction as EvmCleanupActionContract,
@@ -391,6 +392,7 @@ export interface WalletReportIdInput {
  * Builds a deterministic wallet report identifier from declared Layer 4 contract fields only.
  */
 export function buildWalletReportId(input: WalletReportIdInput): string {
+  assertWalletReportCapabilityTruth(input);
   const canonicalPayload = serializeCanonicalJson(canonicalizeReportIdInput(input));
   return `wallet_report_${sha256Hex(canonicalPayload)}`;
 }

@@ -229,29 +229,36 @@ describe("Layer 4 Phase 4D Solana scan foundation", () => {
     );
   });
 
-  it("coerces unsupported full scan requests to truthful basic scope", () => {
-    const coerced = evaluateSolanaWalletScan(
-      createInput({
-        scanMode: "full",
-        tokenAccounts: [
-          {
-            tokenAccountAddress: buildSolAddress(41),
-            mintAddress: buildSolAddress(42),
-            ownerAddress: WALLET_ADDRESS,
-            delegateAddress: buildSolAddress(43),
-            delegateRiskLevel: "high",
-          },
-        ],
-        connections: [
-          {
-            appName: "Broad app",
-            origin: "https://broad-solana.example",
-            permissions: ["sign_all_transactions", "account_access_all"],
-            permissionLevel: "broad",
-          },
-        ],
-      })
+  it("rejects unsupported full scan requests instead of downgrading them", () => {
+    expect(() =>
+      evaluateSolanaWalletScan(
+        createInput({
+          scanMode: "full",
+          tokenAccounts: [
+            {
+              tokenAccountAddress: buildSolAddress(41),
+              mintAddress: buildSolAddress(42),
+              ownerAddress: WALLET_ADDRESS,
+              delegateAddress: buildSolAddress(43),
+              delegateRiskLevel: "high",
+            },
+          ],
+          connections: [
+            {
+              appName: "Broad app",
+              origin: "https://broad-solana.example",
+              permissions: ["sign_all_transactions", "account_access_all"],
+              permissionLevel: "broad",
+            },
+          ],
+        })
+      )
+    ).toThrowError(
+      'Layer 4 solana capability does not support request.scanMode "full"; supported values: "basic".'
     );
+  });
+
+  it("accepts truthful basic scan requests and keeps report capability fields basic-only", () => {
     const basic = evaluateSolanaWalletScan(
       createInput({
         scanMode: "basic",
@@ -275,14 +282,11 @@ describe("Layer 4 Phase 4D Solana scan foundation", () => {
       })
     );
 
-    expect(coerced.summary.scanMode).toBe("basic");
-    expect(coerced.report.summary.scanMode).toBe("basic");
-    expect(coerced.report.request.scanMode).toBe("basic");
-    expect(coerced.report.request).toEqual(basic.report.request);
-    expect(coerced.report.result).toEqual(basic.report.result);
-    expect(coerced.report.summary).toEqual(basic.report.summary);
-    expect(coerced.report.cleanupExecution).toBeNull();
-    expect(coerced.report.result.capabilityBoundaries).toEqual(
+    expect(basic.summary.scanMode).toBe("basic");
+    expect(basic.report.summary.scanMode).toBe("basic");
+    expect(basic.report.request.scanMode).toBe("basic");
+    expect(basic.report.cleanupExecution).toBeNull();
+    expect(basic.report.result.capabilityBoundaries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           area: "cleanup_plan",
@@ -297,7 +301,7 @@ describe("Layer 4 Phase 4D Solana scan foundation", () => {
       ])
     );
     expect(
-      coerced.report.result.cleanupPlan?.actions.every(
+      basic.report.result.cleanupPlan?.actions.every(
         (action) =>
           action.supportStatus === "partial" &&
           action.executionMode === "guided" &&
@@ -306,7 +310,6 @@ describe("Layer 4 Phase 4D Solana scan foundation", () => {
           action.supportDetail.includes("does not build transactions")
       )
     ).toBe(true);
-    expect(coerced.report.reportId).toBe(basic.report.reportId);
   });
 
   it("returns a clean result for a safe Solana wallet snapshot", () => {

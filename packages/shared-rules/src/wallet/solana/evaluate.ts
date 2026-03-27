@@ -1,3 +1,4 @@
+import { assertWalletScanRequestCapabilityTruth } from "../capabilities.js";
 import { assembleSolanaWalletEvaluation } from "./assemble.js";
 import { normalizeSolanaWalletSnapshot } from "./normalize.js";
 import { buildSolanaWalletFindings } from "./rules.js";
@@ -13,6 +14,7 @@ import type {
 export function evaluateSolanaWalletScan(
   input: SolanaWalletScanEvaluationInput
 ): SolanaWalletScanEvaluation {
+  assertWalletScanRequestCapabilityTruth(input.request);
   const normalizedSnapshot = normalizeSolanaWalletSnapshot(input);
   const signals = buildSolanaWalletSignals(normalizedSnapshot);
   const findingDrafts = buildSolanaWalletFindings(normalizedSnapshot, signals);

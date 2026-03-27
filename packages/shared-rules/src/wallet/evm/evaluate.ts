@@ -1,3 +1,4 @@
+import { assertWalletScanRequestCapabilityTruth } from "../capabilities.js";
 import { assembleEvmWalletEvaluation } from "./assemble.js";
 import { normalizeEvmWalletSnapshot } from "./normalize.js";
 import { buildEvmWalletFindings } from "./rules.js";
@@ -13,6 +14,7 @@ import type {
 export function evaluateEvmWalletScan(
   input: EvmWalletScanEvaluationInput
 ): EvmWalletScanEvaluation {
+  assertWalletScanRequestCapabilityTruth(input.request);
   const normalizedSnapshot = normalizeEvmWalletSnapshot(input);
   const signals = buildEvmWalletSignals(normalizedSnapshot);
   const findingDrafts = buildEvmWalletFindings(normalizedSnapshot, signals);
@@ -27,4 +29,3 @@ export function evaluateEvmWalletScan(
     reportVersion: input.reportVersion ?? "1",
   });
 }
-

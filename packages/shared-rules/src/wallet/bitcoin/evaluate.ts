@@ -1,3 +1,4 @@
+import { assertWalletScanRequestCapabilityTruth } from "../capabilities.js";
 import { assembleBitcoinWalletEvaluation } from "./assemble.js";
 import { normalizeBitcoinWalletSnapshot } from "./normalize.js";
 import { buildBitcoinWalletFindings } from "./rules.js";
@@ -13,6 +14,7 @@ import type {
 export function evaluateBitcoinWalletScan(
   input: BitcoinWalletScanEvaluationInput
 ): BitcoinWalletScanEvaluation {
+  assertWalletScanRequestCapabilityTruth(input.request);
   const normalizedSnapshot = normalizeBitcoinWalletSnapshot(input);
   const signals = buildBitcoinWalletSignals(normalizedSnapshot);
   const findingDrafts = buildBitcoinWalletFindings(normalizedSnapshot, signals);

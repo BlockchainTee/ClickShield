@@ -10,6 +10,7 @@ import type {
   WalletFinding,
   WalletReportIdInput,
   WalletRiskFactor,
+  WalletScanMode,
   WalletScanRequest,
   WalletScanResult,
   WalletScanSnapshot,
@@ -246,6 +247,209 @@ function createReportIdInput(): WalletReportIdInput {
     result,
     summary,
     cleanupExecution,
+  };
+}
+
+function createBasicOnlyReportIdInput(
+  walletChain: "solana" | "bitcoin",
+  scanMode: WalletScanMode = "basic"
+): WalletReportIdInput {
+  const request: WalletScanRequest = {
+    requestId: `request_${walletChain}_1`,
+    walletChain,
+    walletAddress:
+      walletChain === "solana"
+        ? "5D6xPj5vXvGkGEXUXMaLLq5yRvCNr4CemGYGAaHo9dZY"
+        : "bc1qclickshieldmainwallet000000000000000000000",
+    networkId: walletChain === "solana" ? "mainnet-beta" : "bitcoin-mainnet",
+    scanMode,
+    requestedAt: "2026-03-23T10:00:00.000Z",
+    metadata: {
+      source: "test",
+    },
+  };
+
+  const snapshot: WalletScanSnapshot = {
+    snapshotId: `snapshot_${walletChain}_1`,
+    requestId: request.requestId,
+    walletChain,
+    walletAddress: request.walletAddress,
+    networkId: request.networkId,
+    capturedAt: "2026-03-23T10:01:00.000Z",
+    sections: [
+      {
+        sectionId: `section_${walletChain}_1`,
+        sectionType: `${walletChain}_snapshot`,
+        label: `${walletChain} snapshot`,
+        itemCount: 1,
+        contentHash: `hash_${walletChain}`,
+        metadata: {},
+      },
+    ],
+    metadata: {
+      sourceVersion: "v1",
+    },
+  };
+
+  const finding: WalletFinding = {
+    findingId: `finding_${walletChain}_1`,
+    walletChain,
+    category: "authorization",
+    riskLevel: "medium",
+    status: "open",
+    title: `${walletChain} review required`,
+    summary: `${walletChain} requires manual review guidance.`,
+    detectedAt: "2026-03-23T10:02:00.000Z",
+    resourceIds: [`resource_${walletChain}_1`],
+    riskFactorIds: [`factor_${walletChain}_1`],
+    cleanupActionIds: [`action_${walletChain}_1`],
+    evidence: [
+      {
+        evidenceId: `evidence_${walletChain}_1`,
+        sourceType: "snapshot_section",
+        sourceId: `section_${walletChain}_1`,
+        label: `${walletChain} section`,
+      },
+    ],
+    metadata: {
+      code: `${walletChain}_review`,
+    },
+  };
+
+  const riskFactor: WalletRiskFactor = {
+    factorId: `factor_${walletChain}_1`,
+    walletChain,
+    category: finding.category,
+    riskLevel: finding.riskLevel,
+    title: `${walletChain} exposure`,
+    summary: `${walletChain} exposure requires manual review.`,
+    findingIds: [finding.findingId],
+    resourceIds: finding.resourceIds,
+    metadata: {
+      sourceFindingId: finding.findingId,
+    },
+  };
+
+  const result: WalletScanResult = {
+    requestId: request.requestId,
+    snapshotId: snapshot.snapshotId,
+    walletChain,
+    walletAddress: request.walletAddress,
+    networkId: request.networkId,
+    evaluatedAt: "2026-03-23T10:03:00.000Z",
+    findings: [finding],
+    riskFactors: [riskFactor],
+    scoreBreakdown: {
+      totalScore: 61,
+      riskLevel: "medium",
+      rationale: `${walletChain} guidance only`,
+      components: [
+        {
+          componentId: `component_${walletChain}_1`,
+          label: `${walletChain} review`,
+          score: 61,
+          maxScore: 100,
+          riskLevel: "medium",
+          rationale: `${walletChain} manual review guidance only`,
+          findingIds: [finding.findingId],
+          riskFactorIds: [riskFactor.factorId],
+        },
+      ],
+    },
+    cleanupPlan: {
+      planId: `plan_${walletChain}_1`,
+      walletChain,
+      walletAddress: request.walletAddress,
+      networkId: request.networkId,
+      createdAt: "2026-03-23T10:03:00.000Z",
+      summary: `${walletChain} manual guidance only`,
+      actions: [
+        {
+          actionId: `action_${walletChain}_1`,
+          walletChain,
+          kind: "manual_review",
+          executionMode: walletChain === "solana" ? "guided" : "manual",
+          executionType: "manual_review",
+          status: "planned",
+          requiresSignature: walletChain === "solana",
+          supportStatus: "partial",
+          title: `${walletChain} manual review`,
+          description: `${walletChain} manual action is required.`,
+          priority: "medium",
+          target: {
+            targetId: `target_${walletChain}_1`,
+            targetKind: "wallet",
+            label: `${walletChain} target`,
+            metadata: {
+              recommendationType: "manual_review",
+            },
+          },
+          findingIds: [finding.findingId],
+          riskFactorIds: [riskFactor.factorId],
+          supportDetail: `${walletChain} guidance only`,
+          metadata: {
+            recommendationType: "manual_review",
+          },
+        },
+      ],
+      projectedScore: null,
+      projectedRiskLevel: null,
+    },
+    capabilityBoundaries: [
+      {
+        boundaryId: `boundary_${walletChain}_snapshot`,
+        area: "snapshot",
+        capabilityKey: `hydrated_${walletChain}_snapshot`,
+        status: "supported",
+        detail: `${walletChain} snapshot support`,
+      },
+      {
+        boundaryId: `boundary_${walletChain}_finding`,
+        area: "finding",
+        capabilityKey: `deterministic_${walletChain}_findings`,
+        status: "supported",
+        detail: `${walletChain} finding support`,
+      },
+      {
+        boundaryId: `boundary_${walletChain}_cleanup_plan`,
+        area: "cleanup_plan",
+        capabilityKey: `deterministic_${walletChain}_cleanup_guidance`,
+        status: "supported",
+        detail: `${walletChain} cleanup guidance support`,
+      },
+      {
+        boundaryId: `boundary_${walletChain}_cleanup_execution`,
+        area: "cleanup_execution",
+        capabilityKey: `${walletChain}_cleanup_execution`,
+        status: "not_supported",
+        detail: `${walletChain} cleanup execution not supported`,
+      },
+    ],
+  };
+
+  const summary: WalletSummary = {
+    walletChain,
+    walletAddress: request.walletAddress,
+    networkId: request.networkId,
+    scanMode,
+    generatedAt: "2026-03-23T10:04:00.000Z",
+    snapshotCapturedAt: snapshot.capturedAt,
+    score: 61,
+    riskLevel: "medium",
+    findingCount: 1,
+    openFindingCount: 1,
+    cleanupActionCount: 1,
+    actionableFindingCount: 1,
+  };
+
+  return {
+    reportVersion: "1",
+    generatedAt: "2026-03-23T10:04:00.000Z",
+    request,
+    snapshot,
+    result,
+    summary,
+    cleanupExecution: null,
   };
 }
 
@@ -486,7 +690,7 @@ describe("buildWalletReportId", () => {
     expect(buildWalletReportId(changed)).not.toBe(buildWalletReportId(base));
   });
 
-  it("changes the ID when declared capability boundaries change", () => {
+  it("changes the ID when declared capability boundaries change within supported truth", () => {
     const base = createReportIdInput();
     const changed = cloneReportIdInput(base);
 
@@ -496,13 +700,49 @@ describe("buildWalletReportId", () => {
         boundary.area === "cleanup_execution"
           ? {
               ...boundary,
-              status: "supported",
-              detail: "Changed cleanup execution support claim for report ID coverage.",
+              status: "not_supported",
+              detail: "Changed cleanup execution support detail for report ID coverage.",
             }
           : boundary
       ),
     };
 
     expect(buildWalletReportId(changed)).not.toBe(buildWalletReportId(base));
+  });
+
+  it("rejects report identity input that overclaims EVM cleanup execution support", () => {
+    const changed = cloneReportIdInput(createReportIdInput());
+
+    changed.result = {
+      ...changed.result,
+      capabilityBoundaries: changed.result.capabilityBoundaries.map((boundary) =>
+        boundary.area === "cleanup_execution"
+          ? {
+              ...boundary,
+              status: "supported",
+            }
+          : boundary
+      ),
+    };
+
+    expect(() => buildWalletReportId(changed)).toThrowError(
+      'Layer 4 evm capability boundary "revoke_authorization" overclaims cleanup_execution support as "supported".'
+    );
+  });
+
+  it("rejects report identity input that encodes false full Solana capability", () => {
+    expect(() =>
+      buildWalletReportId(createBasicOnlyReportIdInput("solana", "full"))
+    ).toThrowError(
+      'Layer 4 solana capability does not support request.scanMode "full"; supported values: "basic".'
+    );
+  });
+
+  it("rejects report identity input that encodes false full Bitcoin capability", () => {
+    expect(() =>
+      buildWalletReportId(createBasicOnlyReportIdInput("bitcoin", "full"))
+    ).toThrowError(
+      'Layer 4 bitcoin capability does not support request.scanMode "full"; supported values: "basic".'
+    );
   });
 });

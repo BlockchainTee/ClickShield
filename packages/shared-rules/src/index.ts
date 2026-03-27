@@ -205,6 +205,12 @@ export type {
 
 // ── Layer 4 Wallet Framework (Phase 4A) ──
 export { buildWalletReportId } from "./wallet/report-id.js";
+export {
+  assertWalletReportCapabilityTruth,
+  assertWalletScanModeSupported,
+  assertWalletScanRequestCapabilityTruth,
+  getWalletChainCapabilityContract,
+} from "./wallet/capabilities.js";
 export { evaluateEvmWalletScan } from "./wallet/evm/evaluate.js";
 export { evaluateSolanaWalletScan } from "./wallet/solana/evaluate.js";
 export { evaluateBitcoinWalletScan } from "./wallet/bitcoin/evaluate.js";
@@ -219,6 +225,12 @@ export {
   reconcileEvmCleanupPlanResults,
 } from "./wallet/evm/cleanup-execution.js";
 export type { WalletReportIdInput } from "./wallet/report-id.js";
+export type {
+  WalletCapabilityOperation,
+  WalletCapabilityOperationContract,
+  WalletCapabilityTier,
+  WalletChainCapabilityContract,
+} from "./wallet/capabilities.js";
 export type {
   BitcoinAddressRole,
   BitcoinAddressSummaryInput,
