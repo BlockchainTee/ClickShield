@@ -43,12 +43,58 @@ jobs:
 
           security set-key-partition-list -S apple-tool:,apple: -s -k "" build.keychain
 
+          APPLE_SIGNING_IDENTITY="$(security find-identity -v -p codesigning build.keychain | awk -F '\"' '/Developer ID Application/ {print $2; exit}')"
+          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "Unable to resolve Developer ID Application identity from build.keychain"
+            security find-identity -v -p codesigning build.keychain || true
+            exit 1
+          fi
+
+          echo "APPLE_SIGNING_IDENTITY=$APPLE_SIGNING_IDENTITY" >> "$GITHUB_ENV"
+
       - name: Build Tauri App
         env:
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         working-directory: desktop
         run: npm run tauri:build
+
+      - name: Verify signed app bundle
+        working-directory: desktop
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          app_files=(src-tauri/target/release/bundle/macos/*.app)
+          if [ "${#app_files[@]}" -ne 1 ]; then
+            echo "Expected exactly one .app bundle, found ${#app_files[@]}"
+            printf '%s\n' "${app_files[@]}"
+            exit 1
+          fi
+
+          APP_PATH="${app_files[0]}"
+          WATCHDOG_PATH="$APP_PATH/Contents/MacOS/clickshield_watchdog"
+
+          if [ ! -f "$WATCHDOG_PATH" ]; then
+            echo "Expected watchdog binary at $WATCHDOG_PATH"
+            exit 1
+          fi
+
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+
+          codesign -dv --verbose=4 "$APP_PATH" 2>&1 | tee app-signature.txt
+          codesign -dv --verbose=4 "$WATCHDOG_PATH" 2>&1 | tee watchdog-signature.txt
+
+          grep -q 'Authority=Developer ID Application' app-signature.txt
+          grep -q 'Authority=Developer ID Application' watchdog-signature.txt
+          grep -q 'TeamIdentifier=' app-signature.txt
+          grep -q 'TeamIdentifier=' watchdog-signature.txt
+          grep -q 'Runtime Version=' app-signature.txt
+          grep -q 'Runtime Version=' watchdog-signature.txt
+          grep -q 'Timestamp=' app-signature.txt
+          grep -q 'Timestamp=' watchdog-signature.txt
 
       - name: Notarize + Staple
         env:
