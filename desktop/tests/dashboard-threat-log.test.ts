@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { validateLayer4ThreatLogPayload } from "../src/dashboard/layer4Runtime";
 import {
   buildThreatLogState,
   createEmptyThreatLogState,
@@ -7,6 +8,78 @@ import {
   createThreatSystemStatus,
   createWalletLayer4Report,
 } from "./helpers/dashboardFixtures";
+
+describe("dashboard Layer 4 runtime validator", () => {
+  it("accepts a canonical payload and preserves exact Layer 4 truth fields without mutating input", () => {
+    const report = createWalletLayer4Report({
+      findingSpecs: [
+        { code: "ALLOWANCE_UNLIMITED", findingId: "finding:wallet-report-1:1" },
+        { findingId: "finding:wallet-report-1:2" },
+      ],
+    });
+    const reportSnapshot = structuredClone(report);
+
+    const validation = validateLayer4ThreatLogPayload(report);
+
+    expect(validation).toEqual({
+      ok: true,
+      value: {
+        reportId: report.reportId,
+        generatedAt: report.generatedAt,
+        request: {
+          walletChain: report.request.walletChain,
+          walletAddress: report.request.walletAddress,
+          networkId: report.request.networkId,
+          scanMode: report.request.scanMode,
+        },
+        result: {
+          classification: report.result.classification,
+          statusLabel: report.result.statusLabel,
+          executionPerformed: report.result.executionPerformed,
+          findings: [
+            {
+              reasonCode: "ALLOWANCE_UNLIMITED",
+              title: report.result.findings[0]?.title ?? "",
+              summary: report.result.findings[0]?.summary ?? "",
+            },
+            {
+              reasonCode: "finding:wallet-report-1:2",
+              title: report.result.findings[1]?.title ?? "",
+              summary: report.result.findings[1]?.summary ?? "",
+            },
+          ],
+        },
+        summary: {
+          findingCount: report.summary.findingCount,
+          openFindingCount: report.summary.openFindingCount,
+          actionableFindingCount: report.summary.actionableFindingCount,
+          cleanupActionCount: report.summary.cleanupActionCount,
+        },
+      },
+    });
+    expect(report).toEqual(reportSnapshot);
+  });
+
+  it("fails deterministically for an invalid payload", () => {
+    const report = createWalletLayer4Report();
+    const invalidReport = {
+      ...report,
+      result: {
+        ...report.result,
+        statusLabel: "   ",
+      },
+    };
+
+    expect(validateLayer4ThreatLogPayload(invalidReport)).toEqual({
+      ok: false,
+      code: "invalid_layer4_status_label",
+    });
+    expect(validateLayer4ThreatLogPayload(invalidReport)).toEqual({
+      ok: false,
+      code: "invalid_layer4_status_label",
+    });
+  });
+});
 
 describe("dashboard Layer 4 threat log integration", () => {
   it("maps a Layer 4 output into a scan_result threat log entry without mutating it", () => {
@@ -151,5 +224,30 @@ describe("dashboard Layer 4 threat log integration", () => {
     });
 
     expect(secondState.entries).toEqual(firstState.entries);
+  });
+
+  it("fails safe by skipping an invalid Layer 4 payload without appending an entry", () => {
+    const report = createWalletLayer4Report({
+      reportId: "wallet-report-invalid",
+      findingSpecs: [{ findingId: "   " }],
+    });
+
+    const state = buildThreatLogState({
+      previousState: createEmptyThreatLogState(),
+      scans: [],
+      layer4Reports: [report],
+      scanHistoryTruthState: "unknown",
+      systemStatus: createThreatSystemStatus(),
+      manifest: null,
+      engine: null,
+      healthSnapshot: null,
+      referenceTime: null,
+    });
+
+    expect(validateLayer4ThreatLogPayload(report)).toEqual({
+      ok: false,
+      code: "invalid_layer4_reason_code",
+    });
+    expect(state.entries.filter((entry) => entry.layer === "layer4")).toEqual([]);
   });
 });

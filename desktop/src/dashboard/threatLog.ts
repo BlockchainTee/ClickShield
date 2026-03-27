@@ -5,10 +5,11 @@ import type {
   ThreatDashboardScanSource,
 } from "./adapters";
 import type {
-  WalletFinding,
   WalletLayer4Output,
   WalletReportClassification,
 } from "../lib/shared-rules";
+import { validateLayer4ThreatLogPayload } from "./layer4Runtime";
+import type { ValidatedThreatLayer4Payload } from "./layer4Runtime";
 import { parseThreatTimestamp } from "./time";
 import type {
   ThreatLogEntry,
@@ -211,28 +212,13 @@ function readLayer4Severity(classification: WalletReportClassification): ThreatS
 }
 
 function buildLayer4ReasonCodes(
-  findings: readonly WalletFinding[],
+  findings: ValidatedThreatLayer4Payload["result"]["findings"],
 ): readonly string[] {
-  const reasonCodes: string[] = [];
-
-  for (const finding of findings) {
-    const metadataCode =
-      typeof finding.metadata.code === "string" ? finding.metadata.code.trim() : "";
-    if (metadataCode) {
-      reasonCodes.push(metadataCode);
-      continue;
-    }
-
-    if (finding.findingId.trim()) {
-      reasonCodes.push(finding.findingId.trim());
-    }
-  }
-
-  return reasonCodes;
+  return findings.map((finding) => finding.reasonCode);
 }
 
 function buildLayer4EvidencePreview(
-  report: WalletLayer4Output,
+  report: ValidatedThreatLayer4Payload,
 ): readonly string[] {
   const evidence = [
     `Wallet chain: ${report.request.walletChain}.`,
@@ -252,7 +238,7 @@ function buildLayer4EvidencePreview(
   return evidence;
 }
 
-function buildLayer4Title(report: WalletLayer4Output): string {
+function buildLayer4Title(report: ValidatedThreatLayer4Payload): string {
   return `Layer 4 wallet scan result: ${titleize(report.request.walletChain)} wallet`;
 }
 
@@ -604,29 +590,35 @@ export function normalizeScanThreatLogEntries(
  */
 export function normalizeLayer4ThreatLogEntry(
   report: WalletLayer4Output,
-): ThreatLogEntry {
-  const severity = readLayer4Severity(report.result.classification);
+): ThreatLogEntry | null {
+  const validation = validateLayer4ThreatLogPayload(report);
+  if (!validation.ok) {
+    return null;
+  }
+
+  const validatedReport = validation.value;
+  const severity = readLayer4Severity(validatedReport.result.classification);
   const truthGaps: readonly string[] = [];
 
   return freezeEntry({
-    id: buildDeterministicEventId(["layer4_report", report.reportId]),
-    occurredAt: report.generatedAt,
+    id: buildDeterministicEventId(["layer4_report", validatedReport.reportId]),
+    occurredAt: validatedReport.generatedAt,
     eventKind: "scan_result",
     layer: "layer4",
     decision: "scan_result",
     severity,
     surface: "desktop",
     sourceSurface: "desktop",
-    title: buildLayer4Title(report),
-    summary: report.result.statusLabel,
-    reasonCodes: buildLayer4ReasonCodes(report.result.findings),
-    targetLabel: report.request.walletAddress,
-    reportId: report.reportId,
-    evidencePreview: buildLayer4EvidencePreview(report),
+    title: buildLayer4Title(validatedReport),
+    summary: validatedReport.result.statusLabel,
+    reasonCodes: buildLayer4ReasonCodes(validatedReport.result.findings),
+    targetLabel: validatedReport.request.walletAddress,
+    reportId: validatedReport.reportId,
+    evidencePreview: buildLayer4EvidencePreview(validatedReport),
     statusTruth: buildEntryTruthState(truthGaps),
-    sourceRef: `wallet_report:${report.reportId}`,
+    sourceRef: `wallet_report:${validatedReport.reportId}`,
     truthGaps,
-    rawKind: report.result.classification,
+    rawKind: validatedReport.result.classification,
   });
 }
 
@@ -636,7 +628,12 @@ export function normalizeLayer4ThreatLogEntry(
 export function normalizeLayer4ThreatLogEntries(
   reports: readonly WalletLayer4Output[],
 ): readonly ThreatLogEntry[] {
-  return freezeArray(reports.map((report) => normalizeLayer4ThreatLogEntry(report)));
+  return freezeArray(
+    reports.flatMap((report) => {
+      const entry = normalizeLayer4ThreatLogEntry(report);
+      return entry ? [entry] : [];
+    }),
+  );
 }
 
 /**
