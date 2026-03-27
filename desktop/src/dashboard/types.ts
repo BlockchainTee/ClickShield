@@ -1,3 +1,5 @@
+import type { WalletReportClassification } from "../lib/shared-rules";
+
 /**
  * Identifies the ClickShield protection layer represented by a dashboard event.
  */
@@ -10,6 +12,7 @@ export type ThreatDecision =
   | "allowed"
   | "warned"
   | "blocked"
+  | "scan_result"
   | "observed"
   | "reviewed"
   | "reported"
@@ -19,7 +22,13 @@ export type ThreatDecision =
 /**
  * Severity level used by the dashboard feed and summary cards.
  */
-export type ThreatSeverity = "low" | "medium" | "high" | "critical" | "unknown";
+export type ThreatSeverity =
+  | "low"
+  | "medium"
+  | "high"
+  | "critical"
+  | WalletReportClassification
+  | "unknown";
 
 /**
  * Explicit target surface where the event was observed or scanned.

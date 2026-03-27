@@ -4,6 +4,11 @@ import type {
   NavigationManifestSnapshot,
   ThreatDashboardScanSource,
 } from "./adapters";
+import type {
+  WalletFinding,
+  WalletLayer4Output,
+  WalletReportClassification,
+} from "../lib/shared-rules";
 import { parseThreatTimestamp } from "./time";
 import type {
   ThreatLogEntry,
@@ -100,6 +105,7 @@ function readThreatDecision(value: string | null | undefined): ThreatDecision {
   return value === "allowed" ||
     value === "warned" ||
     value === "blocked" ||
+    value === "scan_result" ||
     value === "observed" ||
     value === "reviewed" ||
     value === "reported" ||
@@ -112,7 +118,11 @@ function readThreatSeverity(value: string | null | undefined): ThreatSeverity {
   return value === "low" ||
     value === "medium" ||
     value === "high" ||
-    value === "critical"
+    value === "critical" ||
+    value === "no_issues_detected" ||
+    value === "issues_detected" ||
+    value === "manual_action_required" ||
+    value === "execution_reported"
     ? value
     : "unknown";
 }
@@ -194,6 +204,56 @@ function buildScanSummary(scan: ThreatDashboardScanSource): string {
   }
 
   return "Dashboard entry loaded from the current desktop scan history.";
+}
+
+function readLayer4Severity(classification: WalletReportClassification): ThreatSeverity {
+  return classification;
+}
+
+function buildLayer4ReasonCodes(
+  findings: readonly WalletFinding[],
+): readonly string[] {
+  const reasonCodes: string[] = [];
+
+  for (const finding of findings) {
+    const metadataCode =
+      typeof finding.metadata.code === "string" ? finding.metadata.code.trim() : "";
+    if (metadataCode) {
+      reasonCodes.push(metadataCode);
+      continue;
+    }
+
+    if (finding.findingId.trim()) {
+      reasonCodes.push(finding.findingId.trim());
+    }
+  }
+
+  return reasonCodes;
+}
+
+function buildLayer4EvidencePreview(
+  report: WalletLayer4Output,
+): readonly string[] {
+  const evidence = [
+    `Wallet chain: ${report.request.walletChain}.`,
+    `Wallet address: ${report.request.walletAddress}.`,
+    `Network: ${report.request.networkId}.`,
+    `Scan mode: ${report.request.scanMode}.`,
+    `Classification: ${report.result.classification}.`,
+    `Findings: ${String(report.summary.findingCount)} total, ${String(report.summary.openFindingCount)} open, ${String(report.summary.actionableFindingCount)} actionable.`,
+    `Cleanup actions: ${String(report.summary.cleanupActionCount)}.`,
+    `Execution performed: ${report.result.executionPerformed ? "true" : "false"}.`,
+  ];
+
+  for (const finding of report.result.findings.slice(0, 3)) {
+    evidence.push(`Finding: ${finding.title}. ${finding.summary}`);
+  }
+
+  return evidence;
+}
+
+function buildLayer4Title(report: WalletLayer4Output): string {
+  return `Layer 4 wallet scan result: ${titleize(report.request.walletChain)} wallet`;
 }
 
 function buildScanTruthGaps(
@@ -540,6 +600,46 @@ export function normalizeScanThreatLogEntries(
 }
 
 /**
+ * Normalizes a Layer 4 wallet report into an immutable desktop threat-log entry.
+ */
+export function normalizeLayer4ThreatLogEntry(
+  report: WalletLayer4Output,
+): ThreatLogEntry {
+  const severity = readLayer4Severity(report.result.classification);
+  const truthGaps: readonly string[] = [];
+
+  return freezeEntry({
+    id: buildDeterministicEventId(["layer4_report", report.reportId]),
+    occurredAt: report.generatedAt,
+    eventKind: "scan_result",
+    layer: "layer4",
+    decision: "scan_result",
+    severity,
+    surface: "desktop",
+    sourceSurface: "desktop",
+    title: buildLayer4Title(report),
+    summary: report.result.statusLabel,
+    reasonCodes: buildLayer4ReasonCodes(report.result.findings),
+    targetLabel: report.request.walletAddress,
+    reportId: report.reportId,
+    evidencePreview: buildLayer4EvidencePreview(report),
+    statusTruth: buildEntryTruthState(truthGaps),
+    sourceRef: `wallet_report:${report.reportId}`,
+    truthGaps,
+    rawKind: report.result.classification,
+  });
+}
+
+/**
+ * Normalizes immutable Layer 4 report history into desktop threat-log entries.
+ */
+export function normalizeLayer4ThreatLogEntries(
+  reports: readonly WalletLayer4Output[],
+): readonly ThreatLogEntry[] {
+  return freezeArray(reports.map((report) => normalizeLayer4ThreatLogEntry(report)));
+}
+
+/**
  * Normalizes the current navigation intel snapshot into a desktop status event.
  */
 export function normalizeIntelStatusThreatLogEntry(params: {
@@ -807,6 +907,7 @@ function buildThreatLogTruthGaps(params: {
 export function buildThreatLogState(params: {
   readonly previousState: ThreatLogState | null;
   readonly scans: readonly ThreatDashboardScanSource[];
+  readonly layer4Reports: readonly WalletLayer4Output[];
   readonly scanHistoryTruthState: ThreatTruthState;
   readonly systemStatus: ThreatSystemStatus;
   readonly manifest: NavigationManifestSnapshot | null;
@@ -816,6 +917,7 @@ export function buildThreatLogState(params: {
 }): ThreatLogState {
   const normalizedEntries: ThreatLogEntry[] = [
     ...normalizeScanThreatLogEntries(params.scans),
+    ...normalizeLayer4ThreatLogEntries(params.layer4Reports),
   ];
 
   const intelEntry = normalizeIntelStatusThreatLogEntry({

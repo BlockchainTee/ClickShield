@@ -34,6 +34,10 @@ const EMPTY_SEVERITY_BREAKDOWN: Record<ThreatSeverity, number> = {
   medium: 0,
   high: 0,
   critical: 0,
+  no_issues_detected: 0,
+  issues_detected: 0,
+  manual_action_required: 0,
+  execution_reported: 0,
   unknown: 0,
 };
 
@@ -41,6 +45,7 @@ const EMPTY_DECISION_BREAKDOWN: Record<ThreatDecision, number> = {
   allowed: 0,
   warned: 0,
   blocked: 0,
+  scan_result: 0,
   observed: 0,
   reviewed: 0,
   reported: 0,

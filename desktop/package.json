@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test": "vitest",
     "preview": "vite preview",
     "tauri": "npx tauri",
     "watchdog:sidecar": "bash -lc 'cd src-tauri && TARGET=\"$(rustc -vV | awk \"/host:/ {print \\$2}\")\" && cargo build --release --bin clickshield_watchdog && mkdir -p binaries && cp target/release/clickshield_watchdog binaries/clickshield_watchdog-${TARGET} && chmod +x binaries/clickshield_watchdog-${TARGET} && ls -la binaries | sed -n \"1,120p\"'",
@@ -27,6 +28,7 @@
     "postcss": "^8.5.6",
     "tailwindcss": "^4.1.17",
     "typescript": "~5.8.3",
-    "vite": "^7.0.4"
+    "vite": "^7.0.4",
+    "vitest": "^3.2.4"
   }
 }

@@ -10,10 +10,13 @@ node_modules/
 dist/
 build/
 
+# Generated local runtime data
+backend/clickshield.sqlite*
+.pnpm-store/
+
 # Logs
 *.log
 logs/
 
 # OS junk
 .DS_Store
-

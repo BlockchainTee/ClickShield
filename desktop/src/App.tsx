@@ -21,6 +21,7 @@ import type {
   ThreatLogState,
   ThreatTruthState,
 } from "./dashboard/types";
+import type { WalletLayer4Output } from "./lib/shared-rules";
 
 // Prefer env override, fall back to localhost.
 // Example: VITE_BACKEND_BASE=http://127.0.0.1:4000
@@ -116,6 +117,8 @@ type PersistedState = {
 const STORAGE_KEY = "clickshield.desktop.recentScans.v2";
 const STORAGE_HIDDEN_KEY = "clickshield.desktop.hiddenIds.v2";
 const STORAGE_RESCAN_TRAY_KEY = "clickshield.desktop.rescanTray.v2";
+const STORAGE_LAYER4_REPORTS_KEY = "clickshield.desktop.layer4Reports.v1";
+const WALLET_LAYER4_OUTPUT_EVENT = "clickshield:wallet-layer4-output";
 
 const STORAGE_SHIELD_MODE_KEY = "clickshield.desktop.shieldMode.v1";
 const STORAGE_URL_CACHE_KEY = "clickshield.desktop.urlScanCache.v1";
@@ -142,6 +145,10 @@ type UrlScanCacheEntry = {
   cachedAt: string; // ISO
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function safeJsonParse<T>(value: string | null): T | null {
   if (!value) return null;
   try {
@@ -153,6 +160,83 @@ function safeJsonParse<T>(value: string | null): T | null {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function isWalletLayer4Output(value: unknown): value is WalletLayer4Output {
+  if (!isRecord(value)) {
+    return false;
+  }
+
+  const request = isRecord(value.request) ? value.request : null;
+  const result = isRecord(value.result) ? value.result : null;
+  const summary = isRecord(value.summary) ? value.summary : null;
+
+  return (
+    typeof value.reportId === "string" &&
+    typeof value.generatedAt === "string" &&
+    request !== null &&
+    typeof request.walletAddress === "string" &&
+    typeof request.walletChain === "string" &&
+    typeof request.scanMode === "string" &&
+    result !== null &&
+    typeof result.statusLabel === "string" &&
+    typeof result.classification === "string" &&
+    Array.isArray(result.findings) &&
+    summary !== null &&
+    typeof summary.statusLabel === "string"
+  );
+}
+
+function readWalletLayer4Outputs(value: unknown): WalletLayer4Output[] {
+  if (Array.isArray(value)) {
+    return value.filter(isWalletLayer4Output);
+  }
+
+  if (isWalletLayer4Output(value)) {
+    return [value];
+  }
+
+  if (!isRecord(value)) {
+    return [];
+  }
+
+  if (Array.isArray(value.reports)) {
+    return value.reports.filter(isWalletLayer4Output);
+  }
+
+  return isWalletLayer4Output(value.report) ? [value.report] : [];
+}
+
+function dedupeLayer4ReportsKeepNewest(reports: WalletLayer4Output[]) {
+  const byId = new Map<string, WalletLayer4Output>();
+
+  for (const report of reports) {
+    if (!report?.reportId) {
+      continue;
+    }
+
+    const existing = byId.get(report.reportId);
+    if (!existing) {
+      byId.set(report.reportId, report);
+      continue;
+    }
+
+    const existingTimestamp = new Date(existing.generatedAt).getTime();
+    const nextTimestamp = new Date(report.generatedAt).getTime();
+    if (!Number.isFinite(existingTimestamp) || !Number.isFinite(nextTimestamp) || nextTimestamp >= existingTimestamp) {
+      byId.set(report.reportId, report);
+    }
+  }
+
+  return Array.from(byId.values()).sort((left, right) => {
+    const timestampDelta =
+      new Date(right.generatedAt).getTime() - new Date(left.generatedAt).getTime();
+    if (timestampDelta !== 0) {
+      return timestampDelta;
+    }
+
+    return left.reportId.localeCompare(right.reportId);
+  });
 }
 
 function computeNextRetryDelayMs(attempt: number): number {
@@ -577,6 +661,7 @@ const App: React.FC = () => {
 
   // ------------ Recent scans mini-dashboard -------------
   const [recentScans, setRecentScans] = useState<RecentScanEntry[]>([]);
+  const [layer4Reports, setLayer4Reports] = useState<WalletLayer4Output[]>([]);
   const [recentLoading, setRecentLoading] = useState(false);
   const [recentError, setRecentError] = useState<string | null>(null);
   const [lastSyncAt, setLastSyncAt] = useState<string | null>(null);
@@ -690,6 +775,7 @@ const App: React.FC = () => {
       buildThreatLogState({
         previousState,
         scans: recentScans,
+        layer4Reports,
         scanHistoryTruthState,
         systemStatus: dashboardSystemStatus,
         manifest: navigationManifestSnapshot,
@@ -700,6 +786,7 @@ const App: React.FC = () => {
     );
   }, [
     recentScans,
+    layer4Reports,
     scanHistoryTruthState,
     dashboardSystemStatus,
     navigationManifestSnapshot,
@@ -772,6 +859,13 @@ const App: React.FC = () => {
     if (persisted?.recentScans?.length) {
       setRecentScans(dedupeScansKeepNewest(persisted.recentScans));
       setLastSyncAt(persisted.lastUpdatedAt || null);
+    }
+
+    const persistedLayer4Reports = readWalletLayer4Outputs(
+      safeJsonParse<unknown>(localStorage.getItem(STORAGE_LAYER4_REPORTS_KEY))
+    );
+    if (persistedLayer4Reports.length > 0) {
+      setLayer4Reports(dedupeLayer4ReportsKeepNewest(persistedLayer4Reports));
     }
 
     setHiddenIds(Array.isArray(hidden) ? hidden : []);
@@ -1043,6 +1137,14 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [recentScans, hiddenIds, rescanTray]);
 
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_LAYER4_REPORTS_KEY, JSON.stringify(layer4Reports));
+    } catch {
+      // fail calm
+    }
+  }, [layer4Reports]);
+
   // Persist shield mode changes to localStorage + backend
   useEffect(() => {
     try {
@@ -1053,6 +1155,31 @@ const App: React.FC = () => {
     pushShieldModeToBackend(shieldMode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shieldMode]);
+
+  useEffect(() => {
+    const handleWalletLayer4Output = (event: Event) => {
+      const reports = readWalletLayer4Outputs((event as CustomEvent<unknown>).detail);
+      if (reports.length === 0) {
+        return;
+      }
+
+      setLayer4Reports((previousReports) =>
+        dedupeLayer4ReportsKeepNewest([...reports, ...previousReports])
+      );
+    };
+
+    window.addEventListener(
+      WALLET_LAYER4_OUTPUT_EVENT,
+      handleWalletLayer4Output as EventListener
+    );
+
+    return () => {
+      window.removeEventListener(
+        WALLET_LAYER4_OUTPUT_EVENT,
+        handleWalletLayer4Output as EventListener
+      );
+    };
+  }, []);
 
   // =====================================================
   // Rescan tray helpers

@@ -665,6 +665,13 @@ export function ThreatDashboard({
                 { value: "medium", label: "Medium" },
                 { value: "high", label: "High" },
                 { value: "critical", label: "Critical" },
+                { value: "no_issues_detected", label: "No Issues Detected" },
+                { value: "issues_detected", label: "Issues Detected" },
+                {
+                  value: "manual_action_required",
+                  label: "Manual Action Required",
+                },
+                { value: "execution_reported", label: "Execution Reported" },
                 { value: "unknown", label: "Unknown" },
               ]}
             />
@@ -682,6 +689,7 @@ export function ThreatDashboard({
                 { value: "blocked", label: "Blocked" },
                 { value: "warned", label: "Warned" },
                 { value: "allowed", label: "Allowed" },
+                { value: "scan_result", label: "Scan Result" },
                 { value: "observed", label: "Observed" },
                 { value: "reviewed", label: "Reviewed" },
                 { value: "reported", label: "Reported" },

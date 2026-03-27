@@ -30,6 +30,9 @@ function decisionBadgeClass(decision: ThreatLogEntry["decision"]): string {
   if (decision === "allowed") {
     return "border-emerald-500/40 bg-emerald-500/10 text-emerald-200";
   }
+  if (decision === "scan_result") {
+    return "border-sky-500/40 bg-sky-500/10 text-sky-200";
+  }
   if (decision === "reported") {
     return "border-red-500/40 bg-red-500/10 text-red-200";
   }
