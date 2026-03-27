@@ -283,9 +283,30 @@ describe("Layer 4 Phase 4D Solana scan foundation", () => {
     );
 
     expect(basic.summary.scanMode).toBe("basic");
+    expect(basic.summary.capabilityTier).toBe("basic");
     expect(basic.report.summary.scanMode).toBe("basic");
+    expect(basic.report.summary.capabilityTier).toBe("basic");
     expect(basic.report.request.scanMode).toBe("basic");
     expect(basic.report.cleanupExecution).toBeNull();
+    expect(basic.report.result.executionPerformed).toBe(false);
+    expect(basic.report.result.actionable).toBe(true);
+    expect(basic.report.result.classification).toBe("manual_action_required");
+    expect(basic.report.result.statusLabel).toBe(
+      "Scan completed. Issues detected. Manual action required."
+    );
+    expect(
+      [
+        basic.report.result.statusLabel,
+        basic.report.summary.statusLabel,
+        basic.report.result.cleanupPlan?.summary ?? "",
+        ...basic.report.result.findings.map((finding) => finding.summary),
+        ...(basic.report.result.cleanupPlan?.actions ?? []).flatMap((action) => [
+          action.title,
+          action.description,
+          action.supportDetail ?? "",
+        ]),
+      ].join(" ")
+    ).not.toMatch(/\b(cleaned|resolved|fixed)\b/i);
     expect(basic.report.result.capabilityBoundaries).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -339,6 +360,8 @@ describe("Layer 4 Phase 4D Solana scan foundation", () => {
     expect(evaluation.result.findings).toHaveLength(0);
     expect(evaluation.result.riskFactors).toHaveLength(0);
     expect(evaluation.result.cleanupPlan).toBeNull();
+    expect(evaluation.result.classification).toBe("no_issues_detected");
+    expect(evaluation.result.statusLabel).toBe("Scan completed. No issues detected.");
     expect(evaluation.result.walletAddress).toBe(WALLET_ADDRESS);
   });
 

@@ -11,6 +11,10 @@ import type {
   WalletScanSnapshot,
   WalletSummary,
 } from "./types.js";
+import {
+  buildWalletReportTruthFields,
+  didWalletCleanupExecutionRun,
+} from "./report-truth.js";
 
 /**
  * Layer 4 capability tiers exposed through the wallet contract.
@@ -284,6 +288,14 @@ export function assertWalletReportCapabilityTruth(input: {
     "summary.scanMode"
   );
 
+  const expectedTruth = buildWalletReportTruthFields({
+    capabilityTier: input.request.scanMode,
+    findings: input.result.findings,
+    cleanupPlan: input.result.cleanupPlan,
+    cleanupExecution: input.cleanupExecution,
+    cleanupExecutionSupported: contract.cleanupExecutionSupported,
+  });
+
   if (input.snapshot.walletChain !== expectedChain) {
     throw new Error(
       `Wallet report capability truth requires snapshot.walletChain to be "${expectedChain}".`
@@ -325,6 +337,77 @@ export function assertWalletReportCapabilityTruth(input: {
   ) {
     throw new Error(
       `Layer 4 ${expectedChain} cleanup guidance cannot advertise projected post-remediation outcomes.`
+    );
+  }
+
+  if (input.result.capabilityTier !== input.request.scanMode) {
+    throw new Error(
+      "Wallet report capability truth requires result.capabilityTier to match request.scanMode."
+    );
+  }
+
+  if (input.summary.capabilityTier !== input.request.scanMode) {
+    throw new Error(
+      "Wallet report capability truth requires summary.capabilityTier to match request.scanMode."
+    );
+  }
+
+  const expectedActionable = (input.result.cleanupPlan?.actions.length ?? 0) > 0;
+  if (input.result.actionable !== expectedActionable) {
+    throw new Error(
+      "Wallet report capability truth requires result.actionable to match cleanup plan availability."
+    );
+  }
+
+  if (input.summary.actionable !== expectedActionable) {
+    throw new Error(
+      "Wallet report capability truth requires summary.actionable to match cleanup plan availability."
+    );
+  }
+
+  if (
+    input.summary.actionableFindingCount > 0 &&
+    !input.summary.actionable
+  ) {
+    throw new Error(
+      "Wallet report capability truth requires summary.actionable to remain true when actionable findings are present."
+    );
+  }
+
+  const executionPerformed = didWalletCleanupExecutionRun(input.cleanupExecution);
+  if (input.result.executionPerformed !== executionPerformed) {
+    throw new Error(
+      "Wallet report capability truth requires result.executionPerformed to match actual cleanup execution."
+    );
+  }
+
+  if (input.summary.executionPerformed !== executionPerformed) {
+    throw new Error(
+      "Wallet report capability truth requires summary.executionPerformed to match actual cleanup execution."
+    );
+  }
+
+  if (input.result.classification !== expectedTruth.classification) {
+    throw new Error(
+      "Wallet report capability truth requires result.classification to match actual execution truth."
+    );
+  }
+
+  if (input.summary.classification !== expectedTruth.classification) {
+    throw new Error(
+      "Wallet report capability truth requires summary.classification to match actual execution truth."
+    );
+  }
+
+  if (input.result.statusLabel !== expectedTruth.statusLabel) {
+    throw new Error(
+      "Wallet report capability truth requires result.statusLabel to match actual execution truth."
+    );
+  }
+
+  if (input.summary.statusLabel !== expectedTruth.statusLabel) {
+    throw new Error(
+      "Wallet report capability truth requires summary.statusLabel to match actual execution truth."
     );
   }
 

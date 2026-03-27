@@ -324,6 +324,7 @@ export type {
   WalletFinding,
   WalletFindingStatus,
   WalletReport,
+  WalletReportClassification,
   WalletRiskFactor,
   WalletScanMode,
   WalletScanRequest,

@@ -11,6 +11,15 @@ export type WalletChain = "evm" | "solana" | "bitcoin";
 export type WalletScanMode = "basic" | "full";
 
 /**
+ * Deterministic report classifications exposed to downstream consumers.
+ */
+export type WalletReportClassification =
+  | "no_issues_detected"
+  | "issues_detected"
+  | "manual_action_required"
+  | "execution_reported";
+
+/**
  * Broad chain-agnostic exposure categories used across findings and factors.
  */
 export type WalletExposureCategory =
@@ -424,6 +433,16 @@ export interface WalletScanResult {
   readonly scoreBreakdown: WalletScoreBreakdown;
   /** Ordered cleanup plan, if the phase produced one. */
   readonly cleanupPlan: WalletCleanupPlan | null;
+  /** Capability tier represented by this report result. */
+  readonly capabilityTier: WalletScanMode;
+  /** Whether any cleanup execution actually ran for this report result. */
+  readonly executionPerformed: boolean;
+  /** Whether the result includes any follow-up action the caller can take. */
+  readonly actionable: boolean;
+  /** Deterministic report classification derived from actual execution state. */
+  readonly classification: WalletReportClassification;
+  /** Truthful human-readable status label for the result. */
+  readonly statusLabel: string;
   /** Honest capability boundaries for the current report. */
   readonly capabilityBoundaries: readonly WalletCapabilityBoundary[];
 }
@@ -444,6 +463,8 @@ export interface WalletSummary {
   readonly generatedAt: string;
   /** Snapshot capture timestamp used in the report. */
   readonly snapshotCapturedAt: string;
+  /** Capability tier represented by this report summary. */
+  readonly capabilityTier: WalletScanMode;
   /** Final wallet score in the inclusive 0-100 range. */
   readonly score: number;
   /** Aggregate risk level for the wallet. */
@@ -456,6 +477,14 @@ export interface WalletSummary {
   readonly cleanupActionCount: number;
   /** Number of findings with at least one linked cleanup action. */
   readonly actionableFindingCount: number;
+  /** Whether any cleanup execution actually ran for this report summary. */
+  readonly executionPerformed: boolean;
+  /** Whether the report includes any follow-up action the caller can take. */
+  readonly actionable: boolean;
+  /** Deterministic report classification derived from actual execution state. */
+  readonly classification: WalletReportClassification;
+  /** Truthful human-readable status label for the summary. */
+  readonly statusLabel: string;
 }
 
 /**

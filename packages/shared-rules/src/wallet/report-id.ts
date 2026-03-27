@@ -323,10 +323,14 @@ function canonicalizeSnapshot(snapshot: WalletScanSnapshot): CanonicalJsonObject
 
 function canonicalizeResult(result: WalletScanResult): CanonicalJsonObject {
   return {
+    actionable: result.actionable,
     capabilityBoundaries: result.capabilityBoundaries.map(
       canonicalizeCapabilityBoundary
     ),
+    capabilityTier: result.capabilityTier,
+    classification: result.classification,
     cleanupPlan: canonicalizeCleanupPlan(result.cleanupPlan),
+    executionPerformed: result.executionPerformed,
     evaluatedAt: result.evaluatedAt,
     findings: result.findings.map(canonicalizeFinding),
     networkId: result.networkId,
@@ -334,6 +338,7 @@ function canonicalizeResult(result: WalletScanResult): CanonicalJsonObject {
     riskFactors: result.riskFactors.map(canonicalizeRiskFactor),
     scoreBreakdown: canonicalizeScoreBreakdown(result.scoreBreakdown),
     snapshotId: result.snapshotId,
+    statusLabel: result.statusLabel,
     walletAddress: result.walletAddress,
     walletChain: result.walletChain,
   };
@@ -341,8 +346,12 @@ function canonicalizeResult(result: WalletScanResult): CanonicalJsonObject {
 
 function canonicalizeSummary(summary: WalletSummary): CanonicalJsonObject {
   return {
+    actionable: summary.actionable,
     actionableFindingCount: summary.actionableFindingCount,
+    capabilityTier: summary.capabilityTier,
+    classification: summary.classification,
     cleanupActionCount: summary.cleanupActionCount,
+    executionPerformed: summary.executionPerformed,
     findingCount: summary.findingCount,
     generatedAt: summary.generatedAt,
     networkId: summary.networkId,
@@ -351,6 +360,7 @@ function canonicalizeSummary(summary: WalletSummary): CanonicalJsonObject {
     scanMode: summary.scanMode,
     score: summary.score,
     snapshotCapturedAt: summary.snapshotCapturedAt,
+    statusLabel: summary.statusLabel,
     walletAddress: summary.walletAddress,
     walletChain: summary.walletChain,
   };

@@ -194,6 +194,11 @@ function createReportIdInput(): WalletReportIdInput {
       ],
     },
     cleanupPlan,
+    capabilityTier: request.scanMode,
+    executionPerformed: false,
+    actionable: true,
+    classification: "issues_detected",
+    statusLabel: "Scan completed. Issues detected. Follow-up action is available.",
     capabilityBoundaries: [
       {
         boundaryId: "boundary_1",
@@ -212,12 +217,17 @@ function createReportIdInput(): WalletReportIdInput {
     scanMode: request.scanMode,
     generatedAt: "2026-03-23T10:05:00.000Z",
     snapshotCapturedAt: snapshot.capturedAt,
+    capabilityTier: request.scanMode,
     score: 72,
     riskLevel: "high",
     findingCount: 1,
     openFindingCount: 1,
     cleanupActionCount: 1,
     actionableFindingCount: 1,
+    executionPerformed: false,
+    actionable: true,
+    classification: "issues_detected",
+    statusLabel: "Scan completed. Issues detected. Follow-up action is available.",
   };
 
   const cleanupExecution: WalletCleanupExecutionResult = {
@@ -395,6 +405,11 @@ function createBasicOnlyReportIdInput(
       projectedScore: null,
       projectedRiskLevel: null,
     },
+    capabilityTier: scanMode,
+    executionPerformed: false,
+    actionable: true,
+    classification: "manual_action_required",
+    statusLabel: "Scan completed. Issues detected. Manual action required.",
     capabilityBoundaries: [
       {
         boundaryId: `boundary_${walletChain}_snapshot`,
@@ -434,12 +449,17 @@ function createBasicOnlyReportIdInput(
     scanMode,
     generatedAt: "2026-03-23T10:04:00.000Z",
     snapshotCapturedAt: snapshot.capturedAt,
+    capabilityTier: scanMode,
     score: 61,
     riskLevel: "medium",
     findingCount: 1,
     openFindingCount: 1,
     cleanupActionCount: 1,
     actionableFindingCount: 1,
+    executionPerformed: false,
+    actionable: true,
+    classification: "manual_action_required",
+    statusLabel: "Scan completed. Issues detected. Manual action required.",
   };
 
   return {
@@ -690,6 +710,38 @@ describe("buildWalletReportId", () => {
     expect(buildWalletReportId(changed)).not.toBe(buildWalletReportId(base));
   });
 
+  it("accepts EVM execution-reported identity only when summary and result match the execution record", () => {
+    const changed = cloneReportIdInput(createReportIdInput());
+
+    changed.cleanupExecution = {
+      ...changed.cleanupExecution!,
+      status: "completed",
+      startedAt: "2026-03-23T10:06:00.000Z",
+      completedAt: "2026-03-23T10:07:00.000Z",
+      actionResults: changed.cleanupExecution!.actionResults.map((actionResult) => ({
+        ...actionResult,
+        status: "succeeded",
+        executedAt: "2026-03-23T10:07:00.000Z",
+        detail: "External revoke execution was reported.",
+      })),
+    };
+    changed.result = {
+      ...changed.result,
+      executionPerformed: true,
+      classification: "execution_reported",
+      statusLabel: "Scan completed. Issues detected. Cleanup execution was reported.",
+    };
+    changed.summary = {
+      ...changed.summary,
+      executionPerformed: true,
+      classification: "execution_reported",
+      statusLabel: "Scan completed. Issues detected. Cleanup execution was reported.",
+    };
+
+    expect(buildWalletReportId(changed)).toMatch(/^wallet_report_/);
+    expect(buildWalletReportId(changed)).not.toBe(buildWalletReportId(createReportIdInput()));
+  });
+
   it("changes the ID when declared capability boundaries change within supported truth", () => {
     const base = createReportIdInput();
     const changed = cloneReportIdInput(base);
@@ -708,6 +760,27 @@ describe("buildWalletReportId", () => {
     };
 
     expect(buildWalletReportId(changed)).not.toBe(buildWalletReportId(base));
+  });
+
+  it("rejects report identity input when execution truth fields overstate what ran", () => {
+    const changed = cloneReportIdInput(createReportIdInput());
+
+    changed.cleanupExecution = {
+      ...changed.cleanupExecution!,
+      status: "completed",
+      startedAt: "2026-03-23T10:06:00.000Z",
+      completedAt: "2026-03-23T10:07:00.000Z",
+      actionResults: changed.cleanupExecution!.actionResults.map((actionResult) => ({
+        ...actionResult,
+        status: "succeeded",
+        executedAt: "2026-03-23T10:07:00.000Z",
+        detail: "External revoke execution was reported.",
+      })),
+    };
+
+    expect(() => buildWalletReportId(changed)).toThrowError(
+      "Wallet report capability truth requires result.executionPerformed to match actual cleanup execution."
+    );
   });
 
   it("rejects report identity input that overclaims EVM cleanup execution support", () => {

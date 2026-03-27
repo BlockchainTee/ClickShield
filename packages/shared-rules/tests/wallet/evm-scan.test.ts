@@ -178,10 +178,31 @@ describe("Layer 4 Phase 4B EVM scan foundation", () => {
     );
 
     expect(fullEvaluation.summary.scanMode).toBe("full");
+    expect(fullEvaluation.summary.capabilityTier).toBe("full");
     expect(fullEvaluation.report.summary.scanMode).toBe("full");
+    expect(fullEvaluation.report.summary.capabilityTier).toBe("full");
     expect(fullEvaluation.report.request.scanMode).toBe("full");
     expect(basicEvaluation.summary.scanMode).toBe("basic");
+    expect(basicEvaluation.summary.capabilityTier).toBe("basic");
     expect(basicEvaluation.report.request.scanMode).toBe("basic");
+    expect(fullEvaluation.report.result.executionPerformed).toBe(false);
+    expect(basicEvaluation.report.result.executionPerformed).toBe(false);
+    expect(fullEvaluation.report.result.actionable).toBe(true);
+    expect(basicEvaluation.report.result.actionable).toBe(true);
+    expect(fullEvaluation.report.result.classification).toBe("issues_detected");
+    expect(basicEvaluation.report.result.classification).toBe("issues_detected");
+    expect(fullEvaluation.report.result.statusLabel).toBe(
+      "Scan completed. Issues detected. Follow-up action is available."
+    );
+    expect(basicEvaluation.report.result.statusLabel).toBe(
+      "Scan completed. Issues detected. Follow-up action is available."
+    );
+    expect(fullEvaluation.report.result.statusLabel).not.toMatch(
+      /\b(cleaned|resolved|fixed)\b/i
+    );
+    expect(basicEvaluation.report.result.statusLabel).not.toMatch(
+      /\b(cleanup|cleaned|resolved|fixed)\b/i
+    );
     expect(fullEvaluation.report.result.cleanupPlan?.actions[0]?.supportStatus).toBe(
       "supported"
     );
@@ -232,6 +253,8 @@ describe("Layer 4 Phase 4B EVM scan foundation", () => {
     expect(evaluation.result.findings).toHaveLength(0);
     expect(evaluation.result.riskFactors).toHaveLength(0);
     expect(evaluation.result.cleanupPlan).toBeNull();
+    expect(evaluation.result.classification).toBe("no_issues_detected");
+    expect(evaluation.result.statusLabel).toBe("Scan completed. No issues detected.");
     expect(evaluation.result.walletAddress).toBe(NORMALIZED_WALLET_ADDRESS);
     expect(evaluation.report.request.walletAddress).toBe(NORMALIZED_WALLET_ADDRESS);
   });

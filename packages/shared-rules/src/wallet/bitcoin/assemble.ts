@@ -1,4 +1,5 @@
 import { buildWalletReportId } from "../report-id.js";
+import { buildWalletReportTruthFields } from "../report-truth.js";
 import type {
   WalletCapabilityBoundary,
   WalletFinding,
@@ -180,6 +181,13 @@ export function assembleBitcoinWalletEvaluation(input: {
     riskFactors,
     scoreBreakdown,
     cleanupPlan,
+    ...buildWalletReportTruthFields({
+      capabilityTier: normalizedRequest.scanMode,
+      findings,
+      cleanupPlan,
+      cleanupExecution: null,
+      cleanupExecutionSupported: false,
+    }),
     capabilityBoundaries,
   };
 
@@ -190,6 +198,7 @@ export function assembleBitcoinWalletEvaluation(input: {
     scanMode: normalizedRequest.scanMode,
     generatedAt: input.evaluatedAt,
     snapshotCapturedAt: normalizedSnapshotContract.capturedAt,
+    capabilityTier: normalizedRequest.scanMode,
     score: scoreBreakdown.totalScore,
     riskLevel: scoreBreakdown.riskLevel,
     findingCount: findings.length,
@@ -198,6 +207,10 @@ export function assembleBitcoinWalletEvaluation(input: {
     actionableFindingCount: findings.filter(
       (finding) => finding.cleanupActionIds.length > 0
     ).length,
+    executionPerformed: result.executionPerformed,
+    actionable: result.actionable,
+    classification: result.classification,
+    statusLabel: result.statusLabel,
   };
 
   const report: WalletReport = {
