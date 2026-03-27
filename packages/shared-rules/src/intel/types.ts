@@ -4,6 +4,7 @@ export type Layer2SectionState =
   | "fresh"
   | "stale"
   | "expired"
+  | "empty"
   | "missing"
   | "invalid";
 

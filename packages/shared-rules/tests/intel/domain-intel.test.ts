@@ -373,6 +373,32 @@ describe("Layer 2 domain intel foundation", () => {
     });
   });
 
+  it("marks zero-item bundles empty and treats lookups as unavailable", () => {
+    const bundle = bundleFromSections({
+      maliciousDomains: maliciousSection([]),
+      allowlists: allowlistsSection([]),
+    });
+
+    const compiled = compileDomainIntelSnapshot(bundle, {
+      now: NOW,
+      ...VALIDATION_OPTIONS,
+    });
+    expect(compiled.ok).toBe(true);
+    if (!compiled.ok) {
+      throw new Error("expected compile success");
+    }
+
+    expect(compiled.snapshot.sections.maliciousDomains.state).toBe("empty");
+    expect(compiled.snapshot.sections.allowlists.state).toBe("empty");
+    expect(resolveDomainIntel(compiled.snapshot, "safe.example.com")).toEqual({
+      lookupFamily: "domain",
+      matched: false,
+      disposition: "unavailable",
+      sectionState: "empty",
+      degradedProtection: true,
+    });
+  });
+
   it("marks duplicate malicious identities invalid and refuses to resolve from that section", () => {
     const invalidBundle = bundleFromSections({
       maliciousDomains: maliciousSection([

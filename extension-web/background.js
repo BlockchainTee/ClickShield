@@ -653,7 +653,7 @@ export function resolveNavigationIntelRefreshIntervalMinutes(
   state = configureNavigationIntelManager().getState(),
 ) {
   const maliciousState = state?.sectionStates?.maliciousDomains;
-  if (!state?.active || maliciousState === 'expired') {
+  if (!state?.active || maliciousState === 'expired' || maliciousState === 'empty') {
     return NAVIGATION_INTEL_RECOVERY_INTERVAL_MINUTES;
   }
 
@@ -974,6 +974,9 @@ function intelFailureReason(intelState) {
 
   if (intelState?.degradedProtection) {
     const maliciousState = intelState.sectionStates?.maliciousDomains;
+    if (maliciousState === 'empty') {
+      return 'ClickShield could not verify the current domain threat-intelligence snapshot because the loaded bundle is empty.';
+    }
     if (maliciousState === 'expired') {
       return 'ClickShield could not verify the current domain threat-intelligence snapshot because it has expired.';
     }

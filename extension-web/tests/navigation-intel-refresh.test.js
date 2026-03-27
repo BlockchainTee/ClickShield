@@ -264,7 +264,12 @@ function createFetchImpl(routes) {
 
 test('manifest fetch success without version change skips bundle download', async () => {
   const bundle = bundleFromSections({
-    maliciousDomains: maliciousSection([]),
+    maliciousDomains: maliciousSection([
+      maliciousItem({
+        domain: 'unchanged-hit.example',
+        identity: 'exact_host:unchanged-hit.example',
+      }),
+    ]),
     allowlists: allowlistsSection([]),
   });
 
@@ -319,7 +324,7 @@ test('successful refresh fetches bundle, activates it, and persists metadata', a
     }),
   });
 
-  assert.equal(runtime.activation.ok, true);
+  assert.equal(runtime.activation.ok, false);
   assert.equal(runtime.refresh.ok, true);
   assert.equal(runtime.refresh.updated, true);
   assert.equal(getNavigationIntelSnapshotState().bundleVersion, nextBundle.bundleVersion);
@@ -335,7 +340,12 @@ test('successful refresh fetches bundle, activates it, and persists metadata', a
 
 test('failed manifest fetch retains the current active snapshot', async () => {
   const currentBundle = bundleFromSections({
-    maliciousDomains: maliciousSection([]),
+    maliciousDomains: maliciousSection([
+      maliciousItem({
+        domain: 'current-hit.example',
+        identity: 'exact_host:current-hit.example',
+      }),
+    ]),
     allowlists: allowlistsSection([]),
   });
 
@@ -358,7 +368,12 @@ test('failed manifest fetch retains the current active snapshot', async () => {
 
 test('failed bundle fetch retains the current active snapshot', async () => {
   const currentBundle = bundleFromSections({
-    maliciousDomains: maliciousSection([]),
+    maliciousDomains: maliciousSection([
+      maliciousItem({
+        domain: 'current-hit.example',
+        identity: 'exact_host:current-hit.example',
+      }),
+    ]),
     allowlists: allowlistsSection([]),
   });
   const nextBundle = bundleFromSections(
@@ -395,7 +410,12 @@ test('failed bundle fetch retains the current active snapshot', async () => {
 
 test('refresh rejects a fetched bundle whose bundleVersion differs from the signed manifest', async () => {
   const currentBundle = bundleFromSections({
-    maliciousDomains: maliciousSection([]),
+    maliciousDomains: maliciousSection([
+      maliciousItem({
+        domain: 'current-hit.example',
+        identity: 'exact_host:current-hit.example',
+      }),
+    ]),
     allowlists: allowlistsSection([]),
   });
   const manifestBundle = bundleFromSections(
@@ -442,7 +462,12 @@ test('refresh rejects a fetched bundle whose bundleVersion differs from the sign
 
 test('refresh rejects a fetched bundle whose metadata does not match the signed manifest', async () => {
   const currentBundle = bundleFromSections({
-    maliciousDomains: maliciousSection([]),
+    maliciousDomains: maliciousSection([
+      maliciousItem({
+        domain: 'current-hit.example',
+        identity: 'exact_host:current-hit.example',
+      }),
+    ]),
     allowlists: allowlistsSection([]),
   });
   const manifestBundle = bundleFromSections(
@@ -491,7 +516,12 @@ test('refresh rejects a fetched bundle whose metadata does not match the signed 
 
 test('invalid bundle is rejected, current snapshot is retained, and cache keeps the failed download', async () => {
   const currentBundle = bundleFromSections({
-    maliciousDomains: maliciousSection([]),
+    maliciousDomains: maliciousSection([
+      maliciousItem({
+        domain: 'current-hit.example',
+        identity: 'exact_host:current-hit.example',
+      }),
+    ]),
     allowlists: allowlistsSection([]),
   });
   const invalidBundle = bundleFromSections(
@@ -626,7 +656,7 @@ test('startup with valid cache does not overwrite a distinct valid last-known-go
   assert.equal(resolveNavigationDomainIntel('https://lkg-hit.example').isKnownMaliciousDomain, false);
 });
 
-test('bootstrap keeps bundled seed active when no persisted snapshot exists and refresh fails', async () => {
+test('bootstrap leaves the bundled empty seed inactive when no persisted snapshot exists and refresh fails', async () => {
   const runtime = await bootstrapRuntimeNavigationIntel({
     now: NOW,
     fetchImpl: async () => {
@@ -634,15 +664,14 @@ test('bootstrap keeps bundled seed active when no persisted snapshot exists and 
     },
   });
 
-  assert.equal(runtime.activation.ok, true);
+  assert.equal(runtime.activation.ok, false);
   assert.equal(runtime.refresh.ok, false);
-  assert.equal(
-    getNavigationIntelSnapshotState().bundleVersion,
-    '2026-03-21T18:00:00Z.extension-bundled-navigation-intel',
-  );
+  assert.equal(getNavigationIntelSnapshotState().active, false);
+  assert.equal(getNavigationIntelSnapshotState().bundleVersion, null);
+  assert.equal(getNavigationIntelSnapshotState().sectionStates.maliciousDomains, 'empty');
 });
 
-test('refresh interval policy uses recovery cadence only for expired or inactive malicious domain state', () => {
+test('refresh interval policy uses recovery cadence for expired, empty, or inactive malicious domain state', () => {
   assert.equal(
     resolveNavigationIntelRefreshIntervalMinutes({
       active: true,
@@ -660,6 +689,17 @@ test('refresh interval policy uses recovery cadence only for expired or inactive
       sectionStates: {
         maliciousDomains: 'expired',
         allowlists: 'fresh',
+      },
+    }),
+    5,
+  );
+
+  assert.equal(
+    resolveNavigationIntelRefreshIntervalMinutes({
+      active: true,
+      sectionStates: {
+        maliciousDomains: 'empty',
+        allowlists: 'empty',
       },
     }),
     5,

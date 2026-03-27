@@ -63,6 +63,11 @@ export interface NormalizeLayer2RecordsResult {
   readonly sources: readonly Layer2CompilerSource[];
 }
 
+const OFAC_REASON_CODES = ["OFAC_SANCTIONS_ADDRESS"] as const;
+const CHAINABUSE_REASON_CODES = ["CHAINABUSE_CHECKED_REPORT"] as const;
+
+// Compiler precedence is deterministic and source-driven:
+// OFAC block entries outrank Chainabuse warn entries for the same address.
 const SOURCE_PRECEDENCE: Readonly<Record<Layer2CompilerSource, number>> =
   Object.freeze({
     chainabuse: 1,
@@ -82,6 +87,25 @@ const CONFIDENCE_PRECEDENCE: Readonly<Record<Layer2CanonicalConfidence, number>>
     medium: 2,
     high: 3,
   });
+
+function failNormalization(message: string): never {
+  throw new Error(`Layer 2 normalization rejected malformed input: ${message}`);
+}
+
+function assertExactReasonCodes(
+  actual: readonly string[],
+  expected: readonly string[],
+  sourceLabel: string
+): void {
+  if (
+    actual.length !== expected.length ||
+    actual.some((value, index) => value !== expected[index])
+  ) {
+    failNormalization(
+      `${sourceLabel} reasonCodes must be exactly ${expected.join(", ")}.`
+    );
+  }
+}
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -164,12 +188,34 @@ export function readArray(
 }
 
 function mapOfacRecordToCanonicalContract(
-  record: OfacRecord
+  record: OfacRecord,
+  index: number
 ): Layer2MaliciousContract {
+  const normalizedAddress = normalizePotentialEvmAddress(record.address);
+  if (normalizedAddress === null || normalizedAddress !== record.address) {
+    failNormalization(
+      `OFAC record[${index}] address must be a lowercase canonical EVM address.`
+    );
+  }
+
+  if (record.source !== "ofac") {
+    failNormalization(`OFAC record[${index}] source must be "ofac".`);
+  }
+
+  if (record.disposition !== "block") {
+    failNormalization(`OFAC record[${index}] disposition must be "block".`);
+  }
+
+  if (record.confidence !== 1) {
+    failNormalization(`OFAC record[${index}] confidence must be 1.`);
+  }
+
+  assertExactReasonCodes(record.reasonCodes, OFAC_REASON_CODES, `OFAC record[${index}]`);
+
   // OFAC is limited to sanctioned address/entity intelligence.
   return {
     chain: "evm",
-    address: record.address,
+    address: normalizedAddress,
     source: "ofac",
     disposition: "block",
     confidence: "high",
@@ -185,12 +231,50 @@ function mapChainabuseConfidence(
 }
 
 function mapChainabuseRecordToCanonicalContract(
-  record: ChainabuseRecord
+  record: ChainabuseRecord,
+  index: number
 ): Layer2MaliciousContract {
+  const normalizedAddress = normalizePotentialEvmAddress(record.address);
+  if (normalizedAddress === null || normalizedAddress !== record.address) {
+    failNormalization(
+      `Chainabuse record[${index}] address must be a lowercase canonical EVM address.`
+    );
+  }
+
+  if (record.source !== "chainabuse") {
+    failNormalization(
+      `Chainabuse record[${index}] source must be "chainabuse".`
+    );
+  }
+
+  if (record.disposition !== "warn") {
+    failNormalization(
+      `Chainabuse record[${index}] disposition must be "warn".`
+    );
+  }
+
+  if (!Number.isFinite(record.confidence) || record.confidence < 0 || record.confidence > 1) {
+    failNormalization(
+      `Chainabuse record[${index}] confidence must be a finite number between 0 and 1.`
+    );
+  }
+
+  if (!Number.isInteger(record.reportCount) || record.reportCount < 1) {
+    failNormalization(
+      `Chainabuse record[${index}] reportCount must be a positive integer.`
+    );
+  }
+
+  assertExactReasonCodes(
+    record.reasonCodes,
+    CHAINABUSE_REASON_CODES,
+    `Chainabuse record[${index}]`
+  );
+
   // Chainabuse is limited to scam/suspicious-address intelligence.
   return {
     chain: "evm",
-    address: record.address,
+    address: normalizedAddress,
     source: "chainabuse",
     disposition: "warn",
     confidence: mapChainabuseConfidence(record),
@@ -247,10 +331,10 @@ export function normalizeLayer2Records(input: {
   const ordered = new Map<string, Layer2MaliciousContract>();
   const sources = new Set<Layer2CompilerSource>();
 
-  for (const record of [...input.ofacRecords].sort((left, right) =>
-    left.address.localeCompare(right.address)
-  )) {
-    const mapped = mapOfacRecordToCanonicalContract(record);
+  for (const [index, record] of [...input.ofacRecords]
+    .sort((left, right) => left.address.localeCompare(right.address))
+    .entries()) {
+    const mapped = mapOfacRecordToCanonicalContract(record, index);
     sources.add(mapped.source);
     const current = ordered.get(mapped.address);
     if (
@@ -261,10 +345,10 @@ export function normalizeLayer2Records(input: {
     }
   }
 
-  for (const record of [...input.chainabuseRecords].sort((left, right) =>
-    left.address.localeCompare(right.address)
-  )) {
-    const mapped = mapChainabuseRecordToCanonicalContract(record);
+  for (const [index, record] of [...input.chainabuseRecords]
+    .sort((left, right) => left.address.localeCompare(right.address))
+    .entries()) {
+    const mapped = mapChainabuseRecordToCanonicalContract(record, index);
     sources.add(mapped.source);
     const current = ordered.get(mapped.address);
     if (

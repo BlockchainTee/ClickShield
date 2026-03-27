@@ -3609,6 +3609,8 @@ function createTransactionIntelProvider(snapshot) {
   const scamSignaturesState = mapSnapshotSectionState(
     snapshot.sectionStates.scamSignatures
   );
+  const maliciousContractsMissing = snapshot.sectionStates.maliciousContracts === "missing";
+  const scamSignaturesMissing = snapshot.sectionStates.scamSignatures === "missing";
   const maliciousContractResults = /* @__PURE__ */ new Map();
   snapshot.maliciousContracts.forEach((entry) => {
     maliciousContractResults.set(
@@ -3620,17 +3622,24 @@ function createTransactionIntelProvider(snapshot) {
       )
     );
   });
-  const noMatchMaliciousContractResult = createNoMatchMaliciousContractResult(
-    snapshot.version,
-    maliciousContractsState
-  );
-  const lookupMaliciousContract = (lookup) => {
-    const normalizedAddress = normalizeMaliciousContractAddress(lookup.address);
-    if (normalizedAddress === null) {
-      return noMatchMaliciousContractResult;
-    }
-    return maliciousContractResults.get(`${lookup.chain}:${normalizedAddress}`) ?? noMatchMaliciousContractResult;
-  };
+  const lookupMaliciousContract = maliciousContractsMissing ? (() => {
+    const unavailableResult = createUnavailableMaliciousContractResult(maliciousContractsState);
+    return () => unavailableResult;
+  })() : (() => {
+    const noMatchResult = createNoMatchMaliciousContractResult(
+      snapshot.version,
+      maliciousContractsState
+    );
+    return (lookup) => {
+      const normalizedAddress = normalizeMaliciousContractAddress(
+        lookup.address
+      );
+      if (normalizedAddress === null) {
+        return noMatchResult;
+      }
+      return maliciousContractResults.get(`${lookup.chain}:${normalizedAddress}`) ?? noMatchResult;
+    };
+  })();
   const scamSignatureResults = /* @__PURE__ */ new Map();
   snapshot.scamSignatures.forEach((entry) => {
     scamSignatureResults.set(
@@ -3642,17 +3651,22 @@ function createTransactionIntelProvider(snapshot) {
       )
     );
   });
-  const noMatchScamSignatureResult = createNoMatchScamSignatureResult(
-    snapshot.version,
-    scamSignaturesState
-  );
-  const lookupScamSignature = (lookup) => {
-    const normalizedKey = normalizeScamSignatureKey(lookup.normalizedKey);
-    if (normalizedKey === null) {
-      return noMatchScamSignatureResult;
-    }
-    return scamSignatureResults.get(normalizedKey) ?? noMatchScamSignatureResult;
-  };
+  const lookupScamSignature = scamSignaturesMissing ? (() => {
+    const unavailableResult = createUnavailableScamSignatureResult(scamSignaturesState);
+    return () => unavailableResult;
+  })() : (() => {
+    const noMatchResult = createNoMatchScamSignatureResult(
+      snapshot.version,
+      scamSignaturesState
+    );
+    return (lookup) => {
+      const normalizedKey = normalizeScamSignatureKey(lookup.normalizedKey);
+      if (normalizedKey === null) {
+        return noMatchResult;
+      }
+      return scamSignatureResults.get(normalizedKey) ?? noMatchResult;
+    };
+  })();
   const canonicalLookupResults = /* @__PURE__ */ new Map();
   const lookupCanonicalTransactionIntel = (lookup) => {
     const normalizedAddress = normalizeMaliciousContractAddress(lookup.targetAddress);
@@ -4502,6 +4516,7 @@ var UNAVAILABLE_ORIGIN_INTEL = Object.freeze({
   allowlistFeedVersion: null,
   originDisposition: "unavailable"
 });
+var EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT2 = "1970-01-01T00:00:00.000Z";
 function isRecord2(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -4513,9 +4528,9 @@ function isValidUtcTimestamp2(value) {
 }
 function readFallbackGeneratedAt(value) {
   if (!isRecord2(value) || typeof value.generatedAt !== "string") {
-    return EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT;
+    return EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT2;
   }
-  return isValidUtcTimestamp2(value.generatedAt) ? value.generatedAt : EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT;
+  return isValidUtcTimestamp2(value.generatedAt) ? value.generatedAt : EMPTY_TRANSACTION_LAYER2_SNAPSHOT_GENERATED_AT2;
 }
 function activateCanonicalTransactionSnapshot(snapshotSource) {
   const validation = validateTransactionLayer2Snapshot(snapshotSource);
@@ -4608,9 +4623,6 @@ function hydrateNormalizedTransactionContext(input, provider) {
 }
 function getDefaultTransactionIntelProvider() {
   return CANONICAL_TRANSACTION_INTEL_PROVIDER;
-}
-function getCanonicalTransactionSnapshotActivation() {
-  return CANONICAL_TRANSACTION_SNAPSHOT_ACTIVATION;
 }
 
 // src/transaction/typed-data.ts
@@ -6702,6 +6714,12 @@ function deriveFreshnessState(metadata) {
     return "fresh";
   };
 }
+function deriveSectionState(metadata, itemCount, nowMs) {
+  if (itemCount === 0) {
+    return "empty";
+  }
+  return deriveFreshnessState(metadata)(nowMs);
+}
 function buildMaliciousDomainsSection(parsed, nowMs) {
   if (parsed.state === "missing") {
     return {
@@ -6739,7 +6757,7 @@ function buildMaliciousDomainsSection(parsed, nowMs) {
   }
   return {
     name: "maliciousDomains",
-    state: deriveFreshnessState(parsed.metadata)(nowMs),
+    state: deriveSectionState(parsed.metadata, parsed.items.length, nowMs),
     feedVersion: parsed.metadata.feedVersion,
     staleAfter: parsed.metadata.staleAfter,
     expiresAt: parsed.metadata.expiresAt,
@@ -6787,7 +6805,7 @@ function buildAllowlistsSection(parsed, nowMs) {
   }
   return {
     name: "allowlists",
-    state: deriveFreshnessState(parsed.metadata)(nowMs),
+    state: deriveSectionState(parsed.metadata, parsed.items.length, nowMs),
     feedVersion: parsed.metadata.feedVersion,
     staleAfter: parsed.metadata.staleAfter,
     expiresAt: parsed.metadata.expiresAt,
@@ -11003,7 +11021,6 @@ export {
   SUSPICIOUS_TLDS,
   TRANSACTION_SELECTOR_REGISTRY,
   analyzeTransactions,
-  buildEmptyValidatedTransactionLayer2Snapshot,
   buildEvmCleanupPlan,
   buildNavigationContext,
   buildTransactionDecisionPackage,
@@ -11032,7 +11049,6 @@ export {
   extractHostname,
   extractRegistrableDomain,
   extractTld,
-  getCanonicalTransactionSnapshotActivation,
   getDefaultTransactionIntelProvider,
   getEvmCleanupEligibility,
   getReasonMessage,

@@ -24,6 +24,25 @@ interface ChainabuseAggregate {
   reportCount: number;
 }
 
+function readFirstPresentValue(
+  record: Record<string, unknown>,
+  keys: readonly string[]
+): unknown {
+  for (const key of keys) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      return record[key];
+    }
+  }
+
+  return undefined;
+}
+
+function failChainabuseParse(rejections: readonly string[]): never {
+  throw new Error(
+    `Chainabuse payload rejected malformed record(s): ${rejections.join("; ")}`
+  );
+}
+
 async function loadChainabuseSource(
   options: FetchChainabuseOptions
 ): Promise<unknown> {
@@ -89,37 +108,55 @@ function extractReports(payload: unknown): readonly unknown[] {
   throw new Error("Unsupported Chainabuse payload: reports array was not found.");
 }
 
-function extractAddresses(report: Record<string, unknown>): readonly string[] {
+function extractAddresses(
+  report: Record<string, unknown>
+): { readonly addresses: readonly string[]; readonly malformed: boolean } {
   const addressEntries = readArray(report, [
     "addresses",
     "walletAddresses",
     "cryptoAddresses",
   ]);
   const normalized = new Set<string>();
+  let malformed = false;
+  let sawAddressField = false;
 
   if (addressEntries) {
     for (const entry of addressEntries) {
       if (typeof entry === "string") {
+        sawAddressField = true;
         const address = normalizePotentialEvmAddress(entry);
         if (address) {
           normalized.add(address);
+        } else {
+          malformed = true;
         }
 
         continue;
       }
 
       if (isRecord(entry)) {
+        let foundAddressProperty = false;
         for (const key of ["address", "value", "walletAddress"]) {
           const candidate = entry[key];
           if (typeof candidate !== "string") {
             continue;
           }
 
+          sawAddressField = true;
+          foundAddressProperty = true;
           const address = normalizePotentialEvmAddress(candidate);
           if (address) {
             normalized.add(address);
+          } else {
+            malformed = true;
           }
         }
+
+        if (!foundAddressProperty) {
+          malformed = true;
+        }
+      } else {
+        malformed = true;
       }
     }
   }
@@ -127,13 +164,23 @@ function extractAddresses(report: Record<string, unknown>): readonly string[] {
   const singleAddress =
     typeof report.address === "string" ? report.address : undefined;
   if (singleAddress) {
+    sawAddressField = true;
     const normalizedAddress = normalizePotentialEvmAddress(singleAddress);
     if (normalizedAddress) {
       normalized.add(normalizedAddress);
+    } else {
+      malformed = true;
     }
   }
 
-  return [...normalized].sort();
+  if (!sawAddressField) {
+    malformed = true;
+  }
+
+  return {
+    addresses: [...normalized].sort(),
+    malformed,
+  };
 }
 
 export function parseChainabuseRecords(
@@ -142,9 +189,12 @@ export function parseChainabuseRecords(
 ): readonly ChainabuseRecord[] {
   const reports = extractReports(payload);
   const aggregated = new Map<string, ChainabuseAggregate>();
+  const rejections: string[] = [];
 
-  for (const entry of reports) {
+  for (const [index, entry] of reports.entries()) {
+    const reportPath = `reports[${index}]`;
     if (!isRecord(entry)) {
+      rejections.push(`${reportPath} must be an object`);
       continue;
     }
 
@@ -154,17 +204,43 @@ export function parseChainabuseRecords(
     }
 
     const confidence = readNumber(entry, ["confidence", "confidenceScore"]);
-    if (confidence === null || confidence < minConfidence) {
+    if (confidence === null) {
+      rejections.push(`${reportPath} confidence must be a finite number`);
       continue;
     }
 
-    const addresses = extractAddresses(entry);
-    if (addresses.length === 0) {
+    if (confidence < minConfidence) {
       continue;
     }
 
+    const reportCountRaw = readFirstPresentValue(entry, [
+      "reportCount",
+      "reportsCount",
+      "report_count",
+    ]);
     const reportCount =
-      readNumber(entry, ["reportCount", "reportsCount", "report_count"]) ?? 1;
+      reportCountRaw === undefined
+        ? 1
+        : readNumber(entry, ["reportCount", "reportsCount", "report_count"]);
+
+    if (
+      reportCount === null ||
+      !Number.isInteger(reportCount) ||
+      reportCount < 1
+    ) {
+      rejections.push(
+        `${reportPath} reportCount must be a positive integer when present`
+      );
+      continue;
+    }
+
+    const { addresses, malformed } = extractAddresses(entry);
+    if (malformed || addresses.length === 0) {
+      rejections.push(
+        `${reportPath} must provide only canonical non-zero EVM addresses`
+      );
+      continue;
+    }
 
     for (const address of addresses) {
       const current = aggregated.get(address);
@@ -181,6 +257,10 @@ export function parseChainabuseRecords(
         reportCount: current.reportCount + reportCount,
       });
     }
+  }
+
+  if (rejections.length > 0) {
+    failChainabuseParse(rejections);
   }
 
   return [...aggregated.entries()]

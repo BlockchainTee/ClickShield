@@ -8,16 +8,27 @@ import {
   toPrettyJson,
   type ChainabuseRecord,
   type JsonValue,
+  type Layer2CompilerSource,
   type Layer2Snapshot,
   type OfacRecord,
 } from "./normalize";
+
+export interface Layer2BuildSourceStatus {
+  readonly source: Layer2CompilerSource;
+  readonly status: "ready" | "missing" | "failed";
+}
 
 export interface BuildLayer2SnapshotOptions {
   readonly generatedAt: string;
   readonly ofacRecords: readonly OfacRecord[];
   readonly chainabuseRecords: readonly ChainabuseRecord[];
-  readonly degraded?: boolean;
+  readonly sourceStatuses?: readonly Layer2BuildSourceStatus[];
 }
+
+const DEFAULT_SOURCE_STATUSES: readonly Layer2BuildSourceStatus[] = Object.freeze([
+  { source: "chainabuse", status: "ready" },
+  { source: "ofac", status: "ready" },
+]);
 
 function buildSnapshotVersion(snapshotBody: Omit<Layer2Snapshot, "version">): string {
   const digest = createHash("sha256")
@@ -45,12 +56,16 @@ export function buildLayer2Snapshot(
     chainabuseRecords: options.chainabuseRecords,
   });
 
+  const sourceStatuses = [...(options.sourceStatuses ?? DEFAULT_SOURCE_STATUSES)]
+    .sort((left, right) => left.source.localeCompare(right.source));
+  const readySourceCount = sourceStatuses.filter(
+    (entry) => entry.status === "ready"
+  ).length;
+  const allSourcesReady =
+    sourceStatuses.length > 0 &&
+    sourceStatuses.every((entry) => entry.status === "ready");
   const maliciousContractsState =
-    normalized.records.length === 0
-      ? "missing"
-      : options.degraded
-        ? "stale"
-        : "ready";
+    readySourceCount === 0 ? "missing" : allSourcesReady ? "ready" : "stale";
 
   const snapshotBody: Omit<Layer2Snapshot, "version"> = {
     generatedAt: options.generatedAt,
@@ -77,7 +92,10 @@ export function buildSafeFallbackSnapshot(generatedAt: string): Layer2Snapshot {
     generatedAt,
     ofacRecords: [],
     chainabuseRecords: [],
-    degraded: true,
+    sourceStatuses: [
+      { source: "chainabuse", status: "missing" },
+      { source: "ofac", status: "missing" },
+    ],
   });
 }
 

@@ -28,6 +28,9 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const fs = require('fs');
+const {
+  readNavigationFeedTruth: readNavigationFeedTruthFromModule,
+} = require('./navigationFeedTruth');
 
 // >>> ENV SETUP (keep this exactly as-is)
 require('dotenv').config({ override: true });
@@ -1701,6 +1704,14 @@ app.get('/intel/feeds/navigation/bundles/:bundleVersion/bundle.json', (req, res)
   }
 
   return sendJsonFile(res, bundlePath, 'public, max-age=31536000, immutable');
+});
+
+app.get('/intel/feeds/navigation/status.json', (req, res) => {
+  const truth = readNavigationFeedTruthFromModule({
+    feedsRoot: NAVIGATION_FEEDS_ROOT,
+    now: Date.now(),
+  });
+  return res.status(truth.httpStatus).json(truth.payload);
 });
 
 // Deep health: DB + AI + queue
@@ -3888,16 +3899,22 @@ app.get('/export/recent-scans.csv', (req, res) => {
 // ================== SERVER START =====================
 // =====================================================
 
-app.listen(PORT, () => {
-  logJson('info', 'startup', {
-    port: PORT,
-    dbAvailable,
+if (require.main === module) {
+  app.listen(PORT, () => {
+    logJson('info', 'startup', {
+      port: PORT,
+      dbAvailable,
+    });
+
+    console.log(
+      `[ClickShield] Backend running on http://localhost:${PORT} (DB: ${
+        dbAvailable ? 'enabled' : 'disabled'
+      })`
+    );
   });
+}
 
-  console.log(
-    `[ClickShield] Backend running on http://localhost:${PORT} (DB: ${
-      dbAvailable ? 'enabled' : 'disabled'
-    })`
-  );
-});
-
+module.exports = {
+  app,
+  readNavigationFeedTruth: readNavigationFeedTruthFromModule,
+};

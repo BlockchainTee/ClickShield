@@ -118,7 +118,7 @@ function metadataSectionsFromSnapshot(snapshot) {
 
 function isActivatableDomainSnapshot(snapshot) {
   const maliciousState = snapshot.sections.maliciousDomains.state;
-  return maliciousState !== 'missing' && maliciousState !== 'invalid';
+  return isUsableMaliciousState(maliciousState);
 }
 
 export class NavigationIntelFeedManager {

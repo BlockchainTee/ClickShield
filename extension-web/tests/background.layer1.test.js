@@ -247,7 +247,14 @@ test('validated snapshot is loaded outside evaluation and drives navigation inte
           identity: 'exact_host:intel-signal-test.example',
         }),
       ]),
-      allowlists: allowlistsSection([]),
+      allowlists: allowlistsSection([
+        allowlistItem({
+          target: 'trusted.example',
+          scope: 'exact_host',
+          type: 'domain_exact_host',
+          identity: 'domain_exact_host:trusted.example',
+        }),
+      ]),
     }),
     {
       now: NOW,
@@ -303,8 +310,21 @@ test('validated snapshot is loaded outside evaluation and drives navigation inte
 test('runtime activation path loads the live snapshot used by otherwise-allow navigation', async () => {
   const activationResult = await activateRuntimeNavigationIntelSnapshot({
     bundle: bundleFromSections({
-      maliciousDomains: maliciousSection([]),
-      allowlists: allowlistsSection([]),
+      maliciousDomains: maliciousSection([
+        maliciousItem({
+          domain: 'known-bad.example',
+          type: 'exact_host',
+          identity: 'exact_host:known-bad.example',
+        }),
+      ]),
+      allowlists: allowlistsSection([
+        allowlistItem({
+          target: 'trusted.example',
+          scope: 'exact_host',
+          type: 'domain_exact_host',
+          identity: 'domain_exact_host:trusted.example',
+        }),
+      ]),
     }),
     now: NOW,
     signatureVerifier: () => true,
@@ -371,14 +391,14 @@ test('startup uses bundled seed immediately while async persisted-state restore 
   });
 
   const intel = resolveNavigationDomainIntel('https://safe-site.example/docs');
-  assert.equal(intel.domainLookup.disposition, 'no_match');
-  assert.equal(intel.domainLookup.sectionState, 'fresh');
-  assert.equal(intel.degradedProtection, false);
-  assert.equal(intel.bundleVersion, '2026-03-21T18:00:00Z.extension-bundled-navigation-intel');
+  assert.equal(intel.domainLookup.disposition, 'unavailable');
+  assert.equal(intel.domainLookup.sectionState, 'empty');
+  assert.equal(intel.degradedProtection, true);
+  assert.equal(intel.bundleVersion, null);
 
   releaseStorageReads();
   const activationResult = await activationPromise;
-  assert.equal(activationResult.ok, true);
+  assert.equal(activationResult.ok, false);
 });
 
 test('cache invalid and last-known-good valid restores last-known-good deterministically', async () => {
@@ -414,7 +434,7 @@ test('cache invalid and last-known-good valid restores last-known-good determini
     bundleVersion: '2026-03-21T18:00:00Z.extension-test-bundle',
     sectionStates: {
       maliciousDomains: 'fresh',
-      allowlists: 'fresh',
+      allowlists: 'empty',
     },
     issues: [],
   });
@@ -496,6 +516,29 @@ test('missing snapshot drives degraded protection at the extension boundary', ()
   assert.equal(failSafe.degradedProtection, true);
 });
 
+test('empty snapshot load is rejected and leaves the surface in an explicit empty state', async () => {
+  const loadResult = await loadNavigationIntelSnapshot(
+    bundleFromSections({
+      maliciousDomains: maliciousSection([]),
+      allowlists: allowlistsSection([]),
+    }),
+    {
+      now: NOW,
+      signatureVerifier: () => true,
+    },
+  );
+
+  assert.equal(loadResult.ok, false);
+  assert.equal(getNavigationIntelSnapshotState().active, false);
+  assert.equal(getNavigationIntelSnapshotState().sectionStates.maliciousDomains, 'empty');
+  assert.equal(getNavigationIntelSnapshotState().sectionStates.allowlists, 'empty');
+
+  const intel = resolveNavigationDomainIntel('https://safe-site.example');
+  assert.equal(intel.domainLookup.disposition, 'unavailable');
+  assert.equal(intel.domainLookup.sectionState, 'empty');
+  assert.equal(intel.degradedProtection, true);
+});
+
 test('invalid snapshot load is rejected and leaves the surface in degraded protection', async () => {
   const loadResult = await loadNavigationIntelSnapshot(
     bundleFromSections({
@@ -520,10 +563,19 @@ test('invalid snapshot load is rejected and leaves the surface in degraded prote
 test('expired snapshot keeps lookup deterministic and unavailable', async () => {
   const loadResult = await loadNavigationIntelSnapshot(
     bundleFromSections({
-      maliciousDomains: maliciousSection([], {
-        staleAfter: '2026-03-20T18:00:00Z',
-        expiresAt: '2026-03-21T17:00:00Z',
-      }),
+      maliciousDomains: maliciousSection(
+        [
+          maliciousItem({
+            domain: 'expired-hit.example',
+            type: 'exact_host',
+            identity: 'exact_host:expired-hit.example',
+          }),
+        ],
+        {
+          staleAfter: '2026-03-20T18:00:00Z',
+          expiresAt: '2026-03-21T17:00:00Z',
+        },
+      ),
       allowlists: allowlistsSection([]),
     }),
     {
@@ -532,7 +584,7 @@ test('expired snapshot keeps lookup deterministic and unavailable', async () => 
     },
   );
 
-  assert.equal(loadResult.ok, true);
+  assert.equal(loadResult.ok, false);
 
   const intel = resolveNavigationDomainIntel('https://safe-site.example');
   assert.equal(intel.domainLookup.disposition, 'unavailable');

@@ -44,6 +44,18 @@ function deriveFreshnessState(
   };
 }
 
+function deriveSectionState(
+  metadata: DomainIntelSectionMetadata,
+  itemCount: number,
+  nowMs: number
+): Layer2SectionState {
+  if (itemCount === 0) {
+    return "empty";
+  }
+
+  return deriveFreshnessState(metadata)(nowMs);
+}
+
 function buildMaliciousDomainsSection(
   parsed: ReturnType<typeof parseDomainIntelBundle>["maliciousDomains"],
   nowMs: number
@@ -88,7 +100,7 @@ function buildMaliciousDomainsSection(
 
   return {
     name: "maliciousDomains",
-    state: deriveFreshnessState(parsed.metadata)(nowMs),
+    state: deriveSectionState(parsed.metadata, parsed.items.length, nowMs),
     feedVersion: parsed.metadata.feedVersion,
     staleAfter: parsed.metadata.staleAfter,
     expiresAt: parsed.metadata.expiresAt,
@@ -144,7 +156,7 @@ function buildAllowlistsSection(
 
   return {
     name: "allowlists",
-    state: deriveFreshnessState(parsed.metadata)(nowMs),
+    state: deriveSectionState(parsed.metadata, parsed.items.length, nowMs),
     feedVersion: parsed.metadata.feedVersion,
     staleAfter: parsed.metadata.staleAfter,
     expiresAt: parsed.metadata.expiresAt,

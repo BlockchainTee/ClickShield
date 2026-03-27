@@ -18,6 +18,7 @@ import {
   serializeLayer2Snapshot,
   writeLayer2Snapshot,
 } from "../../../../scripts/layer2/build-snapshot";
+import { resolveLayer2BuildConfig } from "../../../../scripts/build-layer2-feed";
 import { normalizeLayer2Records } from "../../../../scripts/layer2/normalize";
 
 const GENERATED_AT = "2026-03-24T12:00:00.000Z";
@@ -180,6 +181,24 @@ describe("Layer 2 feed builder", () => {
         reasonCodes: ["CHAINABUSE_CHECKED_REPORT"],
       },
     ]);
+  });
+
+  it("rejects malformed normalized compiler inputs instead of coercing them", () => {
+    expect(() =>
+      buildLayer2Snapshot({
+        generatedAt: GENERATED_AT,
+        ofacRecords: [
+          {
+            address: "0xCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+            source: "ofac",
+            disposition: "block",
+            confidence: 1,
+            reasonCodes: ["OFAC_SANCTIONS_ADDRESS"],
+          },
+        ],
+        chainabuseRecords: [],
+      })
+    ).toThrow("lowercase canonical EVM address");
   });
 
   it("uses explicit source precedence so weaker feeds cannot erase malicious entries", () => {
@@ -346,7 +365,24 @@ describe("Layer 2 feed builder", () => {
     });
   });
 
-  it("filters unchecked, low-confidence, and invalid addresses from Chainabuse", () => {
+  it("rejects malformed checked Chainabuse reports instead of silently dropping them", () => {
+    expect(() =>
+      parseChainabuseRecords({
+        reports: [
+          {
+            checked: true,
+            confidence: 0.87,
+            addresses: [
+              "not-an-address",
+              "0x3333333333333333333333333333333333333333",
+            ],
+          },
+        ],
+      })
+    ).toThrow("rejected malformed record");
+  });
+
+  it("filters unchecked and low-confidence Chainabuse reports without treating them as malformed", () => {
     const chainabuseRecords = parseChainabuseRecords({
       reports: [
         {
@@ -367,7 +403,6 @@ describe("Layer 2 feed builder", () => {
           checked: true,
           confidence: 0.87,
           addresses: [
-            "not-an-address",
             "0x3333333333333333333333333333333333333333",
           ],
         },
@@ -384,5 +419,50 @@ describe("Layer 2 feed builder", () => {
         reasonCodes: ["CHAINABUSE_CHECKED_REPORT"],
       },
     ]);
+  });
+
+  it("keeps empty but successfully loaded feeds distinct from a missing snapshot", () => {
+    const snapshot = buildLayer2Snapshot({
+      generatedAt: GENERATED_AT,
+      ofacRecords: [],
+      chainabuseRecords: [],
+      sourceStatuses: [
+        { source: "chainabuse", status: "ready" },
+        { source: "ofac", status: "ready" },
+      ],
+    });
+
+    expect(snapshot.metadata.sources).toEqual([]);
+    expect(snapshot.sectionStates).toEqual({
+      maliciousContracts: "ready",
+      scamSignatures: "missing",
+    });
+    expect(validateTransactionLayer2Snapshot(snapshot)).toMatchObject({
+      ok: true,
+      status: "empty",
+    });
+  });
+
+  it("marks partially available source builds as stale instead of healthy", () => {
+    const snapshot = buildLayer2Snapshot({
+      generatedAt: GENERATED_AT,
+      ofacRecords: parseOfacRecordsFromText(
+        "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      ),
+      chainabuseRecords: [],
+      sourceStatuses: [
+        { source: "chainabuse", status: "missing" },
+        { source: "ofac", status: "ready" },
+      ],
+    });
+
+    expect(snapshot.metadata.sources).toEqual(["ofac"]);
+    expect(snapshot.sectionStates.maliciousContracts).toBe("stale");
+  });
+
+  it("requires explicit generatedAt config for reproducible snapshot builds", () => {
+    expect(() => resolveLayer2BuildConfig([], {})).toThrow(
+      "requires --generated-at or LAYER2_GENERATED_AT"
+    );
   });
 });
