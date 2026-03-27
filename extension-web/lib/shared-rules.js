@@ -6977,6 +6977,569 @@ function resolveDomainIntel(snapshot, input) {
   };
 }
 
+// src/wallet/report-truth.ts
+function buildExecutionReportedLabel(cleanupExecution) {
+  switch (cleanupExecution?.status) {
+    case "partial":
+      return "Scan completed. Issues detected. Partial cleanup execution was reported.";
+    case "blocked":
+      return "Scan completed. Issues detected. Cleanup execution was blocked.";
+    case "failed":
+      return "Scan completed. Issues detected. Cleanup execution was attempted but did not complete.";
+    case "completed":
+      return "Scan completed. Issues detected. Cleanup execution was reported.";
+    default:
+      return "Scan completed. Issues detected. Cleanup execution was reported.";
+  }
+}
+function didWalletCleanupExecutionRun(cleanupExecution) {
+  if (cleanupExecution === null) {
+    return false;
+  }
+  if (cleanupExecution.startedAt !== null || cleanupExecution.completedAt !== null || cleanupExecution.status !== "not_started") {
+    return true;
+  }
+  return cleanupExecution.actionResults.some(
+    (actionResult) => actionResult.status !== "pending"
+  );
+}
+function buildWalletReportTruthFields(input) {
+  const actionable = (input.cleanupPlan?.actions.length ?? 0) > 0;
+  const executionPerformed = didWalletCleanupExecutionRun(input.cleanupExecution);
+  if (input.findings.length === 0) {
+    return {
+      capabilityTier: input.capabilityTier,
+      executionPerformed,
+      actionable,
+      classification: "no_issues_detected",
+      statusLabel: "Scan completed. No issues detected."
+    };
+  }
+  if (executionPerformed) {
+    return {
+      capabilityTier: input.capabilityTier,
+      executionPerformed,
+      actionable,
+      classification: "execution_reported",
+      statusLabel: buildExecutionReportedLabel(input.cleanupExecution)
+    };
+  }
+  if (!input.cleanupExecutionSupported) {
+    return {
+      capabilityTier: input.capabilityTier,
+      executionPerformed,
+      actionable,
+      classification: "manual_action_required",
+      statusLabel: "Scan completed. Issues detected. Manual action required."
+    };
+  }
+  if (actionable) {
+    return {
+      capabilityTier: input.capabilityTier,
+      executionPerformed,
+      actionable,
+      classification: "issues_detected",
+      statusLabel: "Scan completed. Issues detected. Follow-up action is available."
+    };
+  }
+  return {
+    capabilityTier: input.capabilityTier,
+    executionPerformed,
+    actionable,
+    classification: "issues_detected",
+    statusLabel: "Scan completed. Issues detected. Review recommended."
+  };
+}
+
+// src/wallet/capabilities.ts
+var WALLET_CHAIN_CAPABILITY_CONTRACTS = {
+  evm: {
+    walletChain: "evm",
+    supportedTiers: ["basic", "full"],
+    fullCapabilitySupported: true,
+    cleanupPlanSupported: true,
+    cleanupExecutionSupported: true,
+    operations: [
+      {
+        operation: "snapshot",
+        status: "supported",
+        remediationSupported: false
+      },
+      {
+        operation: "finding",
+        status: "supported",
+        remediationSupported: false
+      },
+      {
+        operation: "cleanup_plan",
+        status: "supported",
+        remediationSupported: true
+      },
+      {
+        operation: "cleanup_execution",
+        status: "partial",
+        remediationSupported: true
+      }
+    ]
+  },
+  solana: {
+    walletChain: "solana",
+    supportedTiers: ["basic"],
+    fullCapabilitySupported: false,
+    cleanupPlanSupported: true,
+    cleanupExecutionSupported: false,
+    operations: [
+      {
+        operation: "snapshot",
+        status: "supported",
+        remediationSupported: false
+      },
+      {
+        operation: "finding",
+        status: "supported",
+        remediationSupported: false
+      },
+      {
+        operation: "cleanup_plan",
+        status: "supported",
+        remediationSupported: false
+      },
+      {
+        operation: "cleanup_execution",
+        status: "not_supported",
+        remediationSupported: false
+      }
+    ]
+  },
+  bitcoin: {
+    walletChain: "bitcoin",
+    supportedTiers: ["basic"],
+    fullCapabilitySupported: false,
+    cleanupPlanSupported: true,
+    cleanupExecutionSupported: false,
+    operations: [
+      {
+        operation: "snapshot",
+        status: "supported",
+        remediationSupported: false
+      },
+      {
+        operation: "finding",
+        status: "supported",
+        remediationSupported: false
+      },
+      {
+        operation: "cleanup_plan",
+        status: "supported",
+        remediationSupported: false
+      },
+      {
+        operation: "cleanup_execution",
+        status: "not_supported",
+        remediationSupported: false
+      }
+    ]
+  }
+};
+var CAPABILITY_STATUS_RANK = {
+  not_supported: 0,
+  partial: 1,
+  supported: 2
+};
+function formatSupportedTiers(supportedTiers) {
+  return supportedTiers.map((tier) => `"${tier}"`).join(", ");
+}
+function getOperationContract(contract, area) {
+  return contract.operations.find((operation) => operation.operation === area);
+}
+function assertCapabilityBoundariesDoNotOverclaim(contract, capabilityBoundaries) {
+  for (const boundary of capabilityBoundaries) {
+    const operation = getOperationContract(contract, boundary.area);
+    if (operation === void 0) {
+      continue;
+    }
+    if (CAPABILITY_STATUS_RANK[boundary.status] > CAPABILITY_STATUS_RANK[operation.status]) {
+      throw new Error(
+        `Layer 4 ${contract.walletChain} capability boundary "${boundary.capabilityKey}" overclaims ${boundary.area} support as "${boundary.status}".`
+      );
+    }
+  }
+}
+function assertCleanupActionsDoNotOverclaim(contract, cleanupActions) {
+  if (contract.walletChain === "evm") {
+    return;
+  }
+  for (const action of cleanupActions) {
+    if (action.executionType !== "manual_review") {
+      throw new Error(
+        `Layer 4 ${contract.walletChain} cleanup action "${action.actionId}" cannot advertise executionType "${action.executionType}".`
+      );
+    }
+    if (action.supportStatus === "supported") {
+      throw new Error(
+        `Layer 4 ${contract.walletChain} cleanup action "${action.actionId}" cannot advertise fully supported remediation.`
+      );
+    }
+  }
+}
+function assertWalletReportIdentityConsistency(input) {
+  if (input.snapshot.requestId !== input.request.requestId) {
+    throw new Error(
+      "Wallet report capability truth requires snapshot.requestId to match request.requestId."
+    );
+  }
+  if (input.result.requestId !== input.request.requestId) {
+    throw new Error(
+      "Wallet report capability truth requires result.requestId to match request.requestId."
+    );
+  }
+  if (input.result.snapshotId !== input.snapshot.snapshotId) {
+    throw new Error(
+      "Wallet report capability truth requires result.snapshotId to match snapshot.snapshotId."
+    );
+  }
+  if (input.snapshot.walletAddress !== input.request.walletAddress) {
+    throw new Error(
+      "Wallet report capability truth requires snapshot.walletAddress to match request.walletAddress."
+    );
+  }
+  if (input.result.walletAddress !== input.request.walletAddress) {
+    throw new Error(
+      "Wallet report capability truth requires result.walletAddress to match request.walletAddress."
+    );
+  }
+  if (input.summary.walletAddress !== input.request.walletAddress) {
+    throw new Error(
+      "Wallet report capability truth requires summary.walletAddress to match request.walletAddress."
+    );
+  }
+  if (input.snapshot.networkId !== input.request.networkId) {
+    throw new Error(
+      "Wallet report capability truth requires snapshot.networkId to match request.networkId."
+    );
+  }
+  if (input.result.networkId !== input.request.networkId) {
+    throw new Error(
+      "Wallet report capability truth requires result.networkId to match request.networkId."
+    );
+  }
+  if (input.summary.networkId !== input.request.networkId) {
+    throw new Error(
+      "Wallet report capability truth requires summary.networkId to match request.networkId."
+    );
+  }
+  if (input.summary.scanMode !== input.request.scanMode) {
+    throw new Error(
+      "Wallet report capability truth requires summary.scanMode to match request.scanMode."
+    );
+  }
+  if (input.summary.score !== input.result.scoreBreakdown.totalScore) {
+    throw new Error(
+      "Wallet report capability truth requires summary.score to match result.scoreBreakdown.totalScore."
+    );
+  }
+  if (input.summary.riskLevel !== input.result.scoreBreakdown.riskLevel) {
+    throw new Error(
+      "Wallet report capability truth requires summary.riskLevel to match result.scoreBreakdown.riskLevel."
+    );
+  }
+  if (input.summary.findingCount !== input.result.findings.length) {
+    throw new Error(
+      "Wallet report capability truth requires summary.findingCount to match result.findings."
+    );
+  }
+  const openFindingCount = input.result.findings.filter(
+    (finding) => finding.status === "open"
+  ).length;
+  if (input.summary.openFindingCount !== openFindingCount) {
+    throw new Error(
+      "Wallet report capability truth requires summary.openFindingCount to match open findings."
+    );
+  }
+  const cleanupActionCount = input.result.cleanupPlan?.actions.length ?? 0;
+  if (input.summary.cleanupActionCount !== cleanupActionCount) {
+    throw new Error(
+      "Wallet report capability truth requires summary.cleanupActionCount to match cleanup plan actions."
+    );
+  }
+  const actionableFindingCount = input.result.findings.filter(
+    (finding) => finding.cleanupActionIds.length > 0
+  ).length;
+  if (input.summary.actionableFindingCount !== actionableFindingCount) {
+    throw new Error(
+      "Wallet report capability truth requires summary.actionableFindingCount to match actionable findings."
+    );
+  }
+}
+function assertCleanupPlanConsistency(input) {
+  const cleanupPlan = input.result.cleanupPlan;
+  if (cleanupPlan === null) {
+    return;
+  }
+  if (cleanupPlan.walletChain !== input.contract.walletChain) {
+    throw new Error(
+      `Wallet report capability truth requires cleanupPlan.walletChain to be "${input.contract.walletChain}".`
+    );
+  }
+  if (cleanupPlan.walletAddress !== input.request.walletAddress) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupPlan.walletAddress to match request.walletAddress."
+    );
+  }
+  if (cleanupPlan.networkId !== input.request.networkId) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupPlan.networkId to match request.networkId."
+    );
+  }
+  const findingIds = new Set(input.result.findings.map((finding) => finding.findingId));
+  const riskFactorIds = new Set(
+    input.result.riskFactors.map((riskFactor) => riskFactor.factorId)
+  );
+  const actionIds = /* @__PURE__ */ new Set();
+  for (const action of cleanupPlan.actions) {
+    if (action.walletChain !== input.contract.walletChain) {
+      throw new Error(
+        `Wallet report capability truth requires cleanup action "${action.actionId}" to remain on chain "${input.contract.walletChain}".`
+      );
+    }
+    if (actionIds.has(action.actionId)) {
+      throw new Error(
+        `Wallet report capability truth requires cleanup action "${action.actionId}" to be unique within the cleanup plan.`
+      );
+    }
+    actionIds.add(action.actionId);
+    for (const findingId of action.findingIds) {
+      if (!findingIds.has(findingId)) {
+        throw new Error(
+          `Wallet report capability truth requires cleanup action "${action.actionId}" to reference declared findings only.`
+        );
+      }
+    }
+    for (const riskFactorId of action.riskFactorIds) {
+      if (!riskFactorIds.has(riskFactorId)) {
+        throw new Error(
+          `Wallet report capability truth requires cleanup action "${action.actionId}" to reference declared risk factors only.`
+        );
+      }
+    }
+    if (!input.contract.cleanupExecutionSupported) {
+      if (action.status !== "planned") {
+        throw new Error(
+          `Layer 4 ${input.contract.walletChain} cleanup action "${action.actionId}" cannot advertise status "${action.status}".`
+        );
+      }
+      if (action.executionMode === "automated") {
+        throw new Error(
+          `Layer 4 ${input.contract.walletChain} cleanup action "${action.actionId}" cannot advertise automated execution.`
+        );
+      }
+    }
+  }
+  for (const finding of input.result.findings) {
+    for (const actionId of finding.cleanupActionIds) {
+      if (!actionIds.has(actionId)) {
+        throw new Error(
+          `Wallet report capability truth requires finding "${finding.findingId}" to reference cleanup actions declared in the cleanup plan.`
+        );
+      }
+    }
+  }
+}
+function assertCleanupExecutionConsistency(input) {
+  if (input.cleanupExecution === null) {
+    return;
+  }
+  const cleanupPlan = input.result.cleanupPlan;
+  if (cleanupPlan === null) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupExecution to be omitted when result.cleanupPlan is null."
+    );
+  }
+  if (input.cleanupExecution.planId !== cleanupPlan.planId) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupExecution.planId to match result.cleanupPlan.planId."
+    );
+  }
+  if (input.cleanupExecution.walletAddress !== input.request.walletAddress) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupExecution.walletAddress to match request.walletAddress."
+    );
+  }
+  if (input.cleanupExecution.networkId !== input.request.networkId) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupExecution.networkId to match request.networkId."
+    );
+  }
+  const planActionIds = cleanupPlan.actions.map((action) => action.actionId);
+  const expectedActionIds = new Set(planActionIds);
+  const actualActionIds = /* @__PURE__ */ new Set();
+  for (const actionResult of input.cleanupExecution.actionResults) {
+    if (!expectedActionIds.has(actionResult.actionId)) {
+      throw new Error(
+        `Wallet report capability truth requires cleanup execution action "${actionResult.actionId}" to reference a declared cleanup plan action.`
+      );
+    }
+    if (actualActionIds.has(actionResult.actionId)) {
+      throw new Error(
+        `Wallet report capability truth requires cleanup execution action "${actionResult.actionId}" to be unique.`
+      );
+    }
+    actualActionIds.add(actionResult.actionId);
+  }
+  if (actualActionIds.size !== planActionIds.length) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupExecution.actionResults to cover each cleanup plan action exactly once."
+    );
+  }
+}
+function getWalletChainCapabilityContract(walletChain) {
+  return WALLET_CHAIN_CAPABILITY_CONTRACTS[walletChain];
+}
+function assertWalletScanModeSupported(walletChain, scanMode, fieldName = "scanMode") {
+  const contract = getWalletChainCapabilityContract(walletChain);
+  if (contract.supportedTiers.includes(scanMode)) {
+    return scanMode;
+  }
+  throw new Error(
+    `Layer 4 ${walletChain} capability does not support ${fieldName} "${scanMode}"; supported values: ${formatSupportedTiers(contract.supportedTiers)}.`
+  );
+}
+function assertWalletScanRequestCapabilityTruth(request) {
+  assertWalletScanModeSupported(
+    request.walletChain,
+    request.scanMode,
+    "request.scanMode"
+  );
+  return request;
+}
+function assertWalletReportCapabilityTruth(input) {
+  const contract = getWalletChainCapabilityContract(input.request.walletChain);
+  const expectedChain = contract.walletChain;
+  assertWalletReportIdentityConsistency(input);
+  assertWalletScanModeSupported(
+    input.request.walletChain,
+    input.request.scanMode,
+    "request.scanMode"
+  );
+  assertWalletScanModeSupported(
+    input.summary.walletChain,
+    input.summary.scanMode,
+    "summary.scanMode"
+  );
+  const expectedTruth = buildWalletReportTruthFields({
+    capabilityTier: input.request.scanMode,
+    findings: input.result.findings,
+    cleanupPlan: input.result.cleanupPlan,
+    cleanupExecution: input.cleanupExecution,
+    cleanupExecutionSupported: contract.cleanupExecutionSupported
+  });
+  if (input.snapshot.walletChain !== expectedChain) {
+    throw new Error(
+      `Wallet report capability truth requires snapshot.walletChain to be "${expectedChain}".`
+    );
+  }
+  if (input.result.walletChain !== expectedChain) {
+    throw new Error(
+      `Wallet report capability truth requires result.walletChain to be "${expectedChain}".`
+    );
+  }
+  if (input.summary.walletChain !== expectedChain) {
+    throw new Error(
+      `Wallet report capability truth requires summary.walletChain to be "${expectedChain}".`
+    );
+  }
+  if (input.cleanupExecution !== null && input.cleanupExecution.walletChain !== expectedChain) {
+    throw new Error(
+      `Wallet report capability truth requires cleanupExecution.walletChain to be "${expectedChain}".`
+    );
+  }
+  if (!contract.cleanupExecutionSupported && input.cleanupExecution !== null) {
+    throw new Error(
+      `Layer 4 ${expectedChain} capability does not support cleanup execution results.`
+    );
+  }
+  if (!contract.fullCapabilitySupported && input.result.cleanupPlan !== null && (input.result.cleanupPlan.projectedScore !== null || input.result.cleanupPlan.projectedRiskLevel !== null)) {
+    throw new Error(
+      `Layer 4 ${expectedChain} cleanup guidance cannot advertise projected post-remediation outcomes.`
+    );
+  }
+  if (input.result.capabilityTier !== input.request.scanMode) {
+    throw new Error(
+      "Wallet report capability truth requires result.capabilityTier to match request.scanMode."
+    );
+  }
+  if (input.summary.capabilityTier !== input.request.scanMode) {
+    throw new Error(
+      "Wallet report capability truth requires summary.capabilityTier to match request.scanMode."
+    );
+  }
+  const expectedActionable = (input.result.cleanupPlan?.actions.length ?? 0) > 0;
+  if (input.result.actionable !== expectedActionable) {
+    throw new Error(
+      "Wallet report capability truth requires result.actionable to match cleanup plan availability."
+    );
+  }
+  if (input.summary.actionable !== expectedActionable) {
+    throw new Error(
+      "Wallet report capability truth requires summary.actionable to match cleanup plan availability."
+    );
+  }
+  if (input.summary.actionableFindingCount > 0 && !input.summary.actionable) {
+    throw new Error(
+      "Wallet report capability truth requires summary.actionable to remain true when actionable findings are present."
+    );
+  }
+  const executionPerformed = didWalletCleanupExecutionRun(input.cleanupExecution);
+  if (input.result.executionPerformed !== executionPerformed) {
+    throw new Error(
+      "Wallet report capability truth requires result.executionPerformed to match actual cleanup execution."
+    );
+  }
+  if (input.summary.executionPerformed !== executionPerformed) {
+    throw new Error(
+      "Wallet report capability truth requires summary.executionPerformed to match actual cleanup execution."
+    );
+  }
+  if (input.result.classification !== expectedTruth.classification) {
+    throw new Error(
+      "Wallet report capability truth requires result.classification to match actual execution truth."
+    );
+  }
+  if (input.summary.classification !== expectedTruth.classification) {
+    throw new Error(
+      "Wallet report capability truth requires summary.classification to match actual execution truth."
+    );
+  }
+  if (input.result.statusLabel !== expectedTruth.statusLabel) {
+    throw new Error(
+      "Wallet report capability truth requires result.statusLabel to match actual execution truth."
+    );
+  }
+  if (input.summary.statusLabel !== expectedTruth.statusLabel) {
+    throw new Error(
+      "Wallet report capability truth requires summary.statusLabel to match actual execution truth."
+    );
+  }
+  assertCapabilityBoundariesDoNotOverclaim(
+    contract,
+    input.result.capabilityBoundaries
+  );
+  assertCleanupPlanConsistency({
+    contract,
+    request: input.request,
+    result: input.result
+  });
+  assertCleanupExecutionConsistency({
+    request: input.request,
+    result: input.result,
+    cleanupExecution: input.cleanupExecution
+  });
+  assertCleanupActionsDoNotOverclaim(
+    contract,
+    input.result.cleanupPlan?.actions ?? []
+  );
+}
+
 // src/wallet/report-id.ts
 function canonicalizeStringRecord(record) {
   const canonicalRecord = {};
@@ -7209,10 +7772,14 @@ function canonicalizeSnapshot(snapshot) {
 }
 function canonicalizeResult(result) {
   return {
+    actionable: result.actionable,
     capabilityBoundaries: result.capabilityBoundaries.map(
       canonicalizeCapabilityBoundary
     ),
+    capabilityTier: result.capabilityTier,
+    classification: result.classification,
     cleanupPlan: canonicalizeCleanupPlan(result.cleanupPlan),
+    executionPerformed: result.executionPerformed,
     evaluatedAt: result.evaluatedAt,
     findings: result.findings.map(canonicalizeFinding),
     networkId: result.networkId,
@@ -7220,14 +7787,19 @@ function canonicalizeResult(result) {
     riskFactors: result.riskFactors.map(canonicalizeRiskFactor),
     scoreBreakdown: canonicalizeScoreBreakdown(result.scoreBreakdown),
     snapshotId: result.snapshotId,
+    statusLabel: result.statusLabel,
     walletAddress: result.walletAddress,
     walletChain: result.walletChain
   };
 }
 function canonicalizeSummary(summary) {
   return {
+    actionable: summary.actionable,
     actionableFindingCount: summary.actionableFindingCount,
+    capabilityTier: summary.capabilityTier,
+    classification: summary.classification,
     cleanupActionCount: summary.cleanupActionCount,
+    executionPerformed: summary.executionPerformed,
     findingCount: summary.findingCount,
     generatedAt: summary.generatedAt,
     networkId: summary.networkId,
@@ -7236,6 +7808,7 @@ function canonicalizeSummary(summary) {
     scanMode: summary.scanMode,
     score: summary.score,
     snapshotCapturedAt: summary.snapshotCapturedAt,
+    statusLabel: summary.statusLabel,
     walletAddress: summary.walletAddress,
     walletChain: summary.walletChain
   };
@@ -7252,12 +7825,1138 @@ function canonicalizeReportIdInput(input) {
   };
 }
 function buildWalletReportId(input) {
+  assertWalletReportCapabilityTruth(input);
   const canonicalPayload = serializeCanonicalJson(canonicalizeReportIdInput(input));
   return `wallet_report_${sha256Hex(canonicalPayload)}`;
 }
 
-// src/wallet/evm/ids.ts
+// src/wallet/bitcoin/constants.ts
+var BITCOIN_WALLET_FINDING_CODES = Object.freeze({
+  ADDRESS_REUSE: "BITCOIN_ADDRESS_REUSE_EXPOSURE",
+  PRIVACY_EXPOSURE: "BITCOIN_PRIVACY_EXPOSURE",
+  FRAGMENTED_UTXO_STRUCTURE: "BITCOIN_FRAGMENTED_UTXO_STRUCTURE",
+  CONCENTRATED_UTXO_STRUCTURE: "BITCOIN_CONCENTRATED_UTXO_STRUCTURE",
+  POOR_WALLET_HYGIENE: "BITCOIN_POOR_WALLET_HYGIENE",
+  REPEATED_EXPOSED_RECEIVE: "BITCOIN_REPEATED_EXPOSED_RECEIVE_BEHAVIOR"
+});
+var BITCOIN_REPEATED_EXPOSED_RECEIVE_THRESHOLD = 3;
+var BITCOIN_SMALL_UTXO_SATS = 100000n;
+var BITCOIN_FRAGMENTATION_MEDIUM_UTXO_COUNT = 8;
+var BITCOIN_FRAGMENTATION_HIGH_UTXO_COUNT = 16;
+var BITCOIN_FRAGMENTATION_MEDIUM_SMALL_UTXO_COUNT = 5;
+var BITCOIN_FRAGMENTATION_HIGH_SMALL_UTXO_COUNT = 10;
+var BITCOIN_CONCENTRATION_MEDIUM_BPS = 7e3;
+var BITCOIN_CONCENTRATION_HIGH_BPS = 8500;
+var BITCOIN_WALLET_SCORE_COMPONENT_MAX = Object.freeze({
+  addressReuse: 20,
+  privacyExposure: 15,
+  utxoFragmentation: 20,
+  concentration: 15,
+  operationalHygiene: 15,
+  exposedReceiveBehavior: 15
+});
+
+// src/wallet/bitcoin/ids.ts
 function buildStableId(prefix, payload) {
+  return `${prefix}_${sha256Hex(serializeCanonicalJson(payload)).slice(0, 24)}`;
+}
+
+// src/wallet/bitcoin/utils.ts
+var RISK_LEVEL_ORDER = {
+  low: 0,
+  medium: 1,
+  high: 2,
+  critical: 3
+};
+function uniqueSorted(values) {
+  return [...new Set(values)].sort();
+}
+function normalizeMetadata(metadata) {
+  if (!metadata) {
+    return {};
+  }
+  const normalized = {};
+  for (const key of Object.keys(metadata).sort()) {
+    normalized[key] = metadata[key];
+  }
+  return normalized;
+}
+function normalizeBitcoinAddress(address) {
+  const trimmed = address.trim();
+  return /^(bc1|tb1|bcrt1)/i.test(trimmed) ? trimmed.toLowerCase() : trimmed;
+}
+function isValidBitcoinAddress(address) {
+  const trimmed = address.trim();
+  return /^(bc1|tb1|bcrt1)[a-z0-9]{11,87}$/i.test(trimmed) || /^[13mn2][1-9A-HJ-NP-Za-km-z]{25,62}$/.test(trimmed);
+}
+function compareRiskLevel(left, right) {
+  return RISK_LEVEL_ORDER[left] - RISK_LEVEL_ORDER[right];
+}
+function maxRiskLevel(levels, fallback) {
+  return levels.reduce(
+    (current, candidate) => compareRiskLevel(candidate, current) > 0 ? candidate : current,
+    fallback
+  );
+}
+
+// src/wallet/bitcoin/cleanup.ts
+var PHASE_4E_SUPPORT_DETAIL = "Phase 4E only provides deterministic Bitcoin remediation guidance. Manual wallet action is required because this layer does not construct transactions, request signatures, or broadcast Bitcoin activity.";
+function buildActionBase(input) {
+  return {
+    actionId: input.actionId,
+    walletChain: "bitcoin",
+    kind: input.kind,
+    executionMode: "manual",
+    executionType: "manual_review",
+    status: "planned",
+    requiresSignature: false,
+    supportStatus: "partial",
+    title: input.title,
+    description: input.description,
+    priority: input.priority,
+    target: {
+      targetId: buildStableId("wallet_target", {
+        actionId: input.actionId,
+        label: input.label
+      }),
+      targetKind: input.targetKind,
+      label: input.label,
+      metadata: {
+        recommendationType: input.recommendationType
+      }
+    },
+    findingIds: [input.finding.findingId],
+    riskFactorIds: input.riskFactorIds,
+    supportDetail: PHASE_4E_SUPPORT_DETAIL,
+    metadata: {
+      code: input.finding.metadata.code ?? "",
+      recommendationType: input.recommendationType
+    }
+  };
+}
+function buildActionForFinding(finding, riskFactors) {
+  const recommendationType = (() => {
+    switch (finding.metadata.code) {
+      case BITCOIN_WALLET_FINDING_CODES.ADDRESS_REUSE:
+      case BITCOIN_WALLET_FINDING_CODES.PRIVACY_EXPOSURE:
+      case BITCOIN_WALLET_FINDING_CODES.REPEATED_EXPOSED_RECEIVE:
+        return "rotate_address";
+      case BITCOIN_WALLET_FINDING_CODES.FRAGMENTED_UTXO_STRUCTURE:
+        return "consolidate_utxos";
+      case BITCOIN_WALLET_FINDING_CODES.CONCENTRATED_UTXO_STRUCTURE:
+        return "move_funds";
+      case BITCOIN_WALLET_FINDING_CODES.POOR_WALLET_HYGIENE:
+        return "harden_wallet";
+      default:
+        return null;
+    }
+  })();
+  if (recommendationType === null) {
+    return null;
+  }
+  const riskFactorIds = riskFactors.filter((riskFactor) => riskFactor.findingIds.includes(finding.findingId)).map((riskFactor) => riskFactor.factorId).sort();
+  switch (recommendationType) {
+    case "rotate_address":
+      return buildActionBase({
+        actionId: buildStableId("wallet_action", {
+          findingId: finding.findingId,
+          recommendationType
+        }),
+        finding,
+        riskFactorIds,
+        kind: "rotate_wallet",
+        priority: finding.riskLevel,
+        recommendationType,
+        targetKind: "wallet",
+        label: "bitcoin_receive_addresses",
+        title: "Rotate exposed receive addresses",
+        description: "Generate fresh Bitcoin receive addresses for future deposits and manually move exposed funds if continued public visibility or reuse creates avoidable privacy risk."
+      });
+    case "consolidate_utxos":
+      return buildActionBase({
+        actionId: buildStableId("wallet_action", {
+          findingId: finding.findingId,
+          recommendationType
+        }),
+        finding,
+        riskFactorIds,
+        kind: "move_assets",
+        priority: finding.riskLevel,
+        recommendationType,
+        targetKind: "asset",
+        label: "bitcoin_utxo_set",
+        title: "Consolidate fragmented UTXOs",
+        description: "Manually consolidate excess small Bitcoin UTXOs when fee conditions and operational policy allow. This phase provides guidance only and does not prepare transactions."
+      });
+    case "move_funds":
+      return buildActionBase({
+        actionId: buildStableId("wallet_action", {
+          findingId: finding.findingId,
+          recommendationType
+        }),
+        finding,
+        riskFactorIds,
+        kind: "move_assets",
+        priority: finding.riskLevel,
+        recommendationType,
+        targetKind: "asset",
+        label: "bitcoin_balance_distribution",
+        title: "Reduce concentrated balance structure",
+        description: "Review whether a dominant Bitcoin UTXO should be split or moved to fresh receive addresses to reduce concentration and improve operational resilience."
+      });
+    case "harden_wallet":
+      return buildActionBase({
+        actionId: buildStableId("wallet_action", {
+          findingId: finding.findingId,
+          recommendationType
+        }),
+        finding,
+        riskFactorIds,
+        kind: "manual_review",
+        priority: finding.riskLevel,
+        recommendationType,
+        targetKind: "wallet",
+        label: "bitcoin_wallet_hygiene",
+        title: "Harden wallet hygiene practices",
+        description: "Review operational wallet practices, public address handling, and receive/change separation to reduce avoidable Bitcoin privacy and hygiene exposure."
+      });
+  }
+}
+function buildBitcoinCleanupPlan(walletAddress, networkId, evaluatedAt, findings, riskFactors) {
+  const actions = findings.map((finding) => buildActionForFinding(finding, riskFactors)).filter((action) => action !== null).sort(
+    (left, right) => compareRiskLevel(right.priority, left.priority) || left.title.localeCompare(right.title) || left.actionId.localeCompare(right.actionId)
+  );
+  if (actions.length === 0) {
+    return {
+      cleanupPlan: null,
+      actionIdsByFindingId: {}
+    };
+  }
+  return {
+    cleanupPlan: {
+      planId: buildStableId("wallet_plan", {
+        actionIds: actions.map((action) => action.actionId),
+        networkId,
+        walletAddress
+      }),
+      walletChain: "bitcoin",
+      walletAddress,
+      networkId,
+      createdAt: evaluatedAt,
+      summary: `${actions.length} Bitcoin remediation recommendation${actions.length === 1 ? "" : "s"} were generated. Manual action is required because Phase 4E does not construct or broadcast Bitcoin transactions.`,
+      actions,
+      projectedScore: null,
+      projectedRiskLevel: null
+    },
+    actionIdsByFindingId: Object.fromEntries(
+      actions.map((action) => [action.findingIds[0] ?? "", [action.actionId]])
+    )
+  };
+}
+
+// src/wallet/bitcoin/score.ts
+function scoreBand(totalScore) {
+  if (totalScore >= 85) {
+    return "low";
+  }
+  if (totalScore >= 60) {
+    return "medium";
+  }
+  if (totalScore >= 35) {
+    return "high";
+  }
+  return "critical";
+}
+function findItemsByCode(items, code) {
+  return items.filter((item) => item.metadata.code === code);
+}
+function buildComponent(label, maxScore, score, rationale, findings, riskFactors) {
+  return {
+    componentId: buildStableId("wallet_component", {
+      label,
+      maxScore,
+      score
+    }),
+    label,
+    score,
+    maxScore,
+    riskLevel: maxRiskLevel(
+      [
+        ...findings.map((finding) => finding.riskLevel),
+        ...riskFactors.map((riskFactor) => riskFactor.riskLevel)
+      ],
+      score === maxScore ? "low" : "medium"
+    ),
+    rationale,
+    findingIds: findings.map((finding) => finding.findingId),
+    riskFactorIds: riskFactors.map((riskFactor) => riskFactor.factorId)
+  };
+}
+function buildBitcoinWalletScoreBreakdown(signals, findings, riskFactors) {
+  const addressReuseFindings = findItemsByCode(
+    findings,
+    BITCOIN_WALLET_FINDING_CODES.ADDRESS_REUSE
+  );
+  const privacyFindings = findItemsByCode(
+    findings,
+    BITCOIN_WALLET_FINDING_CODES.PRIVACY_EXPOSURE
+  );
+  const fragmentedUtxoFindings = findItemsByCode(
+    findings,
+    BITCOIN_WALLET_FINDING_CODES.FRAGMENTED_UTXO_STRUCTURE
+  );
+  const concentratedUtxoFindings = findItemsByCode(
+    findings,
+    BITCOIN_WALLET_FINDING_CODES.CONCENTRATED_UTXO_STRUCTURE
+  );
+  const hygieneFindings = findItemsByCode(
+    findings,
+    BITCOIN_WALLET_FINDING_CODES.POOR_WALLET_HYGIENE
+  );
+  const exposedReceiveFindings = findItemsByCode(
+    findings,
+    BITCOIN_WALLET_FINDING_CODES.REPEATED_EXPOSED_RECEIVE
+  );
+  const addressReusePenalty = Math.min(
+    signals.reusedAddressCount * 8,
+    BITCOIN_WALLET_SCORE_COMPONENT_MAX.addressReuse
+  );
+  const privacyPenalty = Math.min(
+    signals.privacyExposureCount * 7,
+    BITCOIN_WALLET_SCORE_COMPONENT_MAX.privacyExposure
+  );
+  const fragmentationPenalty = signals.fragmentationLevel === "high" ? BITCOIN_WALLET_SCORE_COMPONENT_MAX.utxoFragmentation : signals.fragmentationLevel === "medium" ? 10 : 0;
+  const concentrationPenalty = signals.concentrationLevel === "high" ? BITCOIN_WALLET_SCORE_COMPONENT_MAX.concentration : signals.concentrationLevel === "medium" ? 7 : 0;
+  const hygienePenalty = Math.min(
+    signals.poorHygieneCount * 7,
+    BITCOIN_WALLET_SCORE_COMPONENT_MAX.operationalHygiene
+  );
+  const exposedReceivePenalty = Math.min(
+    signals.exposedReceivingPatternCount * 8,
+    BITCOIN_WALLET_SCORE_COMPONENT_MAX.exposedReceiveBehavior
+  );
+  const components = [
+    buildComponent(
+      "Address reuse",
+      BITCOIN_WALLET_SCORE_COMPONENT_MAX.addressReuse,
+      BITCOIN_WALLET_SCORE_COMPONENT_MAX.addressReuse - addressReusePenalty,
+      `${signals.reusedAddressCount} reused Bitcoin address(es) drive this component.`,
+      addressReuseFindings,
+      riskFactors.filter(
+        (riskFactor) => riskFactor.metadata.code === BITCOIN_WALLET_FINDING_CODES.ADDRESS_REUSE
+      )
+    ),
+    buildComponent(
+      "Privacy exposure",
+      BITCOIN_WALLET_SCORE_COMPONENT_MAX.privacyExposure,
+      BITCOIN_WALLET_SCORE_COMPONENT_MAX.privacyExposure - privacyPenalty,
+      `${signals.privacyExposureCount} privacy exposure indicator(s) were supplied or derived from the hydrated snapshot.`,
+      privacyFindings,
+      riskFactors.filter(
+        (riskFactor) => riskFactor.metadata.code === BITCOIN_WALLET_FINDING_CODES.PRIVACY_EXPOSURE
+      )
+    ),
+    buildComponent(
+      "UTXO fragmentation",
+      BITCOIN_WALLET_SCORE_COMPONENT_MAX.utxoFragmentation,
+      BITCOIN_WALLET_SCORE_COMPONENT_MAX.utxoFragmentation - fragmentationPenalty,
+      `${signals.smallUtxoCount} small UTXO(s) across ${signals.totalUtxoCount} visible UTXO(s) drive this component.`,
+      fragmentedUtxoFindings,
+      riskFactors.filter(
+        (riskFactor) => riskFactor.metadata.code === BITCOIN_WALLET_FINDING_CODES.FRAGMENTED_UTXO_STRUCTURE
+      )
+    ),
+    buildComponent(
+      "UTXO concentration",
+      BITCOIN_WALLET_SCORE_COMPONENT_MAX.concentration,
+      BITCOIN_WALLET_SCORE_COMPONENT_MAX.concentration - concentrationPenalty,
+      `The largest UTXO represents ${signals.largestUtxoShareBasisPoints / 100}% of the visible wallet balance.`,
+      concentratedUtxoFindings,
+      riskFactors.filter(
+        (riskFactor) => riskFactor.metadata.code === BITCOIN_WALLET_FINDING_CODES.CONCENTRATED_UTXO_STRUCTURE
+      )
+    ),
+    buildComponent(
+      "Operational hygiene",
+      BITCOIN_WALLET_SCORE_COMPONENT_MAX.operationalHygiene,
+      BITCOIN_WALLET_SCORE_COMPONENT_MAX.operationalHygiene - hygienePenalty,
+      `${signals.poorHygieneCount} caller-supplied wallet hygiene record(s) drive this component.`,
+      hygieneFindings,
+      riskFactors.filter(
+        (riskFactor) => riskFactor.metadata.code === BITCOIN_WALLET_FINDING_CODES.POOR_WALLET_HYGIENE
+      )
+    ),
+    buildComponent(
+      "Exposed receive behavior",
+      BITCOIN_WALLET_SCORE_COMPONENT_MAX.exposedReceiveBehavior,
+      BITCOIN_WALLET_SCORE_COMPONENT_MAX.exposedReceiveBehavior - exposedReceivePenalty,
+      `${signals.exposedReceivingPatternCount} repeated exposed receive pattern(s) drive this component.`,
+      exposedReceiveFindings,
+      riskFactors.filter(
+        (riskFactor) => riskFactor.metadata.code === BITCOIN_WALLET_FINDING_CODES.REPEATED_EXPOSED_RECEIVE
+      )
+    )
+  ];
+  const totalScore = components.reduce((sum, component) => sum + component.score, 0);
+  const findingRiskLevel = maxRiskLevel(
+    findings.map((finding) => finding.riskLevel),
+    "low"
+  );
+  const riskLevel = maxRiskLevel([scoreBand(totalScore), findingRiskLevel], "low");
+  return {
+    totalScore,
+    riskLevel,
+    rationale: findings.length === 0 ? "No deterministic Bitcoin wallet findings were produced from the hydrated snapshot." : "Score starts at 100 and applies fixed deductions for address reuse, privacy exposure, UTXO fragmentation, UTXO concentration, operational hygiene, and exposed receive behavior.",
+    components
+  };
+}
+
+// src/wallet/scan-mode.ts
+function enforceWalletScanMode(walletChain, requestedScanMode) {
+  return assertWalletScanModeSupported(walletChain, requestedScanMode);
+}
+
+// src/wallet/bitcoin/assemble.ts
+function buildCapabilityBoundaries() {
+  return [
+    {
+      boundaryId: buildStableId("wallet_boundary", {
+        area: "snapshot",
+        capabilityKey: "hydrated_bitcoin_snapshot"
+      }),
+      area: "snapshot",
+      capabilityKey: "hydrated_bitcoin_snapshot",
+      status: "supported",
+      detail: "Phase 4E evaluates only caller-supplied hydrated Bitcoin snapshot data and performs no live lookups during normalization, scoring, or remediation planning."
+    },
+    {
+      boundaryId: buildStableId("wallet_boundary", {
+        area: "finding",
+        capabilityKey: "deterministic_bitcoin_findings"
+      }),
+      area: "finding",
+      capabilityKey: "deterministic_bitcoin_findings",
+      status: "supported",
+      detail: "Phase 4E emits deterministic Bitcoin findings, risk factors, and score breakdowns from the supplied snapshot only."
+    },
+    {
+      boundaryId: buildStableId("wallet_boundary", {
+        area: "cleanup_plan",
+        capabilityKey: "deterministic_bitcoin_guidance"
+      }),
+      area: "cleanup_plan",
+      capabilityKey: "deterministic_bitcoin_guidance",
+      status: "supported",
+      detail: "Phase 4E builds deterministic recommendation-only Bitcoin remediation guidance. It does not claim revoke support, one-click cleanup, or automatic fixes."
+    },
+    {
+      boundaryId: buildStableId("wallet_boundary", {
+        area: "cleanup_execution",
+        capabilityKey: "bitcoin_cleanup_execution"
+      }),
+      area: "cleanup_execution",
+      capabilityKey: "bitcoin_cleanup_execution",
+      status: "not_supported",
+      detail: "Phase 4E does not construct Bitcoin transactions, request signatures, move funds, or broadcast remediation actions."
+    }
+  ];
+}
+function buildFindingId(walletAddress, code, resourceIds) {
+  return buildStableId("wallet_finding", {
+    code,
+    resourceIds,
+    walletAddress
+  });
+}
+function buildRiskFactor(finding) {
+  return {
+    factorId: buildStableId("wallet_factor", {
+      code: finding.metadata.code ?? "",
+      findingId: finding.findingId,
+      resourceIds: finding.resourceIds
+    }),
+    walletChain: "bitcoin",
+    category: finding.category,
+    riskLevel: finding.riskLevel,
+    title: finding.title,
+    summary: finding.summary,
+    findingIds: [finding.findingId],
+    resourceIds: finding.resourceIds,
+    metadata: {
+      code: finding.metadata.code ?? "",
+      sourceFindingId: finding.findingId
+    }
+  };
+}
+function assembleBitcoinWalletEvaluation(input) {
+  const normalizedRequest = {
+    ...input.request,
+    walletChain: "bitcoin",
+    walletAddress: input.normalizedSnapshot.walletAddress,
+    scanMode: enforceWalletScanMode("bitcoin", input.request.scanMode)
+  };
+  const normalizedSnapshotContract = {
+    ...input.snapshot,
+    walletChain: "bitcoin",
+    walletAddress: input.normalizedSnapshot.walletAddress
+  };
+  const findingsWithoutActions = input.findingDrafts.map((draft) => ({
+    findingId: buildFindingId(
+      input.normalizedSnapshot.walletAddress,
+      draft.code,
+      draft.resourceIds
+    ),
+    walletChain: "bitcoin",
+    category: draft.category,
+    riskLevel: draft.riskLevel,
+    status: "open",
+    title: draft.title,
+    summary: draft.summary,
+    detectedAt: input.evaluatedAt,
+    resourceIds: draft.resourceIds,
+    riskFactorIds: [],
+    cleanupActionIds: [],
+    evidence: draft.evidence,
+    metadata: draft.metadata
+  }));
+  const riskFactors = findingsWithoutActions.map(buildRiskFactor);
+  const findingsWithFactors = findingsWithoutActions.map((finding, index) => ({
+    ...finding,
+    riskFactorIds: [riskFactors[index]?.factorId ?? ""].filter(Boolean)
+  }));
+  const scoreBreakdown = buildBitcoinWalletScoreBreakdown(
+    input.signals,
+    findingsWithFactors,
+    riskFactors
+  );
+  const { cleanupPlan, actionIdsByFindingId } = buildBitcoinCleanupPlan(
+    input.normalizedSnapshot.walletAddress,
+    normalizedRequest.networkId,
+    input.evaluatedAt,
+    findingsWithFactors,
+    riskFactors
+  );
+  const findings = findingsWithFactors.map((finding) => ({
+    ...finding,
+    cleanupActionIds: actionIdsByFindingId[finding.findingId] ?? []
+  }));
+  const capabilityBoundaries = buildCapabilityBoundaries();
+  const result = {
+    requestId: normalizedRequest.requestId,
+    snapshotId: normalizedSnapshotContract.snapshotId,
+    walletChain: "bitcoin",
+    walletAddress: input.normalizedSnapshot.walletAddress,
+    networkId: normalizedRequest.networkId,
+    evaluatedAt: input.evaluatedAt,
+    findings,
+    riskFactors,
+    scoreBreakdown,
+    cleanupPlan,
+    ...buildWalletReportTruthFields({
+      capabilityTier: normalizedRequest.scanMode,
+      findings,
+      cleanupPlan,
+      cleanupExecution: null,
+      cleanupExecutionSupported: false
+    }),
+    capabilityBoundaries
+  };
+  const summary = {
+    walletChain: "bitcoin",
+    walletAddress: input.normalizedSnapshot.walletAddress,
+    networkId: normalizedRequest.networkId,
+    scanMode: normalizedRequest.scanMode,
+    generatedAt: input.evaluatedAt,
+    snapshotCapturedAt: normalizedSnapshotContract.capturedAt,
+    capabilityTier: normalizedRequest.scanMode,
+    score: scoreBreakdown.totalScore,
+    riskLevel: scoreBreakdown.riskLevel,
+    findingCount: findings.length,
+    openFindingCount: findings.length,
+    cleanupActionCount: cleanupPlan?.actions.length ?? 0,
+    actionableFindingCount: findings.filter(
+      (finding) => finding.cleanupActionIds.length > 0
+    ).length,
+    executionPerformed: result.executionPerformed,
+    actionable: result.actionable,
+    classification: result.classification,
+    statusLabel: result.statusLabel
+  };
+  const report = {
+    reportId: buildWalletReportId({
+      reportVersion: input.reportVersion,
+      generatedAt: input.evaluatedAt,
+      request: normalizedRequest,
+      snapshot: normalizedSnapshotContract,
+      result,
+      summary,
+      cleanupExecution: null
+    }),
+    reportVersion: input.reportVersion,
+    generatedAt: input.evaluatedAt,
+    request: normalizedRequest,
+    snapshot: normalizedSnapshotContract,
+    result,
+    summary,
+    cleanupExecution: null
+  };
+  return {
+    score: scoreBreakdown.totalScore,
+    riskLevel: scoreBreakdown.riskLevel,
+    normalizedSnapshot: input.normalizedSnapshot,
+    signals: input.signals,
+    result,
+    summary,
+    report
+  };
+}
+
+// src/wallet/bitcoin/normalize.ts
+function parseIntegerString(value) {
+  if (value === null || value === void 0) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !/^[0-9]+$/.test(trimmed)) {
+    return null;
+  }
+  return BigInt(trimmed).toString(10);
+}
+function parseNonNegativeInteger(value, fallback) {
+  if (value === null || value === void 0 || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.max(0, Math.floor(value));
+}
+function pickSourceSectionId(explicitSectionId, candidates) {
+  if (explicitSectionId) {
+    return explicitSectionId;
+  }
+  return candidates[0] ?? null;
+}
+function findSectionIds(input, keywords) {
+  const foreignChainMarkers = /* @__PURE__ */ new Set(["evm", "solana"]);
+  const bitcoinMarkers = /* @__PURE__ */ new Set(["bitcoin", "btc"]);
+  return input.snapshot.sections.filter((section) => {
+    const haystacks = [
+      section.sectionId,
+      section.sectionType,
+      section.label
+    ].map((value) => value.toLowerCase());
+    const tokenLists = haystacks.map(
+      (haystack) => haystack.split(/[^a-z0-9]+/).filter(Boolean)
+    );
+    const hasForeignChainMarker = tokenLists.some(
+      (tokens) => tokens.some((token) => foreignChainMarkers.has(token))
+    );
+    if (hasForeignChainMarker) {
+      return false;
+    }
+    const isBitcoinNativeSection = tokenLists.some(
+      (tokens) => tokens[0] !== void 0 && bitcoinMarkers.has(tokens[0])
+    );
+    if (!isBitcoinNativeSection) {
+      return false;
+    }
+    return keywords.some(
+      (keyword) => tokenLists.some(
+        (tokens) => tokens.some((token) => token === keyword || token.startsWith(keyword))
+      )
+    );
+  }).map((section) => section.sectionId).sort();
+}
+function normalizeRole(role) {
+  return role ?? "unknown";
+}
+function normalizeAddressType(addressType) {
+  return addressType ?? "other";
+}
+function normalizeAddressSummary(input, walletAddress, defaultSectionIds) {
+  const address = normalizeBitcoinAddress(input.address);
+  const receiveCount = parseNonNegativeInteger(input.receiveCount, 0);
+  const reuseCount = parseNonNegativeInteger(input.reuseCount, 0);
+  const sourceSectionId = pickSourceSectionId(
+    input.sourceSectionId,
+    defaultSectionIds
+  );
+  return {
+    resourceId: buildStableId("wallet_btc_address", {
+      address,
+      role: normalizeRole(input.role),
+      walletAddress
+    }),
+    address,
+    addressType: normalizeAddressType(input.addressType),
+    role: normalizeRole(input.role),
+    receivedSats: parseIntegerString(input.receivedSats),
+    spentSats: parseIntegerString(input.spentSats),
+    balanceSats: parseIntegerString(input.balanceSats),
+    receiveCount,
+    spendCount: parseNonNegativeInteger(input.spendCount, 0),
+    reuseCount,
+    exposedPublicly: input.exposedPublicly === true,
+    hasReuse: reuseCount > 0 || input.exposedPublicly === true && receiveCount >= BITCOIN_REPEATED_EXPOSED_RECEIVE_THRESHOLD || receiveCount > 1,
+    lastReceivedAt: input.lastReceivedAt ?? null,
+    lastSpentAt: input.lastSpentAt ?? null,
+    sourceSectionId,
+    metadata: normalizeMetadata(input.metadata)
+  };
+}
+function normalizeUtxoSummary(input, defaultSectionIds) {
+  const txid = input.txid.trim().toLowerCase();
+  const sourceSectionId = pickSourceSectionId(
+    input.sourceSectionId,
+    defaultSectionIds
+  );
+  return {
+    resourceId: buildStableId("wallet_btc_utxo", {
+      address: normalizeBitcoinAddress(input.address),
+      txid,
+      vout: parseNonNegativeInteger(input.vout, 0)
+    }),
+    txid,
+    vout: parseNonNegativeInteger(input.vout, 0),
+    address: normalizeBitcoinAddress(input.address),
+    valueSats: parseIntegerString(input.valueSats) ?? "0",
+    confirmations: input.confirmations === null || input.confirmations === void 0 ? null : parseNonNegativeInteger(input.confirmations, 0),
+    sourceSectionId,
+    metadata: normalizeMetadata(input.metadata)
+  };
+}
+function normalizeHygieneRecord(input, defaultSectionIds) {
+  const sourceSectionId = pickSourceSectionId(
+    input.sourceSectionId,
+    defaultSectionIds
+  );
+  return {
+    resourceId: buildStableId("wallet_btc_hygiene", {
+      address: input.address === void 0 || input.address === null ? null : normalizeBitcoinAddress(input.address),
+      count: parseNonNegativeInteger(input.count, 1),
+      issueType: input.issueType,
+      note: input.note ?? null,
+      riskLevel: input.riskLevel ?? "medium"
+    }),
+    issueType: input.issueType,
+    address: input.address === void 0 || input.address === null ? null : normalizeBitcoinAddress(input.address),
+    count: parseNonNegativeInteger(input.count, 1),
+    riskLevel: input.riskLevel ?? "medium",
+    note: input.note ?? null,
+    sourceSectionId,
+    metadata: normalizeMetadata(input.metadata)
+  };
+}
+function assertNonEmptyString(value, label) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+  return trimmed;
+}
+function assertBitcoinRequestSnapshotParity(input) {
+  if (input.request.walletChain !== "bitcoin") {
+    throw new Error(
+      `Bitcoin wallet evaluation requires request.walletChain to be "bitcoin"; received "${input.request.walletChain}".`
+    );
+  }
+  if (input.snapshot.walletChain !== "bitcoin") {
+    throw new Error(
+      `Bitcoin wallet evaluation requires snapshot.walletChain to be "bitcoin"; received "${input.snapshot.walletChain}".`
+    );
+  }
+  const requestId = assertNonEmptyString(
+    input.request.requestId,
+    "Bitcoin request.requestId"
+  );
+  const snapshotRequestId = assertNonEmptyString(
+    input.snapshot.requestId,
+    "Bitcoin snapshot.requestId"
+  );
+  if (requestId !== snapshotRequestId) {
+    throw new Error(
+      "Bitcoin wallet evaluation requires request and snapshot requestId values to match."
+    );
+  }
+  const requestNetworkId = assertNonEmptyString(
+    input.request.networkId,
+    "Bitcoin request.networkId"
+  );
+  const snapshotNetworkId = assertNonEmptyString(
+    input.snapshot.networkId,
+    "Bitcoin snapshot.networkId"
+  );
+  if (requestNetworkId !== snapshotNetworkId) {
+    throw new Error(
+      "Bitcoin wallet evaluation requires request and snapshot networkId values to match."
+    );
+  }
+  const requestWallet = normalizeBitcoinAddress(
+    assertNonEmptyString(input.request.walletAddress, "Bitcoin request.walletAddress")
+  );
+  if (!isValidBitcoinAddress(requestWallet)) {
+    throw new Error(
+      "Bitcoin wallet evaluation requires request.walletAddress to be a valid Bitcoin address."
+    );
+  }
+  const snapshotWallet = normalizeBitcoinAddress(
+    assertNonEmptyString(input.snapshot.walletAddress, "Bitcoin snapshot.walletAddress")
+  );
+  if (!isValidBitcoinAddress(snapshotWallet)) {
+    throw new Error(
+      "Bitcoin wallet evaluation requires snapshot.walletAddress to be a valid Bitcoin address."
+    );
+  }
+  if (requestWallet !== snapshotWallet) {
+    throw new Error(
+      "Bitcoin wallet evaluation requires request and snapshot walletAddress values to match."
+    );
+  }
+  return {
+    walletAddress: requestWallet,
+    networkId: requestNetworkId
+  };
+}
+function normalizeBitcoinWalletSnapshot(input) {
+  const { walletAddress, networkId } = assertBitcoinRequestSnapshotParity(input);
+  const addressSectionIds = findSectionIds(input, ["address"]);
+  const utxoSectionIds = findSectionIds(input, ["utxo"]);
+  const hygieneSectionIds = findSectionIds(input, ["hygiene", "privacy"]);
+  return {
+    walletAddress,
+    networkId,
+    capturedAt: input.snapshot.capturedAt,
+    addresses: [...input.hydratedSnapshot.addresses].map(
+      (address) => normalizeAddressSummary(address, walletAddress, addressSectionIds)
+    ).sort(
+      (left, right) => left.address.localeCompare(right.address) || left.role.localeCompare(right.role) || left.resourceId.localeCompare(right.resourceId)
+    ),
+    utxos: [...input.hydratedSnapshot.utxos].map((utxo) => normalizeUtxoSummary(utxo, utxoSectionIds)).sort(
+      (left, right) => left.address.localeCompare(right.address) || left.txid.localeCompare(right.txid) || left.vout - right.vout || left.resourceId.localeCompare(right.resourceId)
+    ),
+    hygieneRecords: [...input.hydratedSnapshot.hygieneRecords ?? []].map((record) => normalizeHygieneRecord(record, hygieneSectionIds)).sort(
+      (left, right) => left.issueType.localeCompare(right.issueType) || (left.address ?? "").localeCompare(right.address ?? "") || left.resourceId.localeCompare(right.resourceId)
+    )
+  };
+}
+
+// src/wallet/bitcoin/rules.ts
+function buildEvidenceRefs(sourceSectionIds, fallbackLabel) {
+  const sectionIds = uniqueSorted(sourceSectionIds.filter(Boolean));
+  if (sectionIds.length > 0) {
+    return sectionIds.map((sectionId) => ({
+      evidenceId: buildStableId("wallet_evidence", {
+        fallbackLabel,
+        sectionId
+      }),
+      sourceType: "snapshot_section",
+      sourceId: sectionId,
+      label: `Snapshot section: ${sectionId}`
+    }));
+  }
+  return [
+    {
+      evidenceId: buildStableId("wallet_evidence", {
+        fallbackLabel
+      }),
+      sourceType: "derived",
+      sourceId: fallbackLabel.toLowerCase().replace(/\s+/g, "_"),
+      label: fallbackLabel
+    }
+  ];
+}
+function addressEvidence(addresses, fallbackLabel) {
+  return buildEvidenceRefs(
+    addresses.map((address) => address.sourceSectionId ?? ""),
+    fallbackLabel
+  );
+}
+function utxoEvidence(utxos, fallbackLabel) {
+  return buildEvidenceRefs(
+    utxos.map((utxo) => utxo.sourceSectionId ?? ""),
+    fallbackLabel
+  );
+}
+function hygieneEvidence(records, fallbackLabel) {
+  return buildEvidenceRefs(
+    records.map((record) => record.sourceSectionId ?? ""),
+    fallbackLabel
+  );
+}
+function buildBitcoinWalletFindings(snapshot, signals) {
+  const drafts = [];
+  const reusedAddresses = snapshot.addresses.filter((address) => address.hasReuse);
+  const publiclyExposedAddresses = snapshot.addresses.filter(
+    (address) => address.exposedPublicly
+  );
+  const poorHygieneRecords = snapshot.hygieneRecords.filter(
+    (record) => record.issueType === "poor_hygiene"
+  );
+  const privacyRecords = snapshot.hygieneRecords.filter(
+    (record) => record.issueType === "privacy_exposure"
+  );
+  const repeatedReceiveRecords = snapshot.hygieneRecords.filter(
+    (record) => record.issueType === "repeated_exposed_receive"
+  );
+  const repeatedExposedAddresses = publiclyExposedAddresses.filter(
+    (address) => address.receiveCount >= BITCOIN_REPEATED_EXPOSED_RECEIVE_THRESHOLD
+  );
+  const fragmentedUtxos = snapshot.utxos.filter(
+    (utxo) => signals.fragmentedUtxoIds.includes(utxo.resourceId)
+  );
+  const largestUtxo = snapshot.utxos.find(
+    (utxo) => utxo.resourceId === signals.largestUtxoId
+  );
+  if (reusedAddresses.length > 0) {
+    drafts.push({
+      code: BITCOIN_WALLET_FINDING_CODES.ADDRESS_REUSE,
+      category: "operational",
+      riskLevel: reusedAddresses.length >= 3 || reusedAddresses.some((address) => address.exposedPublicly) ? "high" : "medium",
+      title: "Address reuse exposure",
+      summary: `${reusedAddresses.length} Bitcoin address${reusedAddresses.length === 1 ? "" : "es"} show repeated receiving behavior and should be rotated out of active use.`,
+      resourceIds: uniqueSorted(
+        reusedAddresses.map((address) => address.resourceId)
+      ),
+      evidence: addressEvidence(reusedAddresses, "Bitcoin address reuse exposure"),
+      metadata: {
+        code: BITCOIN_WALLET_FINDING_CODES.ADDRESS_REUSE,
+        reusedAddressCount: String(signals.reusedAddressCount)
+      }
+    });
+  }
+  if (signals.privacyExposureCount > 0) {
+    drafts.push({
+      code: BITCOIN_WALLET_FINDING_CODES.PRIVACY_EXPOSURE,
+      category: "operational",
+      riskLevel: maxRiskLevel(
+        [
+          signals.exposedReceivingPatternCount > 0 ? "high" : "medium",
+          ...privacyRecords.map((record) => record.riskLevel)
+        ],
+        "medium"
+      ),
+      title: "Privacy exposure",
+      summary: `${signals.privacyExposureCount} Bitcoin privacy exposure indicator${signals.privacyExposureCount === 1 ? "" : "s"} were detected from public address visibility or caller-supplied hygiene records.`,
+      resourceIds: uniqueSorted([
+        ...publiclyExposedAddresses.map((address) => address.resourceId),
+        ...privacyRecords.map((record) => record.resourceId)
+      ]),
+      evidence: [
+        ...addressEvidence(publiclyExposedAddresses, "Bitcoin privacy exposure"),
+        ...hygieneEvidence(privacyRecords, "Bitcoin privacy exposure record")
+      ],
+      metadata: {
+        code: BITCOIN_WALLET_FINDING_CODES.PRIVACY_EXPOSURE,
+        privacyExposureCount: String(signals.privacyExposureCount)
+      }
+    });
+  }
+  if (signals.fragmentationLevel !== "low") {
+    drafts.push({
+      code: BITCOIN_WALLET_FINDING_CODES.FRAGMENTED_UTXO_STRUCTURE,
+      category: "asset",
+      riskLevel: signals.fragmentationLevel === "high" ? "high" : "medium",
+      title: "Fragmented UTXO structure",
+      summary: `${signals.smallUtxoCount} small UTXO${signals.smallUtxoCount === 1 ? "" : "s"} and ${signals.totalUtxoCount} total UTXO${signals.totalUtxoCount === 1 ? "" : "s"} indicate ${signals.fragmentationLevel} fragmentation.`,
+      resourceIds: signals.fragmentedUtxoIds,
+      evidence: utxoEvidence(fragmentedUtxos, "Bitcoin fragmented UTXO structure"),
+      metadata: {
+        code: BITCOIN_WALLET_FINDING_CODES.FRAGMENTED_UTXO_STRUCTURE,
+        fragmentationLevel: signals.fragmentationLevel,
+        smallUtxoCount: String(signals.smallUtxoCount),
+        totalUtxoCount: String(signals.totalUtxoCount)
+      }
+    });
+  }
+  if (signals.concentrationLevel !== "low" && largestUtxo !== void 0) {
+    drafts.push({
+      code: BITCOIN_WALLET_FINDING_CODES.CONCENTRATED_UTXO_STRUCTURE,
+      category: "asset",
+      riskLevel: signals.concentrationLevel === "high" ? "high" : "medium",
+      title: "Concentrated UTXO structure",
+      summary: `The largest UTXO holds ${signals.largestUtxoShareBasisPoints / 100}% of the visible wallet balance, indicating ${signals.concentrationLevel} concentration.`,
+      resourceIds: [largestUtxo.resourceId],
+      evidence: utxoEvidence(
+        [largestUtxo],
+        "Bitcoin concentrated UTXO structure"
+      ),
+      metadata: {
+        code: BITCOIN_WALLET_FINDING_CODES.CONCENTRATED_UTXO_STRUCTURE,
+        concentrationLevel: signals.concentrationLevel,
+        largestUtxoShareBasisPoints: String(signals.largestUtxoShareBasisPoints)
+      }
+    });
+  }
+  if (poorHygieneRecords.length > 0) {
+    drafts.push({
+      code: BITCOIN_WALLET_FINDING_CODES.POOR_WALLET_HYGIENE,
+      category: "operational",
+      riskLevel: maxRiskLevel(
+        poorHygieneRecords.map((record) => record.riskLevel),
+        "medium"
+      ),
+      title: "Poor wallet hygiene",
+      summary: `${poorHygieneRecords.length} caller-supplied wallet hygiene issue${poorHygieneRecords.length === 1 ? "" : "s"} require manual operational review.`,
+      resourceIds: poorHygieneRecords.map((record) => record.resourceId),
+      evidence: hygieneEvidence(
+        poorHygieneRecords,
+        "Bitcoin poor wallet hygiene"
+      ),
+      metadata: {
+        code: BITCOIN_WALLET_FINDING_CODES.POOR_WALLET_HYGIENE,
+        poorHygieneCount: String(signals.poorHygieneCount)
+      }
+    });
+  }
+  if (signals.exposedReceivingPatternCount > 0) {
+    drafts.push({
+      code: BITCOIN_WALLET_FINDING_CODES.REPEATED_EXPOSED_RECEIVE,
+      category: "activity",
+      riskLevel: maxRiskLevel(
+        [
+          repeatedExposedAddresses.length > 0 ? "high" : "medium",
+          ...repeatedReceiveRecords.map((record) => record.riskLevel)
+        ],
+        "medium"
+      ),
+      title: "Repeated exposed receive behavior",
+      summary: `${signals.exposedReceivingPatternCount} exposed receiving pattern${signals.exposedReceivingPatternCount === 1 ? "" : "s"} show repeat deposits landing on public Bitcoin receive addresses.`,
+      resourceIds: uniqueSorted([
+        ...repeatedExposedAddresses.map((address) => address.resourceId),
+        ...repeatedReceiveRecords.map((record) => record.resourceId)
+      ]),
+      evidence: [
+        ...addressEvidence(
+          repeatedExposedAddresses,
+          "Bitcoin repeated exposed receive behavior"
+        ),
+        ...hygieneEvidence(
+          repeatedReceiveRecords,
+          "Bitcoin repeated exposed receive record"
+        )
+      ],
+      metadata: {
+        code: BITCOIN_WALLET_FINDING_CODES.REPEATED_EXPOSED_RECEIVE,
+        exposedReceivingPatternCount: String(
+          signals.exposedReceivingPatternCount
+        )
+      }
+    });
+  }
+  return drafts;
+}
+
+// src/wallet/bitcoin/signals.ts
+function classifyFragmentation(totalUtxoCount, smallUtxoCount) {
+  if (totalUtxoCount >= BITCOIN_FRAGMENTATION_HIGH_UTXO_COUNT || smallUtxoCount >= BITCOIN_FRAGMENTATION_HIGH_SMALL_UTXO_COUNT) {
+    return "high";
+  }
+  if (totalUtxoCount >= BITCOIN_FRAGMENTATION_MEDIUM_UTXO_COUNT || smallUtxoCount >= BITCOIN_FRAGMENTATION_MEDIUM_SMALL_UTXO_COUNT) {
+    return "medium";
+  }
+  return "low";
+}
+function classifyConcentration(largestShareBasisPoints, totalUtxoCount) {
+  if (totalUtxoCount < 2) {
+    return "low";
+  }
+  if (largestShareBasisPoints >= BITCOIN_CONCENTRATION_HIGH_BPS) {
+    return "high";
+  }
+  if (largestShareBasisPoints >= BITCOIN_CONCENTRATION_MEDIUM_BPS) {
+    return "medium";
+  }
+  return "low";
+}
+function buildBitcoinWalletSignals(snapshot) {
+  const reusedAddresses = snapshot.addresses.filter((address) => address.hasReuse);
+  const publiclyExposedAddresses = snapshot.addresses.filter(
+    (address) => address.exposedPublicly
+  );
+  const explicitPrivacyRecords = snapshot.hygieneRecords.filter(
+    (record) => record.issueType === "privacy_exposure"
+  );
+  const explicitPoorHygieneRecords = snapshot.hygieneRecords.filter(
+    (record) => record.issueType === "poor_hygiene"
+  );
+  const explicitExposedReceiveRecords = snapshot.hygieneRecords.filter(
+    (record) => record.issueType === "repeated_exposed_receive"
+  );
+  const repeatedExposedAddresses = snapshot.addresses.filter(
+    (address) => address.exposedPublicly && address.receiveCount >= BITCOIN_REPEATED_EXPOSED_RECEIVE_THRESHOLD
+  );
+  const smallUtxos = snapshot.utxos.filter(
+    (utxo) => BigInt(utxo.valueSats) <= BITCOIN_SMALL_UTXO_SATS
+  );
+  const totalValue = snapshot.utxos.reduce(
+    (sum, utxo) => sum + BigInt(utxo.valueSats),
+    0n
+  );
+  const largestUtxo = [...snapshot.utxos].sort(
+    (left, right) => Number(BigInt(right.valueSats) - BigInt(left.valueSats)) || left.resourceId.localeCompare(right.resourceId)
+  )[0];
+  const largestShareBasisPoints = largestUtxo === void 0 || totalValue === 0n ? 0 : Number(BigInt(largestUtxo.valueSats) * 10000n / totalValue);
+  const fragmentationLevel = classifyFragmentation(
+    snapshot.utxos.length,
+    smallUtxos.length
+  );
+  const concentrationLevel = classifyConcentration(
+    largestShareBasisPoints,
+    snapshot.utxos.length
+  );
+  return {
+    addressCount: snapshot.addresses.length,
+    reusedAddressCount: reusedAddresses.length,
+    reusedAddressIds: reusedAddresses.map((address) => address.resourceId),
+    publiclyExposedAddressCount: publiclyExposedAddresses.length,
+    publiclyExposedAddressIds: publiclyExposedAddresses.map(
+      (address) => address.resourceId
+    ),
+    privacyExposureCount: uniqueSorted([
+      ...publiclyExposedAddresses.map((address) => address.resourceId),
+      ...explicitPrivacyRecords.map((record) => record.resourceId)
+    ]).length,
+    privacyExposureIds: uniqueSorted([
+      ...publiclyExposedAddresses.map((address) => address.resourceId),
+      ...explicitPrivacyRecords.map((record) => record.resourceId)
+    ]),
+    totalUtxoCount: snapshot.utxos.length,
+    smallUtxoCount: smallUtxos.length,
+    fragmentedUtxoIds: fragmentationLevel === "low" ? [] : smallUtxos.map((utxo) => utxo.resourceId),
+    fragmentationLevel,
+    concentrationLevel,
+    largestUtxoShareBasisPoints: largestShareBasisPoints,
+    largestUtxoId: largestUtxo?.resourceId ?? null,
+    poorHygieneCount: explicitPoorHygieneRecords.length,
+    poorHygieneIds: explicitPoorHygieneRecords.map((record) => record.resourceId),
+    exposedReceivingPatternCount: uniqueSorted([
+      ...repeatedExposedAddresses.map((address) => address.resourceId),
+      ...explicitExposedReceiveRecords.map((record) => record.resourceId)
+    ]).length,
+    exposedReceivingPatternIds: uniqueSorted([
+      ...repeatedExposedAddresses.map((address) => address.resourceId),
+      ...explicitExposedReceiveRecords.map((record) => record.resourceId)
+    ])
+  };
+}
+
+// src/wallet/bitcoin/evaluate.ts
+function evaluateBitcoinWalletScan(input) {
+  assertWalletScanRequestCapabilityTruth(input.request);
+  const normalizedSnapshot = normalizeBitcoinWalletSnapshot(input);
+  const signals = buildBitcoinWalletSignals(normalizedSnapshot);
+  const findingDrafts = buildBitcoinWalletFindings(normalizedSnapshot, signals);
+  return assembleBitcoinWalletEvaluation({
+    request: input.request,
+    snapshot: input.snapshot,
+    normalizedSnapshot,
+    signals,
+    findingDrafts,
+    evaluatedAt: input.evaluatedAt,
+    reportVersion: input.reportVersion ?? "1"
+  });
+}
+
+// src/wallet/evm/ids.ts
+function buildStableId2(prefix, payload) {
   return `${prefix}_${sha256Hex(serializeCanonicalJson(payload)).slice(0, 24)}`;
 }
 
@@ -7350,7 +9049,7 @@ function getEvmCleanupEligibility(approval) {
 // src/wallet/evm/cleanup.ts
 var PHASE_4C_SUPPORT_DETAIL = "Prepared from normalized approval data only. User review, signature, submission, and confirmation occur outside this layer.";
 var ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-function compareRiskLevel(left, right) {
+function compareRiskLevel2(left, right) {
   const order = {
     low: 0,
     medium: 1,
@@ -7359,7 +9058,7 @@ function compareRiskLevel(left, right) {
   };
   return order[left] - order[right];
 }
-function uniqueSorted(values) {
+function uniqueSorted2(values) {
   return [...new Set(values)].sort();
 }
 function compareApprovals(left, right) {
@@ -7466,7 +9165,7 @@ function buildBatchPlans(actions, walletAddress, networkId, evaluatedAt) {
     grouped.set(key, [...existing, action]);
   }
   return [...grouped.entries()].map(([, batchActions]) => ({
-    batchId: buildStableId("wallet_batch", {
+    batchId: buildStableId2("wallet_batch", {
       actionIds: batchActions.map((action) => action.actionId),
       networkId,
       walletAddress
@@ -7506,16 +9205,16 @@ function buildEvmCleanupPlan(walletAddress, networkId, evaluatedAt, approvals, f
       return null;
     }
     const findingIds = linkedFindings.map((finding) => finding.findingId);
-    const linkedRiskFactorIds = uniqueSorted(
+    const linkedRiskFactorIds = uniqueSorted2(
       linkedFindings.flatMap((finding) => finding.riskFactorIds)
     );
     const priority = linkedFindings.reduce(
-      (highest, finding) => compareRiskLevel(getFindingPriority(approval, finding), highest) > 0 ? getFindingPriority(approval, finding) : highest,
+      (highest, finding) => compareRiskLevel2(getFindingPriority(approval, finding), highest) > 0 ? getFindingPriority(approval, finding) : highest,
       getFindingPriority(approval, firstFinding)
     );
     const explanation = `Revoking ${approval.approvalKind} for ${approval.spenderAddress} on ${approval.tokenAddress} removes the currently active authorization. A later re-scan is still required before claiming remediation.`;
     const action = {
-      actionId: buildStableId("wallet_action", {
+      actionId: buildStableId2("wallet_action", {
         approvalId: approval.approvalId
       }),
       walletChain: "evm",
@@ -7529,7 +9228,7 @@ function buildEvmCleanupPlan(walletAddress, networkId, evaluatedAt, approvals, f
       description: buildActionDescription(approval),
       priority,
       target: {
-        targetId: buildStableId("wallet_target", {
+        targetId: buildStableId2("wallet_target", {
           approvalId: approval.approvalId,
           walletAddress
         }),
@@ -7580,7 +9279,7 @@ function buildEvmCleanupPlan(walletAddress, networkId, evaluatedAt, approvals, f
     }
     return action;
   }).filter((action) => action !== null).sort((left, right) => {
-    const priorityDelta = compareRiskLevel(right.priority, left.priority);
+    const priorityDelta = compareRiskLevel2(right.priority, left.priority);
     if (priorityDelta !== 0) {
       return priorityDelta;
     }
@@ -7598,7 +9297,7 @@ function buildEvmCleanupPlan(walletAddress, networkId, evaluatedAt, approvals, f
     serializedActionIdsByFindingId[findingId] = [...actionIds].sort();
   }
   const cleanupPlan = {
-    planId: buildStableId("wallet_plan", {
+    planId: buildStableId2("wallet_plan", {
       actionIds: actions.map((action) => action.actionId),
       networkId,
       walletAddress
@@ -7620,19 +9319,19 @@ function buildEvmCleanupPlan(walletAddress, networkId, evaluatedAt, approvals, f
 }
 
 // src/wallet/evm/score.ts
-var RISK_LEVEL_ORDER = {
+var RISK_LEVEL_ORDER2 = {
   low: 0,
   medium: 1,
   high: 2,
   critical: 3
 };
-function maxRiskLevel(levels, fallback) {
+function maxRiskLevel2(levels, fallback) {
   return levels.reduce(
-    (current, candidate) => RISK_LEVEL_ORDER[candidate] > RISK_LEVEL_ORDER[current] ? candidate : current,
+    (current, candidate) => RISK_LEVEL_ORDER2[candidate] > RISK_LEVEL_ORDER2[current] ? candidate : current,
     fallback
   );
 }
-function scoreBand(totalScore) {
+function scoreBand2(totalScore) {
   if (totalScore >= 85) {
     return "low";
   }
@@ -7644,12 +9343,12 @@ function scoreBand(totalScore) {
   }
   return "critical";
 }
-function findItemsByCode(items, code) {
+function findItemsByCode2(items, code) {
   return items.filter((item) => item.metadata.code === code);
 }
-function buildComponent(label, maxScore, score, rationale, findings, factors) {
+function buildComponent2(label, maxScore, score, rationale, findings, factors) {
   return {
-    componentId: buildStableId("wallet_component", {
+    componentId: buildStableId2("wallet_component", {
       label,
       score,
       maxScore
@@ -7657,7 +9356,7 @@ function buildComponent(label, maxScore, score, rationale, findings, factors) {
     label,
     score,
     maxScore,
-    riskLevel: maxRiskLevel(
+    riskLevel: maxRiskLevel2(
       [...findings.map((finding) => finding.riskLevel), ...factors.map((factor) => factor.riskLevel)],
       score === maxScore ? "low" : "medium"
     ),
@@ -7667,23 +9366,23 @@ function buildComponent(label, maxScore, score, rationale, findings, factors) {
   };
 }
 function buildEvmWalletScoreBreakdown(_snapshot, signals, findings, riskFactors) {
-  const unlimitedFindings = findItemsByCode(
+  const unlimitedFindings = findItemsByCode2(
     findings,
     EVM_WALLET_FINDING_CODES.UNLIMITED_APPROVAL
   );
-  const flaggedFindings = findItemsByCode(
+  const flaggedFindings = findItemsByCode2(
     findings,
     EVM_WALLET_FINDING_CODES.FLAGGED_SPENDER
   );
-  const staleFindings = findItemsByCode(
+  const staleFindings = findItemsByCode2(
     findings,
     EVM_WALLET_FINDING_CODES.STALE_APPROVAL
   );
-  const excessiveFindings = findItemsByCode(
+  const excessiveFindings = findItemsByCode2(
     findings,
     EVM_WALLET_FINDING_CODES.EXCESSIVE_APPROVALS
   );
-  const contractFindings = findItemsByCode(
+  const contractFindings = findItemsByCode2(
     findings,
     EVM_WALLET_FINDING_CODES.RISKY_CONTRACT
   );
@@ -7707,7 +9406,7 @@ function buildEvmWalletScoreBreakdown(_snapshot, signals, findings, riskFactors)
   const contractPenalty = Math.min(signals.riskyContractExposureCount * 10, 20);
   const contractExposureScore = EVM_WALLET_SCORE_COMPONENT_MAX.contractExposure - contractPenalty;
   const components = [
-    buildComponent(
+    buildComponent2(
       "Authorization hygiene",
       EVM_WALLET_SCORE_COMPONENT_MAX.authorizationHygiene,
       authorizationScore,
@@ -7717,7 +9416,7 @@ function buildEvmWalletScoreBreakdown(_snapshot, signals, findings, riskFactors)
         (factor) => factor.metadata.code === EVM_WALLET_FINDING_CODES.UNLIMITED_APPROVAL || factor.metadata.code === EVM_WALLET_FINDING_CODES.EXCESSIVE_APPROVALS
       )
     ),
-    buildComponent(
+    buildComponent2(
       "Spender trust",
       EVM_WALLET_SCORE_COMPONENT_MAX.spenderTrust,
       spenderTrustScore,
@@ -7727,7 +9426,7 @@ function buildEvmWalletScoreBreakdown(_snapshot, signals, findings, riskFactors)
         (factor) => factor.metadata.code === EVM_WALLET_FINDING_CODES.FLAGGED_SPENDER || factor.metadata.code === EVM_WALLET_FINDING_CODES.UNLIMITED_APPROVAL
       )
     ),
-    buildComponent(
+    buildComponent2(
       "Approval freshness",
       EVM_WALLET_SCORE_COMPONENT_MAX.approvalFreshness,
       freshnessScore,
@@ -7737,7 +9436,7 @@ function buildEvmWalletScoreBreakdown(_snapshot, signals, findings, riskFactors)
         (factor) => factor.metadata.code === EVM_WALLET_FINDING_CODES.STALE_APPROVAL
       )
     ),
-    buildComponent(
+    buildComponent2(
       "Contract exposure",
       EVM_WALLET_SCORE_COMPONENT_MAX.contractExposure,
       contractExposureScore,
@@ -7749,11 +9448,11 @@ function buildEvmWalletScoreBreakdown(_snapshot, signals, findings, riskFactors)
     )
   ];
   const totalScore = components.reduce((sum, component) => sum + component.score, 0);
-  const findingRiskLevel = maxRiskLevel(
+  const findingRiskLevel = maxRiskLevel2(
     findings.map((finding) => finding.riskLevel),
     "low"
   );
-  const riskLevel = maxRiskLevel([scoreBand(totalScore), findingRiskLevel], "low");
+  const riskLevel = maxRiskLevel2([scoreBand2(totalScore), findingRiskLevel], "low");
   return {
     totalScore,
     riskLevel,
@@ -7763,10 +9462,10 @@ function buildEvmWalletScoreBreakdown(_snapshot, signals, findings, riskFactors)
 }
 
 // src/wallet/evm/assemble.ts
-function buildCapabilityBoundaries() {
+function buildCapabilityBoundaries2() {
   return [
     {
-      boundaryId: buildStableId("wallet_boundary", {
+      boundaryId: buildStableId2("wallet_boundary", {
         area: "snapshot",
         capabilityKey: "hydrated_evm_snapshot"
       }),
@@ -7776,7 +9475,7 @@ function buildCapabilityBoundaries() {
       detail: "Phase 4B evaluates only caller-supplied hydrated EVM snapshot data and performs no live lookups during normalization or scoring."
     },
     {
-      boundaryId: buildStableId("wallet_boundary", {
+      boundaryId: buildStableId2("wallet_boundary", {
         area: "finding",
         capabilityKey: "deterministic_evm_findings"
       }),
@@ -7786,7 +9485,7 @@ function buildCapabilityBoundaries() {
       detail: "Phase 4B emits deterministic EVM approval findings, factors, and score breakdowns from the supplied snapshot only."
     },
     {
-      boundaryId: buildStableId("wallet_boundary", {
+      boundaryId: buildStableId2("wallet_boundary", {
         area: "cleanup_plan",
         capabilityKey: "deterministic_evm_cleanup_plan"
       }),
@@ -7796,7 +9495,7 @@ function buildCapabilityBoundaries() {
       detail: "Phase 4C builds deterministic EVM revoke actions and logical batch groupings from normalized approval data only."
     },
     {
-      boundaryId: buildStableId("wallet_boundary", {
+      boundaryId: buildStableId2("wallet_boundary", {
         area: "cleanup_execution",
         capabilityKey: "evm_cleanup_execution"
       }),
@@ -7807,8 +9506,8 @@ function buildCapabilityBoundaries() {
     }
   ];
 }
-function buildFindingId(walletAddress, code, resourceIds) {
-  return buildStableId("wallet_finding", {
+function buildFindingId2(walletAddress, code, resourceIds) {
+  return buildStableId2("wallet_finding", {
     code,
     resourceIds,
     walletAddress
@@ -7816,7 +9515,7 @@ function buildFindingId(walletAddress, code, resourceIds) {
 }
 function buildRiskFactors(findings) {
   return findings.map((finding) => ({
-    factorId: buildStableId("wallet_factor", {
+    factorId: buildStableId2("wallet_factor", {
       code: finding.metadata.code ?? "",
       findingId: finding.findingId,
       resourceIds: finding.resourceIds
@@ -7844,7 +9543,7 @@ function assembleEvmWalletEvaluation(input) {
     walletAddress: input.normalizedSnapshot.walletAddress
   };
   const findingsWithoutActions = input.findingDrafts.map((draft) => ({
-    findingId: buildFindingId(
+    findingId: buildFindingId2(
       input.normalizedSnapshot.walletAddress,
       draft.code,
       draft.resourceIds
@@ -7888,7 +9587,7 @@ function assembleEvmWalletEvaluation(input) {
     ...finding,
     cleanupActionIds: actionIdsByFindingId[finding.findingId] ?? []
   }));
-  const capabilityBoundaries = buildCapabilityBoundaries();
+  const capabilityBoundaries = buildCapabilityBoundaries2();
   const result = {
     requestId: normalizedRequest.requestId,
     snapshotId: normalizedSnapshotContract.snapshotId,
@@ -7900,6 +9599,13 @@ function assembleEvmWalletEvaluation(input) {
     riskFactors,
     scoreBreakdown,
     cleanupPlan,
+    ...buildWalletReportTruthFields({
+      capabilityTier: normalizedRequest.scanMode,
+      findings,
+      cleanupPlan,
+      cleanupExecution: null,
+      cleanupExecutionSupported: true
+    }),
     capabilityBoundaries
   };
   const summary = {
@@ -7909,6 +9615,7 @@ function assembleEvmWalletEvaluation(input) {
     scanMode: normalizedRequest.scanMode,
     generatedAt: input.evaluatedAt,
     snapshotCapturedAt: normalizedSnapshotContract.capturedAt,
+    capabilityTier: normalizedRequest.scanMode,
     score: scoreBreakdown.totalScore,
     riskLevel: scoreBreakdown.riskLevel,
     findingCount: findings.length,
@@ -7916,7 +9623,11 @@ function assembleEvmWalletEvaluation(input) {
     cleanupActionCount: cleanupPlan?.actions.length ?? 0,
     actionableFindingCount: findings.filter(
       (finding) => finding.cleanupActionIds.length > 0
-    ).length
+    ).length,
+    executionPerformed: result.executionPerformed,
+    actionable: result.actionable,
+    classification: result.classification,
+    statusLabel: result.statusLabel
   };
   const report = {
     reportId: buildWalletReportId({
@@ -7949,7 +9660,7 @@ function assembleEvmWalletEvaluation(input) {
 
 // src/wallet/evm/normalize.ts
 var MAX_UINT256 = (1n << 256n) - 1n;
-function normalizeMetadata(metadata) {
+function normalizeMetadata2(metadata) {
   if (!metadata) {
     return {};
   }
@@ -7962,7 +9673,7 @@ function normalizeMetadata(metadata) {
 function normalizeFlags(flags) {
   return [...new Set((flags ?? []).map((flag) => flag.trim().toLowerCase()).filter(Boolean))].sort();
 }
-function parseIntegerString(value) {
+function parseIntegerString2(value) {
   if (value === null || value === void 0) {
     return null;
   }
@@ -7981,13 +9692,13 @@ function parseIntegerString(value) {
 function compareNullable(left, right) {
   return (left ?? "").localeCompare(right ?? "");
 }
-function pickSourceSectionId(explicitSectionId, candidates) {
+function pickSourceSectionId2(explicitSectionId, candidates) {
   if (explicitSectionId) {
     return explicitSectionId;
   }
   return candidates[0] ?? null;
 }
-function findSectionIds(input, matcher) {
+function findSectionIds2(input, matcher) {
   return input.snapshot.sections.filter((section) => {
     const haystacks = [
       section.sectionId,
@@ -8002,10 +9713,10 @@ function normalizeSpender(input, defaultSectionIds) {
   const riskLevel = input.riskLevel ?? (flags.length > 0 ? "high" : null);
   const disposition = flags.length > 0 || riskLevel !== null && riskLevel !== "low" ? "flagged" : input.trusted ? "trusted" : "unknown";
   const spenderAddress = normalizeEvmAddress(input.spenderAddress);
-  const sourceSectionId = pickSourceSectionId(input.sourceSectionId, defaultSectionIds);
-  const metadata = normalizeMetadata(input.metadata);
+  const sourceSectionId = pickSourceSectionId2(input.sourceSectionId, defaultSectionIds);
+  const metadata = normalizeMetadata2(input.metadata);
   return {
-    resourceId: buildStableId("wallet_spender", {
+    resourceId: buildStableId2("wallet_spender", {
       disposition,
       riskLevel,
       sourceSectionId,
@@ -8024,11 +9735,11 @@ function normalizeContractExposure(input, defaultSectionIds) {
   const flags = normalizeFlags(input.flags);
   const riskLevel = input.riskLevel ?? (flags.length > 0 ? "high" : null);
   const contractAddress = normalizeEvmAddress(input.contractAddress);
-  const sourceSectionId = pickSourceSectionId(input.sourceSectionId, defaultSectionIds);
-  const metadata = normalizeMetadata(input.metadata);
+  const sourceSectionId = pickSourceSectionId2(input.sourceSectionId, defaultSectionIds);
+  const metadata = normalizeMetadata2(input.metadata);
   const isRisky = flags.length > 0 || riskLevel !== null && riskLevel !== "low";
   return {
-    resourceId: buildStableId("wallet_contract", {
+    resourceId: buildStableId2("wallet_contract", {
       contractAddress,
       exposureType: input.exposureType,
       riskLevel,
@@ -8077,7 +9788,7 @@ function normalizeApproval(input, walletAddress, capturedAt, spenderMap, contrac
   const approvalKind = deriveApprovalKind(input);
   const tokenAddress = normalizeEvmAddress(input.tokenAddress);
   const spenderAddress = normalizeEvmAddress(input.spenderAddress);
-  const amount = parseIntegerString(input.amount);
+  const amount = parseIntegerString2(input.amount);
   if (isInactiveApproval(approvalKind, amount, input.isApproved)) {
     return null;
   }
@@ -8088,10 +9799,10 @@ function normalizeApproval(input, walletAddress, capturedAt, spenderMap, contrac
   const riskyContractExposureIds = contractMatches.map((match) => match.resourceId);
   const ageDays = computeAgeDays(input.approvedAt ?? null, capturedAt);
   const amountKind = approvalKind === "erc20_allowance" ? amount === MAX_UINT256.toString(10) ? "unlimited" : "limited" : approvalKind === "erc721_token" ? "not_applicable" : "unlimited";
-  const metadata = normalizeMetadata(input.metadata);
-  const sourceSectionId = pickSourceSectionId(input.sourceSectionId, defaultSectionIds);
+  const metadata = normalizeMetadata2(input.metadata);
+  const sourceSectionId = pickSourceSectionId2(input.sourceSectionId, defaultSectionIds);
   return {
-    approvalId: buildStableId("wallet_approval", {
+    approvalId: buildStableId2("wallet_approval", {
       amount: amount ?? "",
       approvalKind,
       approvedAt: input.approvedAt ?? "",
@@ -8146,9 +9857,9 @@ function normalizeEvmWalletSnapshot(input) {
   if (input.request.networkId !== input.snapshot.networkId) {
     throw new Error("Wallet request and snapshot networkId values must match.");
   }
-  const spenderSectionIds = findSectionIds(input, (value) => value.includes("spender"));
-  const contractSectionIds = findSectionIds(input, (value) => value.includes("contract"));
-  const approvalSectionIds = findSectionIds(input, (value) => value.includes("approval"));
+  const spenderSectionIds = findSectionIds2(input, (value) => value.includes("spender"));
+  const contractSectionIds = findSectionIds2(input, (value) => value.includes("contract"));
+  const approvalSectionIds = findSectionIds2(input, (value) => value.includes("approval"));
   const spenders = (input.hydratedSnapshot.spenders ?? []).map((spender) => normalizeSpender(spender, spenderSectionIds)).sort((left, right) => left.spenderAddress.localeCompare(right.spenderAddress));
   const contractExposures = (input.hydratedSnapshot.contractExposures ?? []).map((exposure) => normalizeContractExposure(exposure, contractSectionIds)).sort((left, right) => left.resourceId.localeCompare(right.resourceId));
   const spenderMap = new Map(spenders.map((spender) => [spender.spenderAddress, spender]));
@@ -8180,7 +9891,7 @@ function normalizeEvmWalletSnapshot(input) {
 }
 
 // src/wallet/evm/rules.ts
-function compareRiskLevel2(left, right) {
+function compareRiskLevel3(left, right) {
   const order = {
     low: 0,
     medium: 1,
@@ -8189,13 +9900,13 @@ function compareRiskLevel2(left, right) {
   };
   return order[left] - order[right];
 }
-function maxRiskLevel2(levels, fallback) {
+function maxRiskLevel3(levels, fallback) {
   return levels.reduce(
-    (current, candidate) => compareRiskLevel2(candidate, current) > 0 ? candidate : current,
+    (current, candidate) => compareRiskLevel3(candidate, current) > 0 ? candidate : current,
     fallback
   );
 }
-function uniqueSorted2(values) {
+function uniqueSorted3(values) {
   return [...new Set(values)].sort();
 }
 function isSevereFlag(flags) {
@@ -8203,11 +9914,11 @@ function isSevereFlag(flags) {
     (flag) => ["drainer", "malicious", "phishing", "exploit", "sanctioned"].includes(flag)
   );
 }
-function buildEvidenceRefs(snapshot, sourceSectionIds, fallbackLabel) {
-  const sectionIds = uniqueSorted2(sourceSectionIds.filter(Boolean));
+function buildEvidenceRefs2(snapshot, sourceSectionIds, fallbackLabel) {
+  const sectionIds = uniqueSorted3(sourceSectionIds.filter(Boolean));
   if (sectionIds.length > 0) {
     return sectionIds.map((sectionId) => ({
-      evidenceId: buildStableId("wallet_evidence", {
+      evidenceId: buildStableId2("wallet_evidence", {
         sectionId,
         fallbackLabel
       }),
@@ -8218,7 +9929,7 @@ function buildEvidenceRefs(snapshot, sourceSectionIds, fallbackLabel) {
   }
   return [
     {
-      evidenceId: buildStableId("wallet_evidence", {
+      evidenceId: buildStableId2("wallet_evidence", {
         fallbackLabel
       }),
       sourceType: "derived",
@@ -8228,14 +9939,14 @@ function buildEvidenceRefs(snapshot, sourceSectionIds, fallbackLabel) {
   ];
 }
 function approvalEvidence(snapshot, approvals, fallbackLabel) {
-  return buildEvidenceRefs(
+  return buildEvidenceRefs2(
     snapshot,
     approvals.map((approval) => approval.sourceSectionId ?? ""),
     fallbackLabel
   );
 }
 function contractEvidence(snapshot, exposures, fallbackLabel) {
-  return buildEvidenceRefs(
+  return buildEvidenceRefs2(
     snapshot,
     exposures.map((exposure) => exposure.sourceSectionId ?? ""),
     fallbackLabel
@@ -8262,12 +9973,12 @@ function buildEvmWalletFindings(snapshot, signals) {
       riskLevel: severe ? "critical" : "high",
       title: "Flagged spender exposure",
       summary: `${flaggedApprovals.length} approval${flaggedApprovals.length === 1 ? "" : "s"} target flagged spenders and should be reviewed first.`,
-      resourceIds: uniqueSorted2(flaggedApprovals.map((approval) => approval.approvalId)),
+      resourceIds: uniqueSorted3(flaggedApprovals.map((approval) => approval.approvalId)),
       evidence: approvalEvidence(snapshot, flaggedApprovals, "Flagged spender exposure"),
       metadata: {
         approvalCount: String(flaggedApprovals.length),
         code: EVM_WALLET_FINDING_CODES.FLAGGED_SPENDER,
-        highestSpenderRisk: maxRiskLevel2(
+        highestSpenderRisk: maxRiskLevel3(
           flaggedApprovals.map((approval) => approval.spenderRiskLevel).filter((level) => level !== null),
           severe ? "critical" : "high"
         )
@@ -8284,7 +9995,7 @@ function buildEvmWalletFindings(snapshot, signals) {
       riskLevel: severe ? "critical" : "high",
       title: "Risky contract exposure",
       summary: `${riskyExposures.length} risky contract exposure${riskyExposures.length === 1 ? "" : "s"} were supplied in the hydrated snapshot.`,
-      resourceIds: uniqueSorted2(riskyExposures.map((exposure) => exposure.resourceId)),
+      resourceIds: uniqueSorted3(riskyExposures.map((exposure) => exposure.resourceId)),
       evidence: contractEvidence(snapshot, riskyExposures, "Risky contract exposure"),
       metadata: {
         code: EVM_WALLET_FINDING_CODES.RISKY_CONTRACT,
@@ -8305,7 +10016,7 @@ function buildEvmWalletFindings(snapshot, signals) {
       riskLevel: hasCriticalExposure ? "critical" : unknownCount > 0 ? "high" : "medium",
       title: "Unlimited approvals remain active",
       summary: `${unlimitedApprovals.length} unlimited approval${unlimitedApprovals.length === 1 ? "" : "s"} remain active; ${unknownCount} target unknown spenders.`,
-      resourceIds: uniqueSorted2(unlimitedApprovals.map((approval) => approval.approvalId)),
+      resourceIds: uniqueSorted3(unlimitedApprovals.map((approval) => approval.approvalId)),
       evidence: approvalEvidence(snapshot, unlimitedApprovals, "Unlimited approval exposure"),
       metadata: {
         code: EVM_WALLET_FINDING_CODES.UNLIMITED_APPROVAL,
@@ -8324,7 +10035,7 @@ function buildEvmWalletFindings(snapshot, signals) {
       riskLevel: staleApprovals.length >= 5 ? "high" : "medium",
       title: "Stale approvals still exist",
       summary: `${staleApprovals.length} approval${staleApprovals.length === 1 ? "" : "s"} are at least ${EVM_APPROVAL_STALE_DAYS} days old.`,
-      resourceIds: uniqueSorted2(staleApprovals.map((approval) => approval.approvalId)),
+      resourceIds: uniqueSorted3(staleApprovals.map((approval) => approval.approvalId)),
       evidence: approvalEvidence(snapshot, staleApprovals, "Stale approval exposure"),
       metadata: {
         code: EVM_WALLET_FINDING_CODES.STALE_APPROVAL,
@@ -8339,7 +10050,7 @@ function buildEvmWalletFindings(snapshot, signals) {
       riskLevel: signals.approvalCount >= EVM_SEVERE_APPROVAL_THRESHOLD ? "high" : "medium",
       title: "Approval count exceeds review threshold",
       summary: `Wallet currently carries ${signals.approvalCount} active approvals, above the review threshold of ${EVM_EXCESSIVE_APPROVAL_THRESHOLD}.`,
-      resourceIds: uniqueSorted2(approvals.map((approval) => approval.approvalId)),
+      resourceIds: uniqueSorted3(approvals.map((approval) => approval.approvalId)),
       evidence: approvalEvidence(snapshot, approvals, "Excessive approval exposure"),
       metadata: {
         approvalCount: String(signals.approvalCount),
@@ -8391,6 +10102,7 @@ function buildEvmWalletSignals(snapshot) {
 
 // src/wallet/evm/evaluate.ts
 function evaluateEvmWalletScan(input) {
+  assertWalletScanRequestCapabilityTruth(input.request);
   const normalizedSnapshot = normalizeEvmWalletSnapshot(input);
   const signals = buildEvmWalletSignals(normalizedSnapshot);
   const findingDrafts = buildEvmWalletFindings(normalizedSnapshot, signals);
@@ -8431,12 +10143,12 @@ var SOLANA_WALLET_SCORE_COMPONENT_MAX = Object.freeze({
 });
 
 // src/wallet/solana/ids.ts
-function buildStableId2(prefix, payload) {
+function buildStableId3(prefix, payload) {
   return `${prefix}_${sha256Hex(serializeCanonicalJson(payload)).slice(0, 24)}`;
 }
 
 // src/wallet/solana/utils.ts
-var RISK_LEVEL_ORDER2 = {
+var RISK_LEVEL_ORDER3 = {
   low: 0,
   medium: 1,
   high: 2,
@@ -8449,10 +10161,10 @@ var SEVERE_FLAGS = /* @__PURE__ */ new Set([
   "malicious",
   "phishing"
 ]);
-function uniqueSorted3(values) {
+function uniqueSorted4(values) {
   return [...new Set(values)].sort();
 }
-function normalizeMetadata2(metadata) {
+function normalizeMetadata3(metadata) {
   if (!metadata) {
     return {};
   }
@@ -8463,16 +10175,16 @@ function normalizeMetadata2(metadata) {
   return normalized;
 }
 function normalizeStringList(values) {
-  return uniqueSorted3(
+  return uniqueSorted4(
     (values ?? []).map((value) => value.trim().toLowerCase()).filter(Boolean)
   );
 }
-function compareRiskLevel3(left, right) {
-  return RISK_LEVEL_ORDER2[left] - RISK_LEVEL_ORDER2[right];
+function compareRiskLevel4(left, right) {
+  return RISK_LEVEL_ORDER3[left] - RISK_LEVEL_ORDER3[right];
 }
-function maxRiskLevel3(levels, fallback) {
+function maxRiskLevel4(levels, fallback) {
   return levels.reduce(
-    (current, candidate) => compareRiskLevel3(candidate, current) > 0 ? candidate : current,
+    (current, candidate) => compareRiskLevel4(candidate, current) > 0 ? candidate : current,
     fallback
   );
 }
@@ -8494,7 +10206,7 @@ function computeAgeDays2(subjectTimestamp, capturedAt) {
 // src/wallet/solana/cleanup.ts
 var PHASE_4D_SUPPORT_DETAIL = "Phase 4D only provides deterministic Solana review guidance. Manual wallet or app action is required because this layer does not build transactions or disconnect apps automatically.";
 function comparePriority(left, right) {
-  return compareRiskLevel3(left, right);
+  return compareRiskLevel4(left, right);
 }
 function requiresSignatureForRecommendation(recommendationType) {
   switch (recommendationType) {
@@ -8506,7 +10218,7 @@ function requiresSignatureForRecommendation(recommendationType) {
       return true;
   }
 }
-function buildActionBase(input) {
+function buildActionBase2(input) {
   return {
     actionId: input.actionId,
     walletChain: "solana",
@@ -8520,7 +10232,7 @@ function buildActionBase(input) {
     description: input.description,
     priority: input.priority,
     target: {
-      targetId: buildStableId2("wallet_target", {
+      targetId: buildStableId3("wallet_target", {
         actionId: input.actionId,
         label: input.label
       }),
@@ -8535,7 +10247,7 @@ function buildActionBase(input) {
   };
 }
 function collectRiskFactorIds(findings) {
-  return uniqueSorted3(findings.flatMap((finding) => finding.riskFactorIds));
+  return uniqueSorted4(findings.flatMap((finding) => finding.riskFactorIds));
 }
 function matchFindings(findings, resourceId, codes) {
   return findings.filter(
@@ -8581,8 +10293,8 @@ function buildSolanaCleanupPlan(walletAddress, networkId, evaluatedAt, snapshot,
     if (linkedFindings.length === 0) {
       continue;
     }
-    const action = buildActionBase({
-      actionId: buildStableId2("wallet_action", {
+    const action = buildActionBase2({
+      actionId: buildStableId3("wallet_action", {
         recommendationType: "remove_delegate",
         resourceId: tokenAccount.resourceId
       }),
@@ -8610,8 +10322,8 @@ function buildSolanaCleanupPlan(walletAddress, networkId, evaluatedAt, snapshot,
     if (linkedFindings.length === 0) {
       continue;
     }
-    const action = buildActionBase({
-      actionId: buildStableId2("wallet_action", {
+    const action = buildActionBase2({
+      actionId: buildStableId3("wallet_action", {
         authorityType: assignment.authorityType,
         recommendationType: "remove_authority",
         resourceId: assignment.resourceId
@@ -8646,8 +10358,8 @@ function buildSolanaCleanupPlan(walletAddress, networkId, evaluatedAt, snapshot,
     const kind = connection.isBroadPermission ? "revoke_authorization" : "manual_review";
     const label = connection.appName ?? connection.origin ?? connection.connectionId ?? connection.resourceId;
     const description = connection.isBroadPermission ? `Review permissions for ${label} and disconnect the connection if the app no longer needs broad wallet access. Manual wallet or app action is required.` : `Review the connection for ${label} and disconnect it if it remains risky or no longer needed. Manual wallet or app action is required.`;
-    const action = buildActionBase({
-      actionId: buildStableId2("wallet_action", {
+    const action = buildActionBase2({
+      actionId: buildStableId3("wallet_action", {
         recommendationType,
         resourceId: connection.resourceId
       }),
@@ -8674,8 +10386,8 @@ function buildSolanaCleanupPlan(walletAddress, networkId, evaluatedAt, snapshot,
     if (linkedFindings.length === 0) {
       continue;
     }
-    const action = buildActionBase({
-      actionId: buildStableId2("wallet_action", {
+    const action = buildActionBase2({
+      actionId: buildStableId3("wallet_action", {
         recommendationType: "review_program_access",
         resourceId: programExposure.resourceId
       }),
@@ -8712,7 +10424,7 @@ function buildSolanaCleanupPlan(walletAddress, networkId, evaluatedAt, snapshot,
   }
   return {
     cleanupPlan: {
-      planId: buildStableId2("wallet_plan", {
+      planId: buildStableId3("wallet_plan", {
         actionIds: orderedActions.map((action) => action.actionId),
         networkId,
         walletAddress
@@ -8736,7 +10448,7 @@ function buildSolanaCleanupPlan(walletAddress, networkId, evaluatedAt, snapshot,
 }
 
 // src/wallet/solana/score.ts
-function scoreBand2(totalScore) {
+function scoreBand3(totalScore) {
   if (totalScore >= 85) {
     return "low";
   }
@@ -8748,12 +10460,12 @@ function scoreBand2(totalScore) {
   }
   return "critical";
 }
-function findItemsByCode2(items, code) {
+function findItemsByCode3(items, code) {
   return items.filter((item) => item.metadata.code === code);
 }
-function buildComponent2(label, maxScore, score, rationale, findings, riskFactors) {
+function buildComponent3(label, maxScore, score, rationale, findings, riskFactors) {
   return {
-    componentId: buildStableId2("wallet_component", {
+    componentId: buildStableId3("wallet_component", {
       label,
       maxScore,
       score
@@ -8761,7 +10473,7 @@ function buildComponent2(label, maxScore, score, rationale, findings, riskFactor
     label,
     score,
     maxScore,
-    riskLevel: maxRiskLevel3(
+    riskLevel: maxRiskLevel4(
       [
         ...findings.map((finding) => finding.riskLevel),
         ...riskFactors.map((riskFactor) => riskFactor.riskLevel)
@@ -8774,27 +10486,27 @@ function buildComponent2(label, maxScore, score, rationale, findings, riskFactor
   };
 }
 function buildSolanaWalletScoreBreakdown(signals, findings, riskFactors) {
-  const delegateFindings = findItemsByCode2(
+  const delegateFindings = findItemsByCode3(
     findings,
     SOLANA_WALLET_FINDING_CODES.DELEGATE_AUTHORITY
   );
-  const authorityFindings = findItemsByCode2(
+  const authorityFindings = findItemsByCode3(
     findings,
     SOLANA_WALLET_FINDING_CODES.AUTHORITY_ASSIGNMENT
   );
-  const broadPermissionFindings = findItemsByCode2(
+  const broadPermissionFindings = findItemsByCode3(
     findings,
     SOLANA_WALLET_FINDING_CODES.BROAD_PERMISSION
   );
-  const riskyConnectionFindings = findItemsByCode2(
+  const riskyConnectionFindings = findItemsByCode3(
     findings,
     SOLANA_WALLET_FINDING_CODES.RISKY_CONNECTION
   );
-  const staleConnectionFindings = findItemsByCode2(
+  const staleConnectionFindings = findItemsByCode3(
     findings,
     SOLANA_WALLET_FINDING_CODES.STALE_RISKY_CONNECTION
   );
-  const suspiciousProgramFindings = findItemsByCode2(
+  const suspiciousProgramFindings = findItemsByCode3(
     findings,
     SOLANA_WALLET_FINDING_CODES.SUSPICIOUS_PROGRAM
   );
@@ -8819,7 +10531,7 @@ function buildSolanaWalletScoreBreakdown(signals, findings, riskFactors) {
     SOLANA_WALLET_SCORE_COMPONENT_MAX.programActivity
   );
   const components = [
-    buildComponent2(
+    buildComponent3(
       "Delegate exposure",
       SOLANA_WALLET_SCORE_COMPONENT_MAX.delegateExposure,
       SOLANA_WALLET_SCORE_COMPONENT_MAX.delegateExposure - delegatePenalty,
@@ -8829,7 +10541,7 @@ function buildSolanaWalletScoreBreakdown(signals, findings, riskFactors) {
         (riskFactor) => riskFactor.metadata.code === SOLANA_WALLET_FINDING_CODES.DELEGATE_AUTHORITY
       )
     ),
-    buildComponent2(
+    buildComponent3(
       "Authority control",
       SOLANA_WALLET_SCORE_COMPONENT_MAX.authorityControl,
       SOLANA_WALLET_SCORE_COMPONENT_MAX.authorityControl - authorityPenalty,
@@ -8839,7 +10551,7 @@ function buildSolanaWalletScoreBreakdown(signals, findings, riskFactors) {
         (riskFactor) => riskFactor.metadata.code === SOLANA_WALLET_FINDING_CODES.AUTHORITY_ASSIGNMENT
       )
     ),
-    buildComponent2(
+    buildComponent3(
       "Permission breadth",
       SOLANA_WALLET_SCORE_COMPONENT_MAX.permissionBreadth,
       SOLANA_WALLET_SCORE_COMPONENT_MAX.permissionBreadth - permissionPenalty,
@@ -8849,7 +10561,7 @@ function buildSolanaWalletScoreBreakdown(signals, findings, riskFactors) {
         (riskFactor) => riskFactor.metadata.code === SOLANA_WALLET_FINDING_CODES.BROAD_PERMISSION
       )
     ),
-    buildComponent2(
+    buildComponent3(
       "Connection risk",
       SOLANA_WALLET_SCORE_COMPONENT_MAX.connectionRisk,
       SOLANA_WALLET_SCORE_COMPONENT_MAX.connectionRisk - connectionPenalty,
@@ -8859,7 +10571,7 @@ function buildSolanaWalletScoreBreakdown(signals, findings, riskFactors) {
         (riskFactor) => riskFactor.metadata.code === SOLANA_WALLET_FINDING_CODES.RISKY_CONNECTION || riskFactor.metadata.code === SOLANA_WALLET_FINDING_CODES.STALE_RISKY_CONNECTION
       )
     ),
-    buildComponent2(
+    buildComponent3(
       "Program activity",
       SOLANA_WALLET_SCORE_COMPONENT_MAX.programActivity,
       SOLANA_WALLET_SCORE_COMPONENT_MAX.programActivity - programPenalty,
@@ -8871,11 +10583,11 @@ function buildSolanaWalletScoreBreakdown(signals, findings, riskFactors) {
     )
   ];
   const totalScore = components.reduce((sum, component) => sum + component.score, 0);
-  const findingRiskLevel = maxRiskLevel3(
+  const findingRiskLevel = maxRiskLevel4(
     findings.map((finding) => finding.riskLevel),
     "low"
   );
-  const riskLevel = maxRiskLevel3([scoreBand2(totalScore), findingRiskLevel], "low");
+  const riskLevel = maxRiskLevel4([scoreBand3(totalScore), findingRiskLevel], "low");
   return {
     totalScore,
     riskLevel,
@@ -8884,22 +10596,11 @@ function buildSolanaWalletScoreBreakdown(signals, findings, riskFactors) {
   };
 }
 
-// src/wallet/scan-mode.ts
-function enforceWalletScanMode(walletChain, requestedScanMode) {
-  switch (walletChain) {
-    case "solana":
-    case "bitcoin":
-      return "basic";
-    case "evm":
-      return requestedScanMode;
-  }
-}
-
 // src/wallet/solana/assemble.ts
-function buildCapabilityBoundaries2() {
+function buildCapabilityBoundaries3() {
   return [
     {
-      boundaryId: buildStableId2("wallet_boundary", {
+      boundaryId: buildStableId3("wallet_boundary", {
         area: "snapshot",
         capabilityKey: "hydrated_solana_snapshot"
       }),
@@ -8909,7 +10610,7 @@ function buildCapabilityBoundaries2() {
       detail: "Phase 4D evaluates only caller-supplied hydrated Solana snapshot data and performs no live lookups during normalization, scoring, or recommendation planning."
     },
     {
-      boundaryId: buildStableId2("wallet_boundary", {
+      boundaryId: buildStableId3("wallet_boundary", {
         area: "finding",
         capabilityKey: "deterministic_solana_findings"
       }),
@@ -8919,7 +10620,7 @@ function buildCapabilityBoundaries2() {
       detail: "Phase 4D emits deterministic Solana findings, factors, and score breakdowns from the supplied snapshot only."
     },
     {
-      boundaryId: buildStableId2("wallet_boundary", {
+      boundaryId: buildStableId3("wallet_boundary", {
         area: "cleanup_plan",
         capabilityKey: "deterministic_solana_cleanup_guidance"
       }),
@@ -8929,7 +10630,7 @@ function buildCapabilityBoundaries2() {
       detail: "Phase 4D builds deterministic recommendation-only Solana cleanup guidance. It does not claim automatic revoke or disconnect support."
     },
     {
-      boundaryId: buildStableId2("wallet_boundary", {
+      boundaryId: buildStableId3("wallet_boundary", {
         area: "cleanup_execution",
         capabilityKey: "solana_cleanup_execution"
       }),
@@ -8940,16 +10641,16 @@ function buildCapabilityBoundaries2() {
     }
   ];
 }
-function buildFindingId2(walletAddress, code, resourceIds) {
-  return buildStableId2("wallet_finding", {
+function buildFindingId3(walletAddress, code, resourceIds) {
+  return buildStableId3("wallet_finding", {
     code,
     resourceIds,
     walletAddress
   });
 }
-function buildRiskFactor(finding) {
+function buildRiskFactor2(finding) {
   return {
-    factorId: buildStableId2("wallet_factor", {
+    factorId: buildStableId3("wallet_factor", {
       code: finding.metadata.code ?? "",
       findingId: finding.findingId,
       resourceIds: finding.resourceIds
@@ -8978,7 +10679,7 @@ function assembleSolanaWalletEvaluation(input) {
     walletAddress: input.normalizedSnapshot.walletAddress
   };
   const findingsWithoutActions = input.findingDrafts.map((draft) => ({
-    findingId: buildFindingId2(
+    findingId: buildFindingId3(
       input.normalizedSnapshot.walletAddress,
       draft.code,
       draft.resourceIds
@@ -8996,7 +10697,7 @@ function assembleSolanaWalletEvaluation(input) {
     evidence: draft.evidence,
     metadata: draft.metadata
   }));
-  const riskFactors = findingsWithoutActions.map(buildRiskFactor);
+  const riskFactors = findingsWithoutActions.map(buildRiskFactor2);
   const findingsWithFactors = findingsWithoutActions.map((finding, index) => ({
     ...finding,
     riskFactorIds: [riskFactors[index]?.factorId ?? ""].filter(Boolean)
@@ -9018,7 +10719,7 @@ function assembleSolanaWalletEvaluation(input) {
     ...finding,
     cleanupActionIds: actionIdsByFindingId[finding.findingId] ?? []
   }));
-  const capabilityBoundaries = buildCapabilityBoundaries2();
+  const capabilityBoundaries = buildCapabilityBoundaries3();
   const result = {
     requestId: normalizedRequest.requestId,
     snapshotId: normalizedSnapshotContract.snapshotId,
@@ -9030,6 +10731,13 @@ function assembleSolanaWalletEvaluation(input) {
     riskFactors,
     scoreBreakdown,
     cleanupPlan,
+    ...buildWalletReportTruthFields({
+      capabilityTier: normalizedRequest.scanMode,
+      findings,
+      cleanupPlan,
+      cleanupExecution: null,
+      cleanupExecutionSupported: false
+    }),
     capabilityBoundaries
   };
   const summary = {
@@ -9039,6 +10747,7 @@ function assembleSolanaWalletEvaluation(input) {
     scanMode: normalizedRequest.scanMode,
     generatedAt: input.evaluatedAt,
     snapshotCapturedAt: normalizedSnapshotContract.capturedAt,
+    capabilityTier: normalizedRequest.scanMode,
     score: scoreBreakdown.totalScore,
     riskLevel: scoreBreakdown.riskLevel,
     findingCount: findings.length,
@@ -9046,7 +10755,11 @@ function assembleSolanaWalletEvaluation(input) {
     cleanupActionCount: cleanupPlan?.actions.length ?? 0,
     actionableFindingCount: findings.filter(
       (finding) => finding.cleanupActionIds.length > 0
-    ).length
+    ).length,
+    executionPerformed: result.executionPerformed,
+    actionable: result.actionable,
+    classification: result.classification,
+    statusLabel: result.statusLabel
   };
   const report = {
     reportId: buildWalletReportId({
@@ -9078,7 +10791,7 @@ function assembleSolanaWalletEvaluation(input) {
 }
 
 // src/wallet/solana/normalize.ts
-function parseIntegerString2(value) {
+function parseIntegerString3(value) {
   if (value === null || value === void 0) {
     return null;
   }
@@ -9094,13 +10807,13 @@ function parseIntegerString2(value) {
 function compareNullable2(left, right) {
   return (left ?? "").localeCompare(right ?? "");
 }
-function pickSourceSectionId2(explicitSectionId, candidates) {
+function pickSourceSectionId3(explicitSectionId, candidates) {
   if (explicitSectionId) {
     return explicitSectionId;
   }
   return candidates[0] ?? null;
 }
-function findSectionIds2(input, keywords) {
+function findSectionIds3(input, keywords) {
   return input.snapshot.sections.filter((section) => {
     const haystacks = [
       section.sectionId,
@@ -9132,12 +10845,12 @@ function normalizeTokenAccount(input, walletAddress, defaultSectionIds) {
   const delegateAddress = input.delegateAddress === void 0 || input.delegateAddress === null ? null : normalizeSolAddress(input.delegateAddress);
   const delegateFlags = normalizeStringList(input.delegateFlags);
   const delegateRiskLevel = delegateAddress === null ? null : input.delegateRiskLevel ?? (delegateFlags.length > 0 ? "high" : null);
-  const sourceSectionId = pickSourceSectionId2(
+  const sourceSectionId = pickSourceSectionId3(
     input.sourceSectionId,
     defaultSectionIds
   );
   return {
-    resourceId: buildStableId2("wallet_sol_token_account", {
+    resourceId: buildStableId3("wallet_sol_token_account", {
       delegateAddress,
       mintAddress,
       tokenAccountAddress,
@@ -9146,9 +10859,9 @@ function normalizeTokenAccount(input, walletAddress, defaultSectionIds) {
     tokenAccountAddress,
     mintAddress,
     ownerAddress,
-    balanceLamports: parseIntegerString2(input.balanceLamports),
+    balanceLamports: parseIntegerString3(input.balanceLamports),
     delegateAddress,
-    delegateAmount: parseIntegerString2(input.delegateAmount),
+    delegateAmount: parseIntegerString3(input.delegateAmount),
     delegateRiskLevel,
     delegateFlags,
     delegateLabel: input.delegateLabel ?? null,
@@ -9157,15 +10870,15 @@ function normalizeTokenAccount(input, walletAddress, defaultSectionIds) {
     closeAuthorityAddress: input.closeAuthorityAddress === void 0 || input.closeAuthorityAddress === null ? null : normalizeSolAddress(input.closeAuthorityAddress),
     permanentDelegateAddress: input.permanentDelegateAddress === void 0 || input.permanentDelegateAddress === null ? null : normalizeSolAddress(input.permanentDelegateAddress),
     sourceSectionId,
-    metadata: normalizeMetadata2(input.metadata)
+    metadata: normalizeMetadata3(input.metadata)
   };
 }
 function normalizeAuthorityAssignment(input, defaultSectionIds) {
   const flags = normalizeStringList(input.flags);
   const riskLevel = input.riskLevel ?? (flags.length > 0 ? "high" : null);
-  const sourceSectionId = pickSourceSectionId2(input.sourceSectionId, defaultSectionIds);
+  const sourceSectionId = pickSourceSectionId3(input.sourceSectionId, defaultSectionIds);
   return {
-    resourceId: buildStableId2("wallet_sol_authority", {
+    resourceId: buildStableId3("wallet_sol_authority", {
       authorityAddress: normalizeSolAddress(input.authorityAddress),
       authorityType: input.authorityType,
       programAddress: input.programAddress === void 0 || input.programAddress === null ? null : normalizeSolAddress(input.programAddress),
@@ -9180,7 +10893,7 @@ function normalizeAuthorityAssignment(input, defaultSectionIds) {
     label: input.label ?? null,
     isRisky: riskLevel !== null && riskLevel !== "low",
     sourceSectionId,
-    metadata: normalizeMetadata2(input.metadata)
+    metadata: normalizeMetadata3(input.metadata)
   };
 }
 function normalizeConnectionRecord(input, capturedAt, defaultSectionIds) {
@@ -9192,7 +10905,7 @@ function normalizeConnectionRecord(input, capturedAt, defaultSectionIds) {
   const programAddresses = (input.programAddresses ?? []).map((address) => normalizeSolAddress(address)).sort();
   const flags = normalizeStringList(input.flags);
   const riskLevel = input.riskLevel ?? (flags.length > 0 ? "high" : null);
-  const sourceSectionId = pickSourceSectionId2(input.sourceSectionId, defaultSectionIds);
+  const sourceSectionId = pickSourceSectionId3(input.sourceSectionId, defaultSectionIds);
   const connectedAt = input.connectedAt ?? null;
   const lastUsedAt = input.lastUsedAt ?? null;
   const connectedAgeDays = computeAgeDays2(connectedAt, capturedAt);
@@ -9201,7 +10914,7 @@ function normalizeConnectionRecord(input, capturedAt, defaultSectionIds) {
   const isRisky = riskLevel !== null && riskLevel !== "low";
   const isBroadPermission = permissionLevel === "broad";
   return {
-    resourceId: buildStableId2("wallet_sol_connection", {
+    resourceId: buildStableId3("wallet_sol_connection", {
       appName,
       connectedAt,
       connectionId,
@@ -9229,15 +10942,15 @@ function normalizeConnectionRecord(input, capturedAt, defaultSectionIds) {
     isRisky,
     isStaleRisky: isRisky && activityAgeDays !== null && activityAgeDays >= SOLANA_CONNECTION_STALE_DAYS,
     sourceSectionId,
-    metadata: normalizeMetadata2(input.metadata)
+    metadata: normalizeMetadata3(input.metadata)
   };
 }
 function normalizeProgramExposure(input, defaultSectionIds) {
   const flags = normalizeStringList(input.flags);
   const riskLevel = input.riskLevel ?? (flags.length > 0 ? "high" : null);
-  const sourceSectionId = pickSourceSectionId2(input.sourceSectionId, defaultSectionIds);
+  const sourceSectionId = pickSourceSectionId3(input.sourceSectionId, defaultSectionIds);
   return {
-    resourceId: buildStableId2("wallet_sol_program", {
+    resourceId: buildStableId3("wallet_sol_program", {
       programAddress: normalizeSolAddress(input.programAddress),
       sourceSectionId
     }),
@@ -9249,10 +10962,10 @@ function normalizeProgramExposure(input, defaultSectionIds) {
     lastInteractedAt: input.lastInteractedAt ?? null,
     isSuspicious: riskLevel !== null && riskLevel !== "low",
     sourceSectionId,
-    metadata: normalizeMetadata2(input.metadata)
+    metadata: normalizeMetadata3(input.metadata)
   };
 }
-function assertNonEmptyString(value, label) {
+function assertNonEmptyString2(value, label) {
   const trimmed = value.trim();
   if (!trimmed) {
     throw new Error(`${label} must be a non-empty string.`);
@@ -9265,11 +10978,11 @@ function assertSolanaRequestSnapshotParity(input) {
       "Phase 4D Solana evaluation requires solana request and snapshot contracts."
     );
   }
-  const requestId = assertNonEmptyString(
+  const requestId = assertNonEmptyString2(
     input.request.requestId,
     "Solana request.requestId"
   );
-  const snapshotRequestId = assertNonEmptyString(
+  const snapshotRequestId = assertNonEmptyString2(
     input.snapshot.requestId,
     "Solana snapshot.requestId"
   );
@@ -9278,11 +10991,11 @@ function assertSolanaRequestSnapshotParity(input) {
       "Solana wallet evaluation requires request and snapshot requestId values to match."
     );
   }
-  const requestNetworkId = assertNonEmptyString(
+  const requestNetworkId = assertNonEmptyString2(
     input.request.networkId,
     "Solana request.networkId"
   );
-  const snapshotNetworkId = assertNonEmptyString(
+  const snapshotNetworkId = assertNonEmptyString2(
     input.snapshot.networkId,
     "Solana snapshot.networkId"
   );
@@ -9292,7 +11005,7 @@ function assertSolanaRequestSnapshotParity(input) {
     );
   }
   const requestWallet = normalizeSolAddress(
-    assertNonEmptyString(input.request.walletAddress, "Solana request.walletAddress")
+    assertNonEmptyString2(input.request.walletAddress, "Solana request.walletAddress")
   );
   if (!isValidSolAddress(requestWallet)) {
     throw new Error(
@@ -9300,7 +11013,7 @@ function assertSolanaRequestSnapshotParity(input) {
     );
   }
   const snapshotWallet = normalizeSolAddress(
-    assertNonEmptyString(input.snapshot.walletAddress, "Solana snapshot.walletAddress")
+    assertNonEmptyString2(input.snapshot.walletAddress, "Solana snapshot.walletAddress")
   );
   if (!isValidSolAddress(snapshotWallet)) {
     throw new Error(
@@ -9319,10 +11032,10 @@ function assertSolanaRequestSnapshotParity(input) {
 }
 function normalizeSolanaWalletSnapshot(input) {
   const { walletAddress, networkId } = assertSolanaRequestSnapshotParity(input);
-  const tokenSectionIds = findSectionIds2(input, ["token", "account"]);
-  const authoritySectionIds = findSectionIds2(input, ["authorit"]);
-  const connectionSectionIds = findSectionIds2(input, ["connection", "permission", "app"]);
-  const programSectionIds = findSectionIds2(input, ["program", "interaction"]);
+  const tokenSectionIds = findSectionIds3(input, ["token", "account"]);
+  const authoritySectionIds = findSectionIds3(input, ["authorit"]);
+  const connectionSectionIds = findSectionIds3(input, ["connection", "permission", "app"]);
+  const programSectionIds = findSectionIds3(input, ["program", "interaction"]);
   const tokenAccounts = input.hydratedSnapshot.tokenAccounts.map(
     (tokenAccount) => normalizeTokenAccount(tokenAccount, walletAddress, tokenSectionIds)
   ).sort(
@@ -9353,11 +11066,11 @@ function normalizeSolanaWalletSnapshot(input) {
 }
 
 // src/wallet/solana/rules.ts
-function buildEvidenceRefs2(sourceSectionIds, fallbackLabel) {
-  const sectionIds = uniqueSorted3(sourceSectionIds.filter(Boolean));
+function buildEvidenceRefs3(sourceSectionIds, fallbackLabel) {
+  const sectionIds = uniqueSorted4(sourceSectionIds.filter(Boolean));
   if (sectionIds.length > 0) {
     return sectionIds.map((sectionId) => ({
-      evidenceId: buildStableId2("wallet_evidence", {
+      evidenceId: buildStableId3("wallet_evidence", {
         fallbackLabel,
         sectionId
       }),
@@ -9368,7 +11081,7 @@ function buildEvidenceRefs2(sourceSectionIds, fallbackLabel) {
   }
   return [
     {
-      evidenceId: buildStableId2("wallet_evidence", {
+      evidenceId: buildStableId3("wallet_evidence", {
         fallbackLabel
       }),
       sourceType: "derived",
@@ -9378,25 +11091,25 @@ function buildEvidenceRefs2(sourceSectionIds, fallbackLabel) {
   ];
 }
 function tokenAccountEvidence(tokenAccounts, fallbackLabel) {
-  return buildEvidenceRefs2(
+  return buildEvidenceRefs3(
     tokenAccounts.map((tokenAccount) => tokenAccount.sourceSectionId ?? ""),
     fallbackLabel
   );
 }
 function authorityEvidence(assignments, fallbackLabel) {
-  return buildEvidenceRefs2(
+  return buildEvidenceRefs3(
     assignments.map((assignment) => assignment.sourceSectionId ?? ""),
     fallbackLabel
   );
 }
 function connectionEvidence(connections, fallbackLabel) {
-  return buildEvidenceRefs2(
+  return buildEvidenceRefs3(
     connections.map((connection) => connection.sourceSectionId ?? ""),
     fallbackLabel
   );
 }
 function programEvidence(programExposures, fallbackLabel) {
-  return buildEvidenceRefs2(
+  return buildEvidenceRefs3(
     programExposures.map((programExposure) => programExposure.sourceSectionId ?? ""),
     fallbackLabel
   );
@@ -9435,7 +11148,7 @@ function buildSolanaWalletFindings(snapshot, signals) {
       riskLevel: severe ? "critical" : riskyDelegates.length > 0 ? "high" : "medium",
       title: "Delegate authority exposure",
       summary: `${delegatedAccounts.length} token account${delegatedAccounts.length === 1 ? "" : "s"} still grant delegate authority${riskyDelegates.length > 0 ? `, including ${riskyDelegates.length} marked risky` : ""}.`,
-      resourceIds: uniqueSorted3(
+      resourceIds: uniqueSorted4(
         delegatedAccounts.map((tokenAccount) => tokenAccount.resourceId)
       ),
       evidence: tokenAccountEvidence(
@@ -9459,7 +11172,7 @@ function buildSolanaWalletFindings(snapshot, signals) {
       riskLevel: severe ? "critical" : riskyAuthorityAssignments.length > 0 ? "high" : "medium",
       title: "Authority assignment exposure",
       summary: `${authorityAssignments.length} authority assignment${authorityAssignments.length === 1 ? "" : "s"} were supplied for manual review.`,
-      resourceIds: uniqueSorted3(
+      resourceIds: uniqueSorted4(
         authorityAssignments.map((assignment) => assignment.resourceId)
       ),
       evidence: authorityEvidence(
@@ -9483,7 +11196,7 @@ function buildSolanaWalletFindings(snapshot, signals) {
       riskLevel: riskyBroadConnections.length > 0 || broadConnections.length > 1 ? "high" : "medium",
       title: "Broad wallet permission exposure",
       summary: `${broadConnections.length} connected app${broadConnections.length === 1 ? "" : "s"} retain broad Solana wallet permissions and should be reviewed.`,
-      resourceIds: uniqueSorted3(
+      resourceIds: uniqueSorted4(
         broadConnections.map((connection) => connection.resourceId)
       ),
       evidence: connectionEvidence(
@@ -9506,7 +11219,7 @@ function buildSolanaWalletFindings(snapshot, signals) {
       riskLevel: severe ? "critical" : "high",
       title: "Risky connected app exposure",
       summary: `${riskyConnections.length} connected app${riskyConnections.length === 1 ? "" : "s"} were marked risky in the hydrated Solana snapshot.`,
-      resourceIds: uniqueSorted3(
+      resourceIds: uniqueSorted4(
         riskyConnections.map((connection) => connection.resourceId)
       ),
       evidence: connectionEvidence(
@@ -9526,7 +11239,7 @@ function buildSolanaWalletFindings(snapshot, signals) {
       riskLevel: staleRiskyConnections.length >= 3 ? "high" : "medium",
       title: "Stale risky connection remains linked",
       summary: `${staleRiskyConnections.length} risky connection${staleRiskyConnections.length === 1 ? "" : "s"} have been inactive for at least ${SOLANA_CONNECTION_STALE_DAYS} days.`,
-      resourceIds: uniqueSorted3(
+      resourceIds: uniqueSorted4(
         staleRiskyConnections.map((connection) => connection.resourceId)
       ),
       evidence: connectionEvidence(
@@ -9549,7 +11262,7 @@ function buildSolanaWalletFindings(snapshot, signals) {
       riskLevel: severe ? "critical" : "high",
       title: "Suspicious program interaction",
       summary: `${suspiciousPrograms.length} risky program interaction summary${suspiciousPrograms.length === 1 ? "" : "s"} were supplied for review.`,
-      resourceIds: uniqueSorted3(
+      resourceIds: uniqueSorted4(
         suspiciousPrograms.map((programExposure) => programExposure.resourceId)
       ),
       evidence: programEvidence(
@@ -9618,6 +11331,7 @@ function buildSolanaWalletSignals(snapshot) {
 
 // src/wallet/solana/evaluate.ts
 function evaluateSolanaWalletScan(input) {
+  assertWalletScanRequestCapabilityTruth(input.request);
   const normalizedSnapshot = normalizeSolanaWalletSnapshot(input);
   const signals = buildSolanaWalletSignals(normalizedSnapshot);
   const findingDrafts = buildSolanaWalletFindings(normalizedSnapshot, signals);
@@ -9632,1111 +11346,60 @@ function evaluateSolanaWalletScan(input) {
   });
 }
 
-// src/wallet/bitcoin/constants.ts
-var BITCOIN_WALLET_FINDING_CODES = Object.freeze({
-  ADDRESS_REUSE: "BITCOIN_ADDRESS_REUSE_EXPOSURE",
-  PRIVACY_EXPOSURE: "BITCOIN_PRIVACY_EXPOSURE",
-  FRAGMENTED_UTXO_STRUCTURE: "BITCOIN_FRAGMENTED_UTXO_STRUCTURE",
-  CONCENTRATED_UTXO_STRUCTURE: "BITCOIN_CONCENTRATED_UTXO_STRUCTURE",
-  POOR_WALLET_HYGIENE: "BITCOIN_POOR_WALLET_HYGIENE",
-  REPEATED_EXPOSED_RECEIVE: "BITCOIN_REPEATED_EXPOSED_RECEIVE_BEHAVIOR"
-});
-var BITCOIN_REPEATED_EXPOSED_RECEIVE_THRESHOLD = 3;
-var BITCOIN_SMALL_UTXO_SATS = 100000n;
-var BITCOIN_FRAGMENTATION_MEDIUM_UTXO_COUNT = 8;
-var BITCOIN_FRAGMENTATION_HIGH_UTXO_COUNT = 16;
-var BITCOIN_FRAGMENTATION_MEDIUM_SMALL_UTXO_COUNT = 5;
-var BITCOIN_FRAGMENTATION_HIGH_SMALL_UTXO_COUNT = 10;
-var BITCOIN_CONCENTRATION_MEDIUM_BPS = 7e3;
-var BITCOIN_CONCENTRATION_HIGH_BPS = 8500;
-var BITCOIN_WALLET_SCORE_COMPONENT_MAX = Object.freeze({
-  addressReuse: 20,
-  privacyExposure: 15,
-  utxoFragmentation: 20,
-  concentration: 15,
-  operationalHygiene: 15,
-  exposedReceiveBehavior: 15
-});
-
-// src/wallet/bitcoin/ids.ts
-function buildStableId3(prefix, payload) {
-  return `${prefix}_${sha256Hex(serializeCanonicalJson(payload)).slice(0, 24)}`;
-}
-
-// src/wallet/bitcoin/utils.ts
-var RISK_LEVEL_ORDER3 = {
-  low: 0,
-  medium: 1,
-  high: 2,
-  critical: 3
-};
-function uniqueSorted4(values) {
-  return [...new Set(values)].sort();
-}
-function normalizeMetadata3(metadata) {
-  if (!metadata) {
-    return {};
-  }
-  const normalized = {};
-  for (const key of Object.keys(metadata).sort()) {
-    normalized[key] = metadata[key];
-  }
-  return normalized;
-}
-function normalizeBitcoinAddress(address) {
-  const trimmed = address.trim();
-  return /^(bc1|tb1|bcrt1)/i.test(trimmed) ? trimmed.toLowerCase() : trimmed;
-}
-function isValidBitcoinAddress(address) {
-  const trimmed = address.trim();
-  return /^(bc1|tb1|bcrt1)[a-z0-9]{11,87}$/i.test(trimmed) || /^[13mn2][1-9A-HJ-NP-Za-km-z]{25,62}$/.test(trimmed);
-}
-function compareRiskLevel4(left, right) {
-  return RISK_LEVEL_ORDER3[left] - RISK_LEVEL_ORDER3[right];
-}
-function maxRiskLevel4(levels, fallback) {
-  return levels.reduce(
-    (current, candidate) => compareRiskLevel4(candidate, current) > 0 ? candidate : current,
-    fallback
-  );
-}
-
-// src/wallet/bitcoin/cleanup.ts
-var PHASE_4E_SUPPORT_DETAIL = "Phase 4E only provides deterministic Bitcoin remediation guidance. Manual wallet action is required because this layer does not construct transactions, request signatures, or broadcast Bitcoin activity.";
-function buildActionBase2(input) {
-  return {
-    actionId: input.actionId,
-    walletChain: "bitcoin",
-    kind: input.kind,
-    executionMode: "manual",
-    executionType: "manual_review",
-    status: "planned",
-    requiresSignature: false,
-    supportStatus: "partial",
-    title: input.title,
-    description: input.description,
-    priority: input.priority,
-    target: {
-      targetId: buildStableId3("wallet_target", {
-        actionId: input.actionId,
-        label: input.label
-      }),
-      targetKind: input.targetKind,
-      label: input.label,
-      metadata: {
-        recommendationType: input.recommendationType
-      }
-    },
-    findingIds: [input.finding.findingId],
-    riskFactorIds: input.riskFactorIds,
-    supportDetail: PHASE_4E_SUPPORT_DETAIL,
-    metadata: {
-      code: input.finding.metadata.code ?? "",
-      recommendationType: input.recommendationType
-    }
-  };
-}
-function buildActionForFinding(finding, riskFactors) {
-  const recommendationType = (() => {
-    switch (finding.metadata.code) {
-      case BITCOIN_WALLET_FINDING_CODES.ADDRESS_REUSE:
-      case BITCOIN_WALLET_FINDING_CODES.PRIVACY_EXPOSURE:
-      case BITCOIN_WALLET_FINDING_CODES.REPEATED_EXPOSED_RECEIVE:
-        return "rotate_address";
-      case BITCOIN_WALLET_FINDING_CODES.FRAGMENTED_UTXO_STRUCTURE:
-        return "consolidate_utxos";
-      case BITCOIN_WALLET_FINDING_CODES.CONCENTRATED_UTXO_STRUCTURE:
-        return "move_funds";
-      case BITCOIN_WALLET_FINDING_CODES.POOR_WALLET_HYGIENE:
-        return "harden_wallet";
-      default:
-        return null;
-    }
-  })();
-  if (recommendationType === null) {
-    return null;
-  }
-  const riskFactorIds = riskFactors.filter((riskFactor) => riskFactor.findingIds.includes(finding.findingId)).map((riskFactor) => riskFactor.factorId).sort();
-  switch (recommendationType) {
-    case "rotate_address":
-      return buildActionBase2({
-        actionId: buildStableId3("wallet_action", {
-          findingId: finding.findingId,
-          recommendationType
-        }),
-        finding,
-        riskFactorIds,
-        kind: "rotate_wallet",
-        priority: finding.riskLevel,
-        recommendationType,
-        targetKind: "wallet",
-        label: "bitcoin_receive_addresses",
-        title: "Rotate exposed receive addresses",
-        description: "Generate fresh Bitcoin receive addresses for future deposits and manually move exposed funds if continued public visibility or reuse creates avoidable privacy risk."
-      });
-    case "consolidate_utxos":
-      return buildActionBase2({
-        actionId: buildStableId3("wallet_action", {
-          findingId: finding.findingId,
-          recommendationType
-        }),
-        finding,
-        riskFactorIds,
-        kind: "move_assets",
-        priority: finding.riskLevel,
-        recommendationType,
-        targetKind: "asset",
-        label: "bitcoin_utxo_set",
-        title: "Consolidate fragmented UTXOs",
-        description: "Manually consolidate excess small Bitcoin UTXOs when fee conditions and operational policy allow. This phase provides guidance only and does not prepare transactions."
-      });
-    case "move_funds":
-      return buildActionBase2({
-        actionId: buildStableId3("wallet_action", {
-          findingId: finding.findingId,
-          recommendationType
-        }),
-        finding,
-        riskFactorIds,
-        kind: "move_assets",
-        priority: finding.riskLevel,
-        recommendationType,
-        targetKind: "asset",
-        label: "bitcoin_balance_distribution",
-        title: "Reduce concentrated balance structure",
-        description: "Review whether a dominant Bitcoin UTXO should be split or moved to fresh receive addresses to reduce concentration and improve operational resilience."
-      });
-    case "harden_wallet":
-      return buildActionBase2({
-        actionId: buildStableId3("wallet_action", {
-          findingId: finding.findingId,
-          recommendationType
-        }),
-        finding,
-        riskFactorIds,
-        kind: "manual_review",
-        priority: finding.riskLevel,
-        recommendationType,
-        targetKind: "wallet",
-        label: "bitcoin_wallet_hygiene",
-        title: "Harden wallet hygiene practices",
-        description: "Review operational wallet practices, public address handling, and receive/change separation to reduce avoidable Bitcoin privacy and hygiene exposure."
-      });
-  }
-}
-function buildBitcoinCleanupPlan(walletAddress, networkId, evaluatedAt, findings, riskFactors) {
-  const actions = findings.map((finding) => buildActionForFinding(finding, riskFactors)).filter((action) => action !== null).sort(
-    (left, right) => compareRiskLevel4(right.priority, left.priority) || left.title.localeCompare(right.title) || left.actionId.localeCompare(right.actionId)
-  );
-  if (actions.length === 0) {
-    return {
-      cleanupPlan: null,
-      actionIdsByFindingId: {}
-    };
-  }
-  return {
-    cleanupPlan: {
-      planId: buildStableId3("wallet_plan", {
-        actionIds: actions.map((action) => action.actionId),
-        networkId,
-        walletAddress
-      }),
-      walletChain: "bitcoin",
-      walletAddress,
-      networkId,
-      createdAt: evaluatedAt,
-      summary: `${actions.length} Bitcoin remediation recommendation${actions.length === 1 ? "" : "s"} were generated. Manual action is required because Phase 4E does not construct or broadcast Bitcoin transactions.`,
-      actions,
-      projectedScore: null,
-      projectedRiskLevel: null
-    },
-    actionIdsByFindingId: Object.fromEntries(
-      actions.map((action) => [action.findingIds[0] ?? "", [action.actionId]])
-    )
-  };
-}
-
-// src/wallet/bitcoin/score.ts
-function scoreBand3(totalScore) {
-  if (totalScore >= 85) {
-    return "low";
-  }
-  if (totalScore >= 60) {
-    return "medium";
-  }
-  if (totalScore >= 35) {
-    return "high";
-  }
-  return "critical";
-}
-function findItemsByCode3(items, code) {
-  return items.filter((item) => item.metadata.code === code);
-}
-function buildComponent3(label, maxScore, score, rationale, findings, riskFactors) {
-  return {
-    componentId: buildStableId3("wallet_component", {
-      label,
-      maxScore,
-      score
-    }),
-    label,
-    score,
-    maxScore,
-    riskLevel: maxRiskLevel4(
-      [
-        ...findings.map((finding) => finding.riskLevel),
-        ...riskFactors.map((riskFactor) => riskFactor.riskLevel)
-      ],
-      score === maxScore ? "low" : "medium"
-    ),
-    rationale,
-    findingIds: findings.map((finding) => finding.findingId),
-    riskFactorIds: riskFactors.map((riskFactor) => riskFactor.factorId)
-  };
-}
-function buildBitcoinWalletScoreBreakdown(signals, findings, riskFactors) {
-  const addressReuseFindings = findItemsByCode3(
-    findings,
-    BITCOIN_WALLET_FINDING_CODES.ADDRESS_REUSE
-  );
-  const privacyFindings = findItemsByCode3(
-    findings,
-    BITCOIN_WALLET_FINDING_CODES.PRIVACY_EXPOSURE
-  );
-  const fragmentedUtxoFindings = findItemsByCode3(
-    findings,
-    BITCOIN_WALLET_FINDING_CODES.FRAGMENTED_UTXO_STRUCTURE
-  );
-  const concentratedUtxoFindings = findItemsByCode3(
-    findings,
-    BITCOIN_WALLET_FINDING_CODES.CONCENTRATED_UTXO_STRUCTURE
-  );
-  const hygieneFindings = findItemsByCode3(
-    findings,
-    BITCOIN_WALLET_FINDING_CODES.POOR_WALLET_HYGIENE
-  );
-  const exposedReceiveFindings = findItemsByCode3(
-    findings,
-    BITCOIN_WALLET_FINDING_CODES.REPEATED_EXPOSED_RECEIVE
-  );
-  const addressReusePenalty = Math.min(
-    signals.reusedAddressCount * 8,
-    BITCOIN_WALLET_SCORE_COMPONENT_MAX.addressReuse
-  );
-  const privacyPenalty = Math.min(
-    signals.privacyExposureCount * 7,
-    BITCOIN_WALLET_SCORE_COMPONENT_MAX.privacyExposure
-  );
-  const fragmentationPenalty = signals.fragmentationLevel === "high" ? BITCOIN_WALLET_SCORE_COMPONENT_MAX.utxoFragmentation : signals.fragmentationLevel === "medium" ? 10 : 0;
-  const concentrationPenalty = signals.concentrationLevel === "high" ? BITCOIN_WALLET_SCORE_COMPONENT_MAX.concentration : signals.concentrationLevel === "medium" ? 7 : 0;
-  const hygienePenalty = Math.min(
-    signals.poorHygieneCount * 7,
-    BITCOIN_WALLET_SCORE_COMPONENT_MAX.operationalHygiene
-  );
-  const exposedReceivePenalty = Math.min(
-    signals.exposedReceivingPatternCount * 8,
-    BITCOIN_WALLET_SCORE_COMPONENT_MAX.exposedReceiveBehavior
-  );
-  const components = [
-    buildComponent3(
-      "Address reuse",
-      BITCOIN_WALLET_SCORE_COMPONENT_MAX.addressReuse,
-      BITCOIN_WALLET_SCORE_COMPONENT_MAX.addressReuse - addressReusePenalty,
-      `${signals.reusedAddressCount} reused Bitcoin address(es) drive this component.`,
-      addressReuseFindings,
-      riskFactors.filter(
-        (riskFactor) => riskFactor.metadata.code === BITCOIN_WALLET_FINDING_CODES.ADDRESS_REUSE
-      )
-    ),
-    buildComponent3(
-      "Privacy exposure",
-      BITCOIN_WALLET_SCORE_COMPONENT_MAX.privacyExposure,
-      BITCOIN_WALLET_SCORE_COMPONENT_MAX.privacyExposure - privacyPenalty,
-      `${signals.privacyExposureCount} privacy exposure indicator(s) were supplied or derived from the hydrated snapshot.`,
-      privacyFindings,
-      riskFactors.filter(
-        (riskFactor) => riskFactor.metadata.code === BITCOIN_WALLET_FINDING_CODES.PRIVACY_EXPOSURE
-      )
-    ),
-    buildComponent3(
-      "UTXO fragmentation",
-      BITCOIN_WALLET_SCORE_COMPONENT_MAX.utxoFragmentation,
-      BITCOIN_WALLET_SCORE_COMPONENT_MAX.utxoFragmentation - fragmentationPenalty,
-      `${signals.smallUtxoCount} small UTXO(s) across ${signals.totalUtxoCount} visible UTXO(s) drive this component.`,
-      fragmentedUtxoFindings,
-      riskFactors.filter(
-        (riskFactor) => riskFactor.metadata.code === BITCOIN_WALLET_FINDING_CODES.FRAGMENTED_UTXO_STRUCTURE
-      )
-    ),
-    buildComponent3(
-      "UTXO concentration",
-      BITCOIN_WALLET_SCORE_COMPONENT_MAX.concentration,
-      BITCOIN_WALLET_SCORE_COMPONENT_MAX.concentration - concentrationPenalty,
-      `The largest UTXO represents ${signals.largestUtxoShareBasisPoints / 100}% of the visible wallet balance.`,
-      concentratedUtxoFindings,
-      riskFactors.filter(
-        (riskFactor) => riskFactor.metadata.code === BITCOIN_WALLET_FINDING_CODES.CONCENTRATED_UTXO_STRUCTURE
-      )
-    ),
-    buildComponent3(
-      "Operational hygiene",
-      BITCOIN_WALLET_SCORE_COMPONENT_MAX.operationalHygiene,
-      BITCOIN_WALLET_SCORE_COMPONENT_MAX.operationalHygiene - hygienePenalty,
-      `${signals.poorHygieneCount} caller-supplied wallet hygiene record(s) drive this component.`,
-      hygieneFindings,
-      riskFactors.filter(
-        (riskFactor) => riskFactor.metadata.code === BITCOIN_WALLET_FINDING_CODES.POOR_WALLET_HYGIENE
-      )
-    ),
-    buildComponent3(
-      "Exposed receive behavior",
-      BITCOIN_WALLET_SCORE_COMPONENT_MAX.exposedReceiveBehavior,
-      BITCOIN_WALLET_SCORE_COMPONENT_MAX.exposedReceiveBehavior - exposedReceivePenalty,
-      `${signals.exposedReceivingPatternCount} repeated exposed receive pattern(s) drive this component.`,
-      exposedReceiveFindings,
-      riskFactors.filter(
-        (riskFactor) => riskFactor.metadata.code === BITCOIN_WALLET_FINDING_CODES.REPEATED_EXPOSED_RECEIVE
-      )
-    )
-  ];
-  const totalScore = components.reduce((sum, component) => sum + component.score, 0);
-  const findingRiskLevel = maxRiskLevel4(
-    findings.map((finding) => finding.riskLevel),
-    "low"
-  );
-  const riskLevel = maxRiskLevel4([scoreBand3(totalScore), findingRiskLevel], "low");
-  return {
-    totalScore,
-    riskLevel,
-    rationale: findings.length === 0 ? "No deterministic Bitcoin wallet findings were produced from the hydrated snapshot." : "Score starts at 100 and applies fixed deductions for address reuse, privacy exposure, UTXO fragmentation, UTXO concentration, operational hygiene, and exposed receive behavior.",
-    components
-  };
-}
-
-// src/wallet/bitcoin/assemble.ts
-function buildCapabilityBoundaries3() {
-  return [
-    {
-      boundaryId: buildStableId3("wallet_boundary", {
-        area: "snapshot",
-        capabilityKey: "hydrated_bitcoin_snapshot"
-      }),
-      area: "snapshot",
-      capabilityKey: "hydrated_bitcoin_snapshot",
-      status: "supported",
-      detail: "Phase 4E evaluates only caller-supplied hydrated Bitcoin snapshot data and performs no live lookups during normalization, scoring, or remediation planning."
-    },
-    {
-      boundaryId: buildStableId3("wallet_boundary", {
-        area: "finding",
-        capabilityKey: "deterministic_bitcoin_findings"
-      }),
-      area: "finding",
-      capabilityKey: "deterministic_bitcoin_findings",
-      status: "supported",
-      detail: "Phase 4E emits deterministic Bitcoin findings, risk factors, and score breakdowns from the supplied snapshot only."
-    },
-    {
-      boundaryId: buildStableId3("wallet_boundary", {
-        area: "cleanup_plan",
-        capabilityKey: "deterministic_bitcoin_guidance"
-      }),
-      area: "cleanup_plan",
-      capabilityKey: "deterministic_bitcoin_guidance",
-      status: "supported",
-      detail: "Phase 4E builds deterministic recommendation-only Bitcoin remediation guidance. It does not claim revoke support, one-click cleanup, or automatic fixes."
-    },
-    {
-      boundaryId: buildStableId3("wallet_boundary", {
-        area: "cleanup_execution",
-        capabilityKey: "bitcoin_cleanup_execution"
-      }),
-      area: "cleanup_execution",
-      capabilityKey: "bitcoin_cleanup_execution",
-      status: "not_supported",
-      detail: "Phase 4E does not construct Bitcoin transactions, request signatures, move funds, or broadcast remediation actions."
-    }
-  ];
-}
-function buildFindingId3(walletAddress, code, resourceIds) {
-  return buildStableId3("wallet_finding", {
-    code,
-    resourceIds,
-    walletAddress
-  });
-}
-function buildRiskFactor2(finding) {
-  return {
-    factorId: buildStableId3("wallet_factor", {
-      code: finding.metadata.code ?? "",
-      findingId: finding.findingId,
-      resourceIds: finding.resourceIds
-    }),
-    walletChain: "bitcoin",
-    category: finding.category,
-    riskLevel: finding.riskLevel,
-    title: finding.title,
-    summary: finding.summary,
-    findingIds: [finding.findingId],
-    resourceIds: finding.resourceIds,
-    metadata: {
-      code: finding.metadata.code ?? "",
-      sourceFindingId: finding.findingId
-    }
-  };
-}
-function assembleBitcoinWalletEvaluation(input) {
-  const normalizedRequest = {
-    ...input.request,
-    walletChain: "bitcoin",
-    walletAddress: input.normalizedSnapshot.walletAddress,
-    scanMode: enforceWalletScanMode("bitcoin", input.request.scanMode)
-  };
-  const normalizedSnapshotContract = {
-    ...input.snapshot,
-    walletChain: "bitcoin",
-    walletAddress: input.normalizedSnapshot.walletAddress
-  };
-  const findingsWithoutActions = input.findingDrafts.map((draft) => ({
-    findingId: buildFindingId3(
-      input.normalizedSnapshot.walletAddress,
-      draft.code,
-      draft.resourceIds
-    ),
-    walletChain: "bitcoin",
-    category: draft.category,
-    riskLevel: draft.riskLevel,
-    status: "open",
-    title: draft.title,
-    summary: draft.summary,
-    detectedAt: input.evaluatedAt,
-    resourceIds: draft.resourceIds,
-    riskFactorIds: [],
-    cleanupActionIds: [],
-    evidence: draft.evidence,
-    metadata: draft.metadata
-  }));
-  const riskFactors = findingsWithoutActions.map(buildRiskFactor2);
-  const findingsWithFactors = findingsWithoutActions.map((finding, index) => ({
-    ...finding,
-    riskFactorIds: [riskFactors[index]?.factorId ?? ""].filter(Boolean)
-  }));
-  const scoreBreakdown = buildBitcoinWalletScoreBreakdown(
-    input.signals,
-    findingsWithFactors,
-    riskFactors
-  );
-  const { cleanupPlan, actionIdsByFindingId } = buildBitcoinCleanupPlan(
-    input.normalizedSnapshot.walletAddress,
-    normalizedRequest.networkId,
-    input.evaluatedAt,
-    findingsWithFactors,
-    riskFactors
-  );
-  const findings = findingsWithFactors.map((finding) => ({
-    ...finding,
-    cleanupActionIds: actionIdsByFindingId[finding.findingId] ?? []
-  }));
-  const capabilityBoundaries = buildCapabilityBoundaries3();
-  const result = {
-    requestId: normalizedRequest.requestId,
-    snapshotId: normalizedSnapshotContract.snapshotId,
-    walletChain: "bitcoin",
-    walletAddress: input.normalizedSnapshot.walletAddress,
-    networkId: normalizedRequest.networkId,
-    evaluatedAt: input.evaluatedAt,
-    findings,
-    riskFactors,
-    scoreBreakdown,
-    cleanupPlan,
-    capabilityBoundaries
-  };
-  const summary = {
-    walletChain: "bitcoin",
-    walletAddress: input.normalizedSnapshot.walletAddress,
-    networkId: normalizedRequest.networkId,
-    scanMode: normalizedRequest.scanMode,
-    generatedAt: input.evaluatedAt,
-    snapshotCapturedAt: normalizedSnapshotContract.capturedAt,
-    score: scoreBreakdown.totalScore,
-    riskLevel: scoreBreakdown.riskLevel,
-    findingCount: findings.length,
-    openFindingCount: findings.length,
-    cleanupActionCount: cleanupPlan?.actions.length ?? 0,
-    actionableFindingCount: findings.filter(
-      (finding) => finding.cleanupActionIds.length > 0
-    ).length
-  };
-  const report = {
-    reportId: buildWalletReportId({
-      reportVersion: input.reportVersion,
-      generatedAt: input.evaluatedAt,
-      request: normalizedRequest,
-      snapshot: normalizedSnapshotContract,
-      result,
-      summary,
-      cleanupExecution: null
-    }),
-    reportVersion: input.reportVersion,
-    generatedAt: input.evaluatedAt,
-    request: normalizedRequest,
-    snapshot: normalizedSnapshotContract,
-    result,
-    summary,
-    cleanupExecution: null
-  };
-  return {
-    score: scoreBreakdown.totalScore,
-    riskLevel: scoreBreakdown.riskLevel,
-    normalizedSnapshot: input.normalizedSnapshot,
-    signals: input.signals,
-    result,
-    summary,
-    report
-  };
-}
-
-// src/wallet/bitcoin/normalize.ts
-function parseIntegerString3(value) {
-  if (value === null || value === void 0) {
-    return null;
-  }
-  const trimmed = value.trim();
-  if (!trimmed || !/^[0-9]+$/.test(trimmed)) {
-    return null;
-  }
-  return BigInt(trimmed).toString(10);
-}
-function parseNonNegativeInteger(value, fallback) {
-  if (value === null || value === void 0 || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(0, Math.floor(value));
-}
-function pickSourceSectionId3(explicitSectionId, candidates) {
-  if (explicitSectionId) {
-    return explicitSectionId;
-  }
-  return candidates[0] ?? null;
-}
-function findSectionIds3(input, keywords) {
-  const foreignChainMarkers = /* @__PURE__ */ new Set(["evm", "solana"]);
-  const bitcoinMarkers = /* @__PURE__ */ new Set(["bitcoin", "btc"]);
-  return input.snapshot.sections.filter((section) => {
-    const haystacks = [
-      section.sectionId,
-      section.sectionType,
-      section.label
-    ].map((value) => value.toLowerCase());
-    const tokenLists = haystacks.map(
-      (haystack) => haystack.split(/[^a-z0-9]+/).filter(Boolean)
-    );
-    const hasForeignChainMarker = tokenLists.some(
-      (tokens) => tokens.some((token) => foreignChainMarkers.has(token))
-    );
-    if (hasForeignChainMarker) {
-      return false;
-    }
-    const isBitcoinNativeSection = tokenLists.some(
-      (tokens) => tokens[0] !== void 0 && bitcoinMarkers.has(tokens[0])
-    );
-    if (!isBitcoinNativeSection) {
-      return false;
-    }
-    return keywords.some(
-      (keyword) => tokenLists.some(
-        (tokens) => tokens.some((token) => token === keyword || token.startsWith(keyword))
-      )
-    );
-  }).map((section) => section.sectionId).sort();
-}
-function normalizeRole(role) {
-  return role ?? "unknown";
-}
-function normalizeAddressType(addressType) {
-  return addressType ?? "other";
-}
-function normalizeAddressSummary(input, walletAddress, defaultSectionIds) {
-  const address = normalizeBitcoinAddress(input.address);
-  const receiveCount = parseNonNegativeInteger(input.receiveCount, 0);
-  const reuseCount = parseNonNegativeInteger(input.reuseCount, 0);
-  const sourceSectionId = pickSourceSectionId3(
-    input.sourceSectionId,
-    defaultSectionIds
-  );
-  return {
-    resourceId: buildStableId3("wallet_btc_address", {
-      address,
-      role: normalizeRole(input.role),
-      walletAddress
-    }),
-    address,
-    addressType: normalizeAddressType(input.addressType),
-    role: normalizeRole(input.role),
-    receivedSats: parseIntegerString3(input.receivedSats),
-    spentSats: parseIntegerString3(input.spentSats),
-    balanceSats: parseIntegerString3(input.balanceSats),
-    receiveCount,
-    spendCount: parseNonNegativeInteger(input.spendCount, 0),
-    reuseCount,
-    exposedPublicly: input.exposedPublicly === true,
-    hasReuse: reuseCount > 0 || input.exposedPublicly === true && receiveCount >= BITCOIN_REPEATED_EXPOSED_RECEIVE_THRESHOLD || receiveCount > 1,
-    lastReceivedAt: input.lastReceivedAt ?? null,
-    lastSpentAt: input.lastSpentAt ?? null,
-    sourceSectionId,
-    metadata: normalizeMetadata3(input.metadata)
-  };
-}
-function normalizeUtxoSummary(input, defaultSectionIds) {
-  const txid = input.txid.trim().toLowerCase();
-  const sourceSectionId = pickSourceSectionId3(
-    input.sourceSectionId,
-    defaultSectionIds
-  );
-  return {
-    resourceId: buildStableId3("wallet_btc_utxo", {
-      address: normalizeBitcoinAddress(input.address),
-      txid,
-      vout: parseNonNegativeInteger(input.vout, 0)
-    }),
-    txid,
-    vout: parseNonNegativeInteger(input.vout, 0),
-    address: normalizeBitcoinAddress(input.address),
-    valueSats: parseIntegerString3(input.valueSats) ?? "0",
-    confirmations: input.confirmations === null || input.confirmations === void 0 ? null : parseNonNegativeInteger(input.confirmations, 0),
-    sourceSectionId,
-    metadata: normalizeMetadata3(input.metadata)
-  };
-}
-function normalizeHygieneRecord(input, defaultSectionIds) {
-  const sourceSectionId = pickSourceSectionId3(
-    input.sourceSectionId,
-    defaultSectionIds
-  );
-  return {
-    resourceId: buildStableId3("wallet_btc_hygiene", {
-      address: input.address === void 0 || input.address === null ? null : normalizeBitcoinAddress(input.address),
-      count: parseNonNegativeInteger(input.count, 1),
-      issueType: input.issueType,
-      note: input.note ?? null,
-      riskLevel: input.riskLevel ?? "medium"
-    }),
-    issueType: input.issueType,
-    address: input.address === void 0 || input.address === null ? null : normalizeBitcoinAddress(input.address),
-    count: parseNonNegativeInteger(input.count, 1),
-    riskLevel: input.riskLevel ?? "medium",
-    note: input.note ?? null,
-    sourceSectionId,
-    metadata: normalizeMetadata3(input.metadata)
-  };
-}
-function assertNonEmptyString2(value, label) {
-  const trimmed = value.trim();
-  if (!trimmed) {
-    throw new Error(`${label} must be a non-empty string.`);
-  }
-  return trimmed;
-}
-function assertBitcoinRequestSnapshotParity(input) {
-  if (input.request.walletChain !== "bitcoin") {
+// src/wallet/orchestrator.ts
+function assertWalletLayer4RuntimeInput(input) {
+  assertWalletScanRequestCapabilityTruth(input.request);
+  if (input.snapshot.requestId !== input.request.requestId) {
     throw new Error(
-      `Bitcoin wallet evaluation requires request.walletChain to be "bitcoin"; received "${input.request.walletChain}".`
+      "Layer 4 wallet runtime requires snapshot.requestId to match request.requestId before dispatch."
     );
   }
-  if (input.snapshot.walletChain !== "bitcoin") {
+  if (input.snapshot.walletChain !== input.request.walletChain) {
     throw new Error(
-      `Bitcoin wallet evaluation requires snapshot.walletChain to be "bitcoin"; received "${input.snapshot.walletChain}".`
+      "Layer 4 wallet runtime requires snapshot.walletChain to match request.walletChain before dispatch."
     );
   }
-  const requestId = assertNonEmptyString2(
-    input.request.requestId,
-    "Bitcoin request.requestId"
-  );
-  const snapshotRequestId = assertNonEmptyString2(
-    input.snapshot.requestId,
-    "Bitcoin snapshot.requestId"
-  );
-  if (requestId !== snapshotRequestId) {
+  if (input.snapshot.walletAddress !== input.request.walletAddress) {
     throw new Error(
-      "Bitcoin wallet evaluation requires request and snapshot requestId values to match."
+      "Layer 4 wallet runtime requires snapshot.walletAddress to match request.walletAddress before dispatch."
     );
   }
-  const requestNetworkId = assertNonEmptyString2(
-    input.request.networkId,
-    "Bitcoin request.networkId"
-  );
-  const snapshotNetworkId = assertNonEmptyString2(
-    input.snapshot.networkId,
-    "Bitcoin snapshot.networkId"
-  );
-  if (requestNetworkId !== snapshotNetworkId) {
+  if (input.snapshot.networkId !== input.request.networkId) {
     throw new Error(
-      "Bitcoin wallet evaluation requires request and snapshot networkId values to match."
+      "Layer 4 wallet runtime requires snapshot.networkId to match request.networkId before dispatch."
     );
   }
-  const requestWallet = normalizeBitcoinAddress(
-    assertNonEmptyString2(input.request.walletAddress, "Bitcoin request.walletAddress")
-  );
-  if (!isValidBitcoinAddress(requestWallet)) {
-    throw new Error(
-      "Bitcoin wallet evaluation requires request.walletAddress to be a valid Bitcoin address."
-    );
-  }
-  const snapshotWallet = normalizeBitcoinAddress(
-    assertNonEmptyString2(input.snapshot.walletAddress, "Bitcoin snapshot.walletAddress")
-  );
-  if (!isValidBitcoinAddress(snapshotWallet)) {
-    throw new Error(
-      "Bitcoin wallet evaluation requires snapshot.walletAddress to be a valid Bitcoin address."
-    );
-  }
-  if (requestWallet !== snapshotWallet) {
-    throw new Error(
-      "Bitcoin wallet evaluation requires request and snapshot walletAddress values to match."
-    );
-  }
-  return {
-    walletAddress: requestWallet,
-    networkId: requestNetworkId
-  };
+  return input;
 }
-function normalizeBitcoinWalletSnapshot(input) {
-  const { walletAddress, networkId } = assertBitcoinRequestSnapshotParity(input);
-  const addressSectionIds = findSectionIds3(input, ["address"]);
-  const utxoSectionIds = findSectionIds3(input, ["utxo"]);
-  const hygieneSectionIds = findSectionIds3(input, ["hygiene", "privacy"]);
-  return {
-    walletAddress,
-    networkId,
-    capturedAt: input.snapshot.capturedAt,
-    addresses: [...input.hydratedSnapshot.addresses].map(
-      (address) => normalizeAddressSummary(address, walletAddress, addressSectionIds)
-    ).sort(
-      (left, right) => left.address.localeCompare(right.address) || left.role.localeCompare(right.role) || left.resourceId.localeCompare(right.resourceId)
-    ),
-    utxos: [...input.hydratedSnapshot.utxos].map((utxo) => normalizeUtxoSummary(utxo, utxoSectionIds)).sort(
-      (left, right) => left.address.localeCompare(right.address) || left.txid.localeCompare(right.txid) || left.vout - right.vout || left.resourceId.localeCompare(right.resourceId)
-    ),
-    hygieneRecords: [...input.hydratedSnapshot.hygieneRecords ?? []].map((record) => normalizeHygieneRecord(record, hygieneSectionIds)).sort(
-      (left, right) => left.issueType.localeCompare(right.issueType) || (left.address ?? "").localeCompare(right.address ?? "") || left.resourceId.localeCompare(right.resourceId)
-    )
-  };
+function isEvmWalletLayer4ScanInput(input) {
+  return input.request.walletChain === "evm";
+}
+function isSolanaWalletLayer4ScanInput(input) {
+  return input.request.walletChain === "solana";
+}
+function isBitcoinWalletLayer4ScanInput(input) {
+  return input.request.walletChain === "bitcoin";
+}
+function runWalletLayer4Scan(input) {
+  const validatedInput = assertWalletLayer4RuntimeInput(input);
+  if (isEvmWalletLayer4ScanInput(validatedInput)) {
+    return evaluateEvmWalletScan(validatedInput);
+  }
+  if (isSolanaWalletLayer4ScanInput(validatedInput)) {
+    return evaluateSolanaWalletScan(validatedInput);
+  }
+  if (isBitcoinWalletLayer4ScanInput(validatedInput)) {
+    return evaluateBitcoinWalletScan(validatedInput);
+  }
+  throw new Error(
+    "Layer 4 wallet runtime dispatch exhausted without a supported walletChain."
+  );
 }
 
-// src/wallet/bitcoin/rules.ts
-function buildEvidenceRefs3(sourceSectionIds, fallbackLabel) {
-  const sectionIds = uniqueSorted4(sourceSectionIds.filter(Boolean));
-  if (sectionIds.length > 0) {
-    return sectionIds.map((sectionId) => ({
-      evidenceId: buildStableId3("wallet_evidence", {
-        fallbackLabel,
-        sectionId
-      }),
-      sourceType: "snapshot_section",
-      sourceId: sectionId,
-      label: `Snapshot section: ${sectionId}`
-    }));
-  }
-  return [
-    {
-      evidenceId: buildStableId3("wallet_evidence", {
-        fallbackLabel
-      }),
-      sourceType: "derived",
-      sourceId: fallbackLabel.toLowerCase().replace(/\s+/g, "_"),
-      label: fallbackLabel
-    }
-  ];
-}
-function addressEvidence(addresses, fallbackLabel) {
-  return buildEvidenceRefs3(
-    addresses.map((address) => address.sourceSectionId ?? ""),
-    fallbackLabel
-  );
-}
-function utxoEvidence(utxos, fallbackLabel) {
-  return buildEvidenceRefs3(
-    utxos.map((utxo) => utxo.sourceSectionId ?? ""),
-    fallbackLabel
-  );
-}
-function hygieneEvidence(records, fallbackLabel) {
-  return buildEvidenceRefs3(
-    records.map((record) => record.sourceSectionId ?? ""),
-    fallbackLabel
-  );
-}
-function buildBitcoinWalletFindings(snapshot, signals) {
-  const drafts = [];
-  const reusedAddresses = snapshot.addresses.filter((address) => address.hasReuse);
-  const publiclyExposedAddresses = snapshot.addresses.filter(
-    (address) => address.exposedPublicly
-  );
-  const poorHygieneRecords = snapshot.hygieneRecords.filter(
-    (record) => record.issueType === "poor_hygiene"
-  );
-  const privacyRecords = snapshot.hygieneRecords.filter(
-    (record) => record.issueType === "privacy_exposure"
-  );
-  const repeatedReceiveRecords = snapshot.hygieneRecords.filter(
-    (record) => record.issueType === "repeated_exposed_receive"
-  );
-  const repeatedExposedAddresses = publiclyExposedAddresses.filter(
-    (address) => address.receiveCount >= BITCOIN_REPEATED_EXPOSED_RECEIVE_THRESHOLD
-  );
-  const fragmentedUtxos = snapshot.utxos.filter(
-    (utxo) => signals.fragmentedUtxoIds.includes(utxo.resourceId)
-  );
-  const largestUtxo = snapshot.utxos.find(
-    (utxo) => utxo.resourceId === signals.largestUtxoId
-  );
-  if (reusedAddresses.length > 0) {
-    drafts.push({
-      code: BITCOIN_WALLET_FINDING_CODES.ADDRESS_REUSE,
-      category: "operational",
-      riskLevel: reusedAddresses.length >= 3 || reusedAddresses.some((address) => address.exposedPublicly) ? "high" : "medium",
-      title: "Address reuse exposure",
-      summary: `${reusedAddresses.length} Bitcoin address${reusedAddresses.length === 1 ? "" : "es"} show repeated receiving behavior and should be rotated out of active use.`,
-      resourceIds: uniqueSorted4(
-        reusedAddresses.map((address) => address.resourceId)
-      ),
-      evidence: addressEvidence(reusedAddresses, "Bitcoin address reuse exposure"),
-      metadata: {
-        code: BITCOIN_WALLET_FINDING_CODES.ADDRESS_REUSE,
-        reusedAddressCount: String(signals.reusedAddressCount)
-      }
-    });
-  }
-  if (signals.privacyExposureCount > 0) {
-    drafts.push({
-      code: BITCOIN_WALLET_FINDING_CODES.PRIVACY_EXPOSURE,
-      category: "operational",
-      riskLevel: maxRiskLevel4(
-        [
-          signals.exposedReceivingPatternCount > 0 ? "high" : "medium",
-          ...privacyRecords.map((record) => record.riskLevel)
-        ],
-        "medium"
-      ),
-      title: "Privacy exposure",
-      summary: `${signals.privacyExposureCount} Bitcoin privacy exposure indicator${signals.privacyExposureCount === 1 ? "" : "s"} were detected from public address visibility or caller-supplied hygiene records.`,
-      resourceIds: uniqueSorted4([
-        ...publiclyExposedAddresses.map((address) => address.resourceId),
-        ...privacyRecords.map((record) => record.resourceId)
-      ]),
-      evidence: [
-        ...addressEvidence(publiclyExposedAddresses, "Bitcoin privacy exposure"),
-        ...hygieneEvidence(privacyRecords, "Bitcoin privacy exposure record")
-      ],
-      metadata: {
-        code: BITCOIN_WALLET_FINDING_CODES.PRIVACY_EXPOSURE,
-        privacyExposureCount: String(signals.privacyExposureCount)
-      }
-    });
-  }
-  if (signals.fragmentationLevel !== "low") {
-    drafts.push({
-      code: BITCOIN_WALLET_FINDING_CODES.FRAGMENTED_UTXO_STRUCTURE,
-      category: "asset",
-      riskLevel: signals.fragmentationLevel === "high" ? "high" : "medium",
-      title: "Fragmented UTXO structure",
-      summary: `${signals.smallUtxoCount} small UTXO${signals.smallUtxoCount === 1 ? "" : "s"} and ${signals.totalUtxoCount} total UTXO${signals.totalUtxoCount === 1 ? "" : "s"} indicate ${signals.fragmentationLevel} fragmentation.`,
-      resourceIds: signals.fragmentedUtxoIds,
-      evidence: utxoEvidence(fragmentedUtxos, "Bitcoin fragmented UTXO structure"),
-      metadata: {
-        code: BITCOIN_WALLET_FINDING_CODES.FRAGMENTED_UTXO_STRUCTURE,
-        fragmentationLevel: signals.fragmentationLevel,
-        smallUtxoCount: String(signals.smallUtxoCount),
-        totalUtxoCount: String(signals.totalUtxoCount)
-      }
-    });
-  }
-  if (signals.concentrationLevel !== "low" && largestUtxo !== void 0) {
-    drafts.push({
-      code: BITCOIN_WALLET_FINDING_CODES.CONCENTRATED_UTXO_STRUCTURE,
-      category: "asset",
-      riskLevel: signals.concentrationLevel === "high" ? "high" : "medium",
-      title: "Concentrated UTXO structure",
-      summary: `The largest UTXO holds ${signals.largestUtxoShareBasisPoints / 100}% of the visible wallet balance, indicating ${signals.concentrationLevel} concentration.`,
-      resourceIds: [largestUtxo.resourceId],
-      evidence: utxoEvidence(
-        [largestUtxo],
-        "Bitcoin concentrated UTXO structure"
-      ),
-      metadata: {
-        code: BITCOIN_WALLET_FINDING_CODES.CONCENTRATED_UTXO_STRUCTURE,
-        concentrationLevel: signals.concentrationLevel,
-        largestUtxoShareBasisPoints: String(signals.largestUtxoShareBasisPoints)
-      }
-    });
-  }
-  if (poorHygieneRecords.length > 0) {
-    drafts.push({
-      code: BITCOIN_WALLET_FINDING_CODES.POOR_WALLET_HYGIENE,
-      category: "operational",
-      riskLevel: maxRiskLevel4(
-        poorHygieneRecords.map((record) => record.riskLevel),
-        "medium"
-      ),
-      title: "Poor wallet hygiene",
-      summary: `${poorHygieneRecords.length} caller-supplied wallet hygiene issue${poorHygieneRecords.length === 1 ? "" : "s"} require manual operational review.`,
-      resourceIds: poorHygieneRecords.map((record) => record.resourceId),
-      evidence: hygieneEvidence(
-        poorHygieneRecords,
-        "Bitcoin poor wallet hygiene"
-      ),
-      metadata: {
-        code: BITCOIN_WALLET_FINDING_CODES.POOR_WALLET_HYGIENE,
-        poorHygieneCount: String(signals.poorHygieneCount)
-      }
-    });
-  }
-  if (signals.exposedReceivingPatternCount > 0) {
-    drafts.push({
-      code: BITCOIN_WALLET_FINDING_CODES.REPEATED_EXPOSED_RECEIVE,
-      category: "activity",
-      riskLevel: maxRiskLevel4(
-        [
-          repeatedExposedAddresses.length > 0 ? "high" : "medium",
-          ...repeatedReceiveRecords.map((record) => record.riskLevel)
-        ],
-        "medium"
-      ),
-      title: "Repeated exposed receive behavior",
-      summary: `${signals.exposedReceivingPatternCount} exposed receiving pattern${signals.exposedReceivingPatternCount === 1 ? "" : "s"} show repeat deposits landing on public Bitcoin receive addresses.`,
-      resourceIds: uniqueSorted4([
-        ...repeatedExposedAddresses.map((address) => address.resourceId),
-        ...repeatedReceiveRecords.map((record) => record.resourceId)
-      ]),
-      evidence: [
-        ...addressEvidence(
-          repeatedExposedAddresses,
-          "Bitcoin repeated exposed receive behavior"
-        ),
-        ...hygieneEvidence(
-          repeatedReceiveRecords,
-          "Bitcoin repeated exposed receive record"
-        )
-      ],
-      metadata: {
-        code: BITCOIN_WALLET_FINDING_CODES.REPEATED_EXPOSED_RECEIVE,
-        exposedReceivingPatternCount: String(
-          signals.exposedReceivingPatternCount
-        )
-      }
-    });
-  }
-  return drafts;
-}
-
-// src/wallet/bitcoin/signals.ts
-function classifyFragmentation(totalUtxoCount, smallUtxoCount) {
-  if (totalUtxoCount >= BITCOIN_FRAGMENTATION_HIGH_UTXO_COUNT || smallUtxoCount >= BITCOIN_FRAGMENTATION_HIGH_SMALL_UTXO_COUNT) {
-    return "high";
-  }
-  if (totalUtxoCount >= BITCOIN_FRAGMENTATION_MEDIUM_UTXO_COUNT || smallUtxoCount >= BITCOIN_FRAGMENTATION_MEDIUM_SMALL_UTXO_COUNT) {
-    return "medium";
-  }
-  return "low";
-}
-function classifyConcentration(largestShareBasisPoints, totalUtxoCount) {
-  if (totalUtxoCount < 2) {
-    return "low";
-  }
-  if (largestShareBasisPoints >= BITCOIN_CONCENTRATION_HIGH_BPS) {
-    return "high";
-  }
-  if (largestShareBasisPoints >= BITCOIN_CONCENTRATION_MEDIUM_BPS) {
-    return "medium";
-  }
-  return "low";
-}
-function buildBitcoinWalletSignals(snapshot) {
-  const reusedAddresses = snapshot.addresses.filter((address) => address.hasReuse);
-  const publiclyExposedAddresses = snapshot.addresses.filter(
-    (address) => address.exposedPublicly
-  );
-  const explicitPrivacyRecords = snapshot.hygieneRecords.filter(
-    (record) => record.issueType === "privacy_exposure"
-  );
-  const explicitPoorHygieneRecords = snapshot.hygieneRecords.filter(
-    (record) => record.issueType === "poor_hygiene"
-  );
-  const explicitExposedReceiveRecords = snapshot.hygieneRecords.filter(
-    (record) => record.issueType === "repeated_exposed_receive"
-  );
-  const repeatedExposedAddresses = snapshot.addresses.filter(
-    (address) => address.exposedPublicly && address.receiveCount >= BITCOIN_REPEATED_EXPOSED_RECEIVE_THRESHOLD
-  );
-  const smallUtxos = snapshot.utxos.filter(
-    (utxo) => BigInt(utxo.valueSats) <= BITCOIN_SMALL_UTXO_SATS
-  );
-  const totalValue = snapshot.utxos.reduce(
-    (sum, utxo) => sum + BigInt(utxo.valueSats),
-    0n
-  );
-  const largestUtxo = [...snapshot.utxos].sort(
-    (left, right) => Number(BigInt(right.valueSats) - BigInt(left.valueSats)) || left.resourceId.localeCompare(right.resourceId)
-  )[0];
-  const largestShareBasisPoints = largestUtxo === void 0 || totalValue === 0n ? 0 : Number(BigInt(largestUtxo.valueSats) * 10000n / totalValue);
-  const fragmentationLevel = classifyFragmentation(
-    snapshot.utxos.length,
-    smallUtxos.length
-  );
-  const concentrationLevel = classifyConcentration(
-    largestShareBasisPoints,
-    snapshot.utxos.length
-  );
-  return {
-    addressCount: snapshot.addresses.length,
-    reusedAddressCount: reusedAddresses.length,
-    reusedAddressIds: reusedAddresses.map((address) => address.resourceId),
-    publiclyExposedAddressCount: publiclyExposedAddresses.length,
-    publiclyExposedAddressIds: publiclyExposedAddresses.map(
-      (address) => address.resourceId
-    ),
-    privacyExposureCount: uniqueSorted4([
-      ...publiclyExposedAddresses.map((address) => address.resourceId),
-      ...explicitPrivacyRecords.map((record) => record.resourceId)
-    ]).length,
-    privacyExposureIds: uniqueSorted4([
-      ...publiclyExposedAddresses.map((address) => address.resourceId),
-      ...explicitPrivacyRecords.map((record) => record.resourceId)
-    ]),
-    totalUtxoCount: snapshot.utxos.length,
-    smallUtxoCount: smallUtxos.length,
-    fragmentedUtxoIds: fragmentationLevel === "low" ? [] : smallUtxos.map((utxo) => utxo.resourceId),
-    fragmentationLevel,
-    concentrationLevel,
-    largestUtxoShareBasisPoints: largestShareBasisPoints,
-    largestUtxoId: largestUtxo?.resourceId ?? null,
-    poorHygieneCount: explicitPoorHygieneRecords.length,
-    poorHygieneIds: explicitPoorHygieneRecords.map((record) => record.resourceId),
-    exposedReceivingPatternCount: uniqueSorted4([
-      ...repeatedExposedAddresses.map((address) => address.resourceId),
-      ...explicitExposedReceiveRecords.map((record) => record.resourceId)
-    ]).length,
-    exposedReceivingPatternIds: uniqueSorted4([
-      ...repeatedExposedAddresses.map((address) => address.resourceId),
-      ...explicitExposedReceiveRecords.map((record) => record.resourceId)
-    ])
-  };
-}
-
-// src/wallet/bitcoin/evaluate.ts
-function evaluateBitcoinWalletScan(input) {
-  const normalizedSnapshot = normalizeBitcoinWalletSnapshot(input);
-  const signals = buildBitcoinWalletSignals(normalizedSnapshot);
-  const findingDrafts = buildBitcoinWalletFindings(normalizedSnapshot, signals);
-  return assembleBitcoinWalletEvaluation({
-    request: input.request,
-    snapshot: input.snapshot,
-    normalizedSnapshot,
-    signals,
-    findingDrafts,
-    evaluatedAt: input.evaluatedAt,
-    reportVersion: input.reportVersion ?? "1"
-  });
+// src/wallet/output.ts
+function buildWalletLayer4Output(input) {
+  const runWalletLayer4ScanPassThrough = runWalletLayer4Scan;
+  return runWalletLayer4ScanPassThrough(input).report;
 }
 
 // src/wallet/evm/cleanup-prepare.ts
@@ -10851,7 +11514,7 @@ function buildPreparedTransaction(action, walletAddress, networkId) {
   }
   const executable = supportStatus === "supported" && functionName !== null && methodSelector !== null && data !== null && ADDRESS_PATTERN.test(action.approval.tokenAddress);
   return {
-    transactionId: buildStableId("wallet_cleanup_tx", {
+    transactionId: buildStableId2("wallet_cleanup_tx", {
       actionId: action.actionId,
       networkId,
       walletAddress
@@ -10890,7 +11553,7 @@ function prepareEvmCleanupExecutionRequest(plan, actionIds, createdAt) {
   const selectionKind = preparedTransactions.length <= 1 ? "single_action" : "batch_actions";
   const packaging = !allExecutable ? "not_supported" : preparedTransactions.length <= 1 ? "single_transaction" : "multiple_transactions";
   return {
-    requestId: buildStableId("wallet_cleanup_request", {
+    requestId: buildStableId2("wallet_cleanup_request", {
       actionIds: actions.map((action) => action.actionId),
       createdAt,
       planId: plan.planId
@@ -11021,10 +11684,14 @@ export {
   SUSPICIOUS_TLDS,
   TRANSACTION_SELECTOR_REGISTRY,
   analyzeTransactions,
+  assertWalletReportCapabilityTruth,
+  assertWalletScanModeSupported,
+  assertWalletScanRequestCapabilityTruth,
   buildEvmCleanupPlan,
   buildNavigationContext,
   buildTransactionDecisionPackage,
   buildTransactionSignals,
+  buildWalletLayer4Output,
   buildWalletReportId,
   classifyPermitKind,
   classifyTransactionRisk,
@@ -11055,6 +11722,7 @@ export {
   getTransactionSelectorDefinition,
   getTransactionSignals,
   getVerdictTitle,
+  getWalletChainCapabilityContract,
   hasHomoglyphs,
   hasSuspiciousTld,
   interpretEvmCleanupExecutionResult,
@@ -11075,6 +11743,7 @@ export {
   resolveCanonicalTransactionIntel,
   resolveDomainIntel,
   riskBadgeLabel,
+  runWalletLayer4Scan,
   validateDomainIntelBundle,
   validateTransactionLayer2Snapshot
 };

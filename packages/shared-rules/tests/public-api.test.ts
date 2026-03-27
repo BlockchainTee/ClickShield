@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   RULE_SET_VERSION,
   buildNavigationContext,
+  buildWalletLayer4Output,
   buildTransactionDecisionPackage,
   classifyTransactionRisk,
   buildTransactionSignals,
@@ -82,6 +83,7 @@ describe("root public API", () => {
     expect(typeof evaluateEvmWalletScan).toBe("function");
     expect(typeof evaluateSolanaWalletScan).toBe("function");
     expect(typeof runWalletLayer4Scan).toBe("function");
+    expect(typeof buildWalletLayer4Output).toBe("function");
 
     const selector = getTransactionSelectorDefinition("0x095ea7b3");
     expect(selector?.functionName).toBe("approve");
