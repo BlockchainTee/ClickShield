@@ -211,6 +211,7 @@ export {
   assertWalletScanRequestCapabilityTruth,
   getWalletChainCapabilityContract,
 } from "./wallet/capabilities.js";
+export { runWalletLayer4Scan } from "./wallet/orchestrator.js";
 export { evaluateEvmWalletScan } from "./wallet/evm/evaluate.js";
 export { evaluateSolanaWalletScan } from "./wallet/solana/evaluate.js";
 export { evaluateBitcoinWalletScan } from "./wallet/bitcoin/evaluate.js";
@@ -231,6 +232,10 @@ export type {
   WalletCapabilityTier,
   WalletChainCapabilityContract,
 } from "./wallet/capabilities.js";
+export type {
+  WalletLayer4ScanEvaluation,
+  WalletLayer4ScanInput,
+} from "./wallet/orchestrator.js";
 export type {
   BitcoinAddressRole,
   BitcoinAddressSummaryInput,

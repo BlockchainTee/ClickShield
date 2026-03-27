@@ -22,6 +22,7 @@ import {
   normalizeTransactionRequest,
   normalizeTypedDataRequest,
   resolveCanonicalTransactionIntel,
+  runWalletLayer4Scan,
   validateTransactionLayer2Snapshot,
 } from "../src/index.js";
 import * as SharedRules from "../src/index.js";
@@ -80,6 +81,7 @@ describe("root public API", () => {
     expect(typeof evaluateTransaction).toBe("function");
     expect(typeof evaluateEvmWalletScan).toBe("function");
     expect(typeof evaluateSolanaWalletScan).toBe("function");
+    expect(typeof runWalletLayer4Scan).toBe("function");
 
     const selector = getTransactionSelectorDefinition("0x095ea7b3");
     expect(selector?.functionName).toBe("approve");
