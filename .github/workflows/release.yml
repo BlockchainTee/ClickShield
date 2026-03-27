@@ -103,6 +103,7 @@ jobs:
           if [ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]; then
             echo "TAURI_SIGNING_PRIVATE_KEY_PRESENT=no"
             echo "UPDATER_PUBKEY_RESULT=BLOCKED"
+            echo "::error title=Updater pubkey comparison::TAURI_SIGNING_PRIVATE_KEY_PRESENT=no; UPDATER_PUBKEY_RESULT=BLOCKED"
             exit 1
           fi
 
@@ -150,6 +151,7 @@ jobs:
 
           if [ -z "${derived_pubkey}" ]; then
             echo "UPDATER_PUBKEY_RESULT=BLOCKED"
+            echo "::error title=Updater pubkey comparison::TAURI_SIGNING_PRIVATE_KEY_PRESENT=yes; UPDATER_PUBKEY_RESULT=BLOCKED"
             exit 1
           fi
 
@@ -163,11 +165,13 @@ jobs:
 
           if [ "$committed_pubkey" = "$derived_pubkey" ]; then
             echo "UPDATER_PUBKEY_RESULT=MATCH"
+            echo "::warning title=Updater pubkey comparison::TAURI_SIGNING_PRIVATE_KEY_PRESENT=yes; UPDATER_PUBKEY_RESULT=MATCH; COMMITTED_PUBKEY_PREFIX=${committed_pubkey:0:prefix_len}; COMMITTED_PUBKEY_SUFFIX=${committed_pubkey: -suffix_len}; DERIVED_PUBKEY_PREFIX=${derived_pubkey:0:prefix_len}; DERIVED_PUBKEY_SUFFIX=${derived_pubkey: -suffix_len}"
             exit 0
           fi
 
           echo "UPDATER_PUBKEY_RESULT=MISMATCH"
           echo "DERIVED_PUBKEY=${derived_pubkey}"
+          echo "::error title=Updater pubkey comparison::TAURI_SIGNING_PRIVATE_KEY_PRESENT=yes; UPDATER_PUBKEY_RESULT=MISMATCH; COMMITTED_PUBKEY_PREFIX=${committed_pubkey:0:prefix_len}; COMMITTED_PUBKEY_SUFFIX=${committed_pubkey: -suffix_len}; DERIVED_PUBKEY_PREFIX=${derived_pubkey:0:prefix_len}; DERIVED_PUBKEY_SUFFIX=${derived_pubkey: -suffix_len}; DERIVED_PUBKEY=${derived_pubkey}"
           exit 1
 
       - name: Build watchdog sidecar
