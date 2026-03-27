@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { validateLayer4ThreatLogPayload } from "../src/dashboard/layer4Runtime";
+import {
+  DEFAULT_LAYER4_RUNTIME_INVALID_CODE,
+  ingestLayer4RuntimeReports,
+  validateLayer4ThreatLogPayload,
+} from "../src/dashboard/layer4Runtime";
 import {
   buildThreatLogState,
   createEmptyThreatLogState,
@@ -8,6 +12,8 @@ import {
   createThreatSystemStatus,
   createWalletLayer4Report,
 } from "./helpers/dashboardFixtures";
+
+const WALLET_LAYER4_OUTPUT_EVENT = "clickshield:wallet-layer4-output";
 
 describe("dashboard Layer 4 runtime validator", () => {
   it("accepts a canonical payload and preserves exact Layer 4 truth fields without mutating input", () => {
@@ -81,6 +87,128 @@ describe("dashboard Layer 4 runtime validator", () => {
   });
 });
 
+describe("dashboard Layer 4 runtime ingestion", () => {
+  it("rejects invalid persisted payloads while keeping valid load-path payloads", () => {
+    const validReport = createWalletLayer4Report({
+      reportId: "wallet-report-load-valid",
+      generatedAt: "2026-03-26T12:20:00.000Z",
+    });
+    const invalidReport = createWalletLayer4Report({
+      reportId: "wallet-report-load-invalid",
+      generatedAt: "2026-03-26T12:21:00.000Z",
+      findingSpecs: [{ findingId: "   " }],
+    });
+    const persistedPayload = JSON.parse(
+      JSON.stringify([validReport, invalidReport]),
+    ) as unknown;
+
+    const ingestion = ingestLayer4RuntimeReports({
+      previousReports: [],
+      input: persistedPayload,
+    });
+    const state = buildThreatLogState({
+      previousState: createEmptyThreatLogState(),
+      scans: [],
+      layer4Reports: ingestion.reports,
+      scanHistoryTruthState: "unknown",
+      systemStatus: createThreatSystemStatus(),
+      manifest: null,
+      engine: null,
+      healthSnapshot: null,
+      referenceTime: null,
+    });
+
+    expect(ingestion.invalidCode).toBe("invalid_layer4_reason_code");
+    expect(ingestion.reports).toEqual([validReport]);
+    expect(state.entries.filter((entry) => entry.layer === "layer4").map((entry) => entry.reportId)).toEqual([
+      validReport.reportId,
+    ]);
+  });
+
+  it("appends valid runtime events and blocks invalid runtime events on the App event path", () => {
+    const existingReport = createWalletLayer4Report({
+      reportId: "wallet-report-runtime-existing",
+      generatedAt: "2026-03-26T12:05:00.000Z",
+    });
+    const validEventReport = createWalletLayer4Report({
+      reportId: "wallet-report-runtime-valid",
+      generatedAt: "2026-03-26T12:30:00.000Z",
+      findingSpecs: [
+        { code: "ALLOWANCE_UNLIMITED", findingId: "finding:wallet-report-runtime-valid:1" },
+        { findingId: "finding:wallet-report-runtime-valid:2" },
+      ],
+    });
+    const invalidEventReport = createWalletLayer4Report({
+      reportId: "wallet-report-runtime-invalid",
+      generatedAt: "2026-03-26T12:31:00.000Z",
+      findingSpecs: [{ findingId: "   " }],
+    });
+
+    const runtimeTarget = new EventTarget();
+    let reports = [existingReport];
+    let invalidCode = DEFAULT_LAYER4_RUNTIME_INVALID_CODE;
+
+    const handleWalletLayer4Output = (event: Event) => {
+      const ingestion = ingestLayer4RuntimeReports({
+        previousReports: reports,
+        input: (event as CustomEvent<unknown>).detail,
+      });
+      reports = ingestion.reports;
+      invalidCode = ingestion.invalidCode;
+    };
+
+    runtimeTarget.addEventListener(
+      WALLET_LAYER4_OUTPUT_EVENT,
+      handleWalletLayer4Output as EventListener,
+    );
+
+    try {
+      runtimeTarget.dispatchEvent(
+        new CustomEvent(WALLET_LAYER4_OUTPUT_EVENT, {
+          detail: { report: validEventReport },
+        }),
+      );
+      expect(invalidCode).toBe(DEFAULT_LAYER4_RUNTIME_INVALID_CODE);
+      expect(reports).toEqual([validEventReport, existingReport]);
+
+      const reportsSnapshot = structuredClone(reports);
+      runtimeTarget.dispatchEvent(
+        new CustomEvent(WALLET_LAYER4_OUTPUT_EVENT, {
+          detail: { report: invalidEventReport },
+        }),
+      );
+
+      expect(invalidCode).toBe("invalid_layer4_reason_code");
+      expect(reports).toEqual(reportsSnapshot);
+    } finally {
+      runtimeTarget.removeEventListener(
+        WALLET_LAYER4_OUTPUT_EVENT,
+        handleWalletLayer4Output as EventListener,
+      );
+    }
+  });
+
+  it("stays deterministic across repeated runtime ingestion for the same report id", () => {
+    const report = createWalletLayer4Report({
+      reportId: "wallet-report-runtime-repeat",
+      generatedAt: "2026-03-26T12:30:00.000Z",
+    });
+
+    const firstIngestion = ingestLayer4RuntimeReports({
+      previousReports: [],
+      input: { reports: [report] },
+    });
+    const secondIngestion = ingestLayer4RuntimeReports({
+      previousReports: firstIngestion.reports,
+      input: { reports: [report] },
+    });
+
+    expect(firstIngestion.invalidCode).toBe(DEFAULT_LAYER4_RUNTIME_INVALID_CODE);
+    expect(secondIngestion.invalidCode).toBe(DEFAULT_LAYER4_RUNTIME_INVALID_CODE);
+    expect(secondIngestion.reports).toEqual(firstIngestion.reports);
+  });
+});
+
 describe("dashboard Layer 4 threat log integration", () => {
   it("maps a Layer 4 output into a scan_result threat log entry without mutating it", () => {
     const report = createWalletLayer4Report({
@@ -90,10 +218,14 @@ describe("dashboard Layer 4 threat log integration", () => {
       ],
     });
     const reportSnapshot = structuredClone(report);
+    const ingestion = ingestLayer4RuntimeReports({
+      previousReports: [],
+      input: report,
+    });
     const state = buildThreatLogState({
       previousState: null,
       scans: [],
-      layer4Reports: [report],
+      layer4Reports: ingestion.reports,
       scanHistoryTruthState: "unknown",
       systemStatus: createThreatSystemStatus(),
       manifest: null,
@@ -104,6 +236,7 @@ describe("dashboard Layer 4 threat log integration", () => {
 
     const entry = state.entries.find((candidate) => candidate.reportId === report.reportId);
 
+    expect(ingestion.invalidCode).toBe(DEFAULT_LAYER4_RUNTIME_INVALID_CODE);
     expect(entry).toMatchObject({
       eventKind: "scan_result",
       layer: "layer4",

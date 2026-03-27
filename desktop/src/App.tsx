@@ -11,6 +11,7 @@ import type {
   NavigationManifestSnapshot,
 } from "./dashboard/adapters";
 import { ThreatDashboard } from "./dashboard/components/ThreatDashboard";
+import { ingestLayer4RuntimeReports } from "./dashboard/layer4Runtime";
 import { buildThreatDashboardViewModel } from "./dashboard/selectors";
 import {
   buildThreatLogState,
@@ -145,10 +146,6 @@ type UrlScanCacheEntry = {
   cachedAt: string; // ISO
 };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function safeJsonParse<T>(value: string | null): T | null {
   if (!value) return null;
   try {
@@ -160,83 +157,6 @@ function safeJsonParse<T>(value: string | null): T | null {
 
 function nowIso() {
   return new Date().toISOString();
-}
-
-function isWalletLayer4Output(value: unknown): value is WalletLayer4Output {
-  if (!isRecord(value)) {
-    return false;
-  }
-
-  const request = isRecord(value.request) ? value.request : null;
-  const result = isRecord(value.result) ? value.result : null;
-  const summary = isRecord(value.summary) ? value.summary : null;
-
-  return (
-    typeof value.reportId === "string" &&
-    typeof value.generatedAt === "string" &&
-    request !== null &&
-    typeof request.walletAddress === "string" &&
-    typeof request.walletChain === "string" &&
-    typeof request.scanMode === "string" &&
-    result !== null &&
-    typeof result.statusLabel === "string" &&
-    typeof result.classification === "string" &&
-    Array.isArray(result.findings) &&
-    summary !== null &&
-    typeof summary.statusLabel === "string"
-  );
-}
-
-function readWalletLayer4Outputs(value: unknown): WalletLayer4Output[] {
-  if (Array.isArray(value)) {
-    return value.filter(isWalletLayer4Output);
-  }
-
-  if (isWalletLayer4Output(value)) {
-    return [value];
-  }
-
-  if (!isRecord(value)) {
-    return [];
-  }
-
-  if (Array.isArray(value.reports)) {
-    return value.reports.filter(isWalletLayer4Output);
-  }
-
-  return isWalletLayer4Output(value.report) ? [value.report] : [];
-}
-
-function dedupeLayer4ReportsKeepNewest(reports: WalletLayer4Output[]) {
-  const byId = new Map<string, WalletLayer4Output>();
-
-  for (const report of reports) {
-    if (!report?.reportId) {
-      continue;
-    }
-
-    const existing = byId.get(report.reportId);
-    if (!existing) {
-      byId.set(report.reportId, report);
-      continue;
-    }
-
-    const existingTimestamp = new Date(existing.generatedAt).getTime();
-    const nextTimestamp = new Date(report.generatedAt).getTime();
-    if (!Number.isFinite(existingTimestamp) || !Number.isFinite(nextTimestamp) || nextTimestamp >= existingTimestamp) {
-      byId.set(report.reportId, report);
-    }
-  }
-
-  return Array.from(byId.values()).sort((left, right) => {
-    const timestampDelta =
-      new Date(right.generatedAt).getTime() - new Date(left.generatedAt).getTime();
-    if (timestampDelta !== 0) {
-      return timestampDelta;
-    }
-
-    return left.reportId.localeCompare(right.reportId);
-  });
 }
 
 function computeNextRetryDelayMs(attempt: number): number {
@@ -861,11 +781,12 @@ const App: React.FC = () => {
       setLastSyncAt(persisted.lastUpdatedAt || null);
     }
 
-    const persistedLayer4Reports = readWalletLayer4Outputs(
-      safeJsonParse<unknown>(localStorage.getItem(STORAGE_LAYER4_REPORTS_KEY))
-    );
-    if (persistedLayer4Reports.length > 0) {
-      setLayer4Reports(dedupeLayer4ReportsKeepNewest(persistedLayer4Reports));
+    const persistedLayer4Reports = ingestLayer4RuntimeReports({
+      previousReports: [],
+      input: safeJsonParse<unknown>(localStorage.getItem(STORAGE_LAYER4_REPORTS_KEY)),
+    });
+    if (persistedLayer4Reports.reports.length > 0) {
+      setLayer4Reports(persistedLayer4Reports.reports);
     }
 
     setHiddenIds(Array.isArray(hidden) ? hidden : []);
@@ -1158,13 +1079,11 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handleWalletLayer4Output = (event: Event) => {
-      const reports = readWalletLayer4Outputs((event as CustomEvent<unknown>).detail);
-      if (reports.length === 0) {
-        return;
-      }
-
       setLayer4Reports((previousReports) =>
-        dedupeLayer4ReportsKeepNewest([...reports, ...previousReports])
+        ingestLayer4RuntimeReports({
+          previousReports,
+          input: (event as CustomEvent<unknown>).detail,
+        }).reports
       );
     };
 
