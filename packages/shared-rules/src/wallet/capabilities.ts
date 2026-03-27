@@ -217,6 +217,268 @@ function assertCleanupActionsDoNotOverclaim(
   }
 }
 
+function assertWalletReportIdentityConsistency(input: {
+  readonly request: WalletScanRequest;
+  readonly snapshot: WalletScanSnapshot;
+  readonly result: WalletScanResult;
+  readonly summary: WalletSummary;
+  readonly cleanupExecution: WalletCleanupExecutionResult | null;
+}): void {
+  if (input.snapshot.requestId !== input.request.requestId) {
+    throw new Error(
+      "Wallet report capability truth requires snapshot.requestId to match request.requestId."
+    );
+  }
+
+  if (input.result.requestId !== input.request.requestId) {
+    throw new Error(
+      "Wallet report capability truth requires result.requestId to match request.requestId."
+    );
+  }
+
+  if (input.result.snapshotId !== input.snapshot.snapshotId) {
+    throw new Error(
+      "Wallet report capability truth requires result.snapshotId to match snapshot.snapshotId."
+    );
+  }
+
+  if (input.snapshot.walletAddress !== input.request.walletAddress) {
+    throw new Error(
+      "Wallet report capability truth requires snapshot.walletAddress to match request.walletAddress."
+    );
+  }
+
+  if (input.result.walletAddress !== input.request.walletAddress) {
+    throw new Error(
+      "Wallet report capability truth requires result.walletAddress to match request.walletAddress."
+    );
+  }
+
+  if (input.summary.walletAddress !== input.request.walletAddress) {
+    throw new Error(
+      "Wallet report capability truth requires summary.walletAddress to match request.walletAddress."
+    );
+  }
+
+  if (input.snapshot.networkId !== input.request.networkId) {
+    throw new Error(
+      "Wallet report capability truth requires snapshot.networkId to match request.networkId."
+    );
+  }
+
+  if (input.result.networkId !== input.request.networkId) {
+    throw new Error(
+      "Wallet report capability truth requires result.networkId to match request.networkId."
+    );
+  }
+
+  if (input.summary.networkId !== input.request.networkId) {
+    throw new Error(
+      "Wallet report capability truth requires summary.networkId to match request.networkId."
+    );
+  }
+
+  if (input.summary.scanMode !== input.request.scanMode) {
+    throw new Error(
+      "Wallet report capability truth requires summary.scanMode to match request.scanMode."
+    );
+  }
+
+  if (input.summary.score !== input.result.scoreBreakdown.totalScore) {
+    throw new Error(
+      "Wallet report capability truth requires summary.score to match result.scoreBreakdown.totalScore."
+    );
+  }
+
+  if (input.summary.riskLevel !== input.result.scoreBreakdown.riskLevel) {
+    throw new Error(
+      "Wallet report capability truth requires summary.riskLevel to match result.scoreBreakdown.riskLevel."
+    );
+  }
+
+  if (input.summary.findingCount !== input.result.findings.length) {
+    throw new Error(
+      "Wallet report capability truth requires summary.findingCount to match result.findings."
+    );
+  }
+
+  const openFindingCount = input.result.findings.filter(
+    (finding) => finding.status === "open"
+  ).length;
+  if (input.summary.openFindingCount !== openFindingCount) {
+    throw new Error(
+      "Wallet report capability truth requires summary.openFindingCount to match open findings."
+    );
+  }
+
+  const cleanupActionCount = input.result.cleanupPlan?.actions.length ?? 0;
+  if (input.summary.cleanupActionCount !== cleanupActionCount) {
+    throw new Error(
+      "Wallet report capability truth requires summary.cleanupActionCount to match cleanup plan actions."
+    );
+  }
+
+  const actionableFindingCount = input.result.findings.filter(
+    (finding) => finding.cleanupActionIds.length > 0
+  ).length;
+  if (input.summary.actionableFindingCount !== actionableFindingCount) {
+    throw new Error(
+      "Wallet report capability truth requires summary.actionableFindingCount to match actionable findings."
+    );
+  }
+}
+
+function assertCleanupPlanConsistency(input: {
+  readonly contract: WalletChainCapabilityContract;
+  readonly request: WalletScanRequest;
+  readonly result: WalletScanResult;
+}): void {
+  const cleanupPlan = input.result.cleanupPlan;
+  if (cleanupPlan === null) {
+    return;
+  }
+
+  if (cleanupPlan.walletChain !== input.contract.walletChain) {
+    throw new Error(
+      `Wallet report capability truth requires cleanupPlan.walletChain to be "${input.contract.walletChain}".`
+    );
+  }
+
+  if (cleanupPlan.walletAddress !== input.request.walletAddress) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupPlan.walletAddress to match request.walletAddress."
+    );
+  }
+
+  if (cleanupPlan.networkId !== input.request.networkId) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupPlan.networkId to match request.networkId."
+    );
+  }
+
+  const findingIds = new Set(input.result.findings.map((finding) => finding.findingId));
+  const riskFactorIds = new Set(
+    input.result.riskFactors.map((riskFactor) => riskFactor.factorId)
+  );
+  const actionIds = new Set<string>();
+
+  for (const action of cleanupPlan.actions) {
+    if (action.walletChain !== input.contract.walletChain) {
+      throw new Error(
+        `Wallet report capability truth requires cleanup action "${action.actionId}" to remain on chain "${input.contract.walletChain}".`
+      );
+    }
+
+    if (actionIds.has(action.actionId)) {
+      throw new Error(
+        `Wallet report capability truth requires cleanup action "${action.actionId}" to be unique within the cleanup plan.`
+      );
+    }
+    actionIds.add(action.actionId);
+
+    for (const findingId of action.findingIds) {
+      if (!findingIds.has(findingId)) {
+        throw new Error(
+          `Wallet report capability truth requires cleanup action "${action.actionId}" to reference declared findings only.`
+        );
+      }
+    }
+
+    for (const riskFactorId of action.riskFactorIds) {
+      if (!riskFactorIds.has(riskFactorId)) {
+        throw new Error(
+          `Wallet report capability truth requires cleanup action "${action.actionId}" to reference declared risk factors only.`
+        );
+      }
+    }
+
+    if (!input.contract.cleanupExecutionSupported) {
+      if (action.status !== "planned") {
+        throw new Error(
+          `Layer 4 ${input.contract.walletChain} cleanup action "${action.actionId}" cannot advertise status "${action.status}".`
+        );
+      }
+
+      if (action.executionMode === "automated") {
+        throw new Error(
+          `Layer 4 ${input.contract.walletChain} cleanup action "${action.actionId}" cannot advertise automated execution.`
+        );
+      }
+    }
+  }
+
+  for (const finding of input.result.findings) {
+    for (const actionId of finding.cleanupActionIds) {
+      if (!actionIds.has(actionId)) {
+        throw new Error(
+          `Wallet report capability truth requires finding "${finding.findingId}" to reference cleanup actions declared in the cleanup plan.`
+        );
+      }
+    }
+  }
+}
+
+function assertCleanupExecutionConsistency(input: {
+  readonly request: WalletScanRequest;
+  readonly result: WalletScanResult;
+  readonly cleanupExecution: WalletCleanupExecutionResult | null;
+}): void {
+  if (input.cleanupExecution === null) {
+    return;
+  }
+
+  const cleanupPlan = input.result.cleanupPlan;
+  if (cleanupPlan === null) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupExecution to be omitted when result.cleanupPlan is null."
+    );
+  }
+
+  if (input.cleanupExecution.planId !== cleanupPlan.planId) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupExecution.planId to match result.cleanupPlan.planId."
+    );
+  }
+
+  if (input.cleanupExecution.walletAddress !== input.request.walletAddress) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupExecution.walletAddress to match request.walletAddress."
+    );
+  }
+
+  if (input.cleanupExecution.networkId !== input.request.networkId) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupExecution.networkId to match request.networkId."
+    );
+  }
+
+  const planActionIds = cleanupPlan.actions.map((action) => action.actionId);
+  const expectedActionIds = new Set(planActionIds);
+  const actualActionIds = new Set<string>();
+
+  for (const actionResult of input.cleanupExecution.actionResults) {
+    if (!expectedActionIds.has(actionResult.actionId)) {
+      throw new Error(
+        `Wallet report capability truth requires cleanup execution action "${actionResult.actionId}" to reference a declared cleanup plan action.`
+      );
+    }
+
+    if (actualActionIds.has(actionResult.actionId)) {
+      throw new Error(
+        `Wallet report capability truth requires cleanup execution action "${actionResult.actionId}" to be unique.`
+      );
+    }
+
+    actualActionIds.add(actionResult.actionId);
+  }
+
+  if (actualActionIds.size !== planActionIds.length) {
+    throw new Error(
+      "Wallet report capability truth requires cleanupExecution.actionResults to cover each cleanup plan action exactly once."
+    );
+  }
+}
+
 /**
  * Returns the canonical Layer 4 capability contract for a wallet chain.
  */
@@ -276,6 +538,8 @@ export function assertWalletReportCapabilityTruth(input: {
 }): void {
   const contract = getWalletChainCapabilityContract(input.request.walletChain);
   const expectedChain = contract.walletChain;
+
+  assertWalletReportIdentityConsistency(input);
 
   assertWalletScanModeSupported(
     input.request.walletChain,
@@ -415,6 +679,16 @@ export function assertWalletReportCapabilityTruth(input: {
     contract,
     input.result.capabilityBoundaries
   );
+  assertCleanupPlanConsistency({
+    contract,
+    request: input.request,
+    result: input.result,
+  });
+  assertCleanupExecutionConsistency({
+    request: input.request,
+    result: input.result,
+    cleanupExecution: input.cleanupExecution,
+  });
   assertCleanupActionsDoNotOverclaim(
     contract,
     input.result.cleanupPlan?.actions ?? []

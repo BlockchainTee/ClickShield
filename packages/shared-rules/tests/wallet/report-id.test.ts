@@ -572,6 +572,37 @@ function cloneReportIdInput(input: WalletReportIdInput): WalletReportIdInput {
   };
 }
 
+function createExecutedReportIdInput(): WalletReportIdInput {
+  const changed = cloneReportIdInput(createReportIdInput());
+
+  changed.cleanupExecution = {
+    ...changed.cleanupExecution!,
+    status: "completed",
+    startedAt: "2026-03-23T10:06:00.000Z",
+    completedAt: "2026-03-23T10:07:00.000Z",
+    actionResults: changed.cleanupExecution!.actionResults.map((actionResult) => ({
+      ...actionResult,
+      status: "succeeded",
+      executedAt: "2026-03-23T10:07:00.000Z",
+      detail: "External revoke execution was reported.",
+    })),
+  };
+  changed.result = {
+    ...changed.result,
+    executionPerformed: true,
+    classification: "execution_reported",
+    statusLabel: "Scan completed. Issues detected. Cleanup execution was reported.",
+  };
+  changed.summary = {
+    ...changed.summary,
+    executionPerformed: true,
+    classification: "execution_reported",
+    statusLabel: "Scan completed. Issues detected. Cleanup execution was reported.",
+  };
+
+  return changed;
+}
+
 describe("buildWalletReportId", () => {
   it("returns the same ID for equivalent declared contract data", () => {
     const first = createReportIdInput();
@@ -674,6 +705,13 @@ describe("buildWalletReportId", () => {
     const base = createReportIdInput();
     const changed: WalletReportIdInput = {
       ...cloneReportIdInput(base),
+      result: {
+        ...base.result,
+        scoreBreakdown: {
+          ...base.result.scoreBreakdown,
+          totalScore: 71,
+        },
+      },
       summary: {
         ...base.summary,
         score: 71,
@@ -711,32 +749,7 @@ describe("buildWalletReportId", () => {
   });
 
   it("accepts EVM execution-reported identity only when summary and result match the execution record", () => {
-    const changed = cloneReportIdInput(createReportIdInput());
-
-    changed.cleanupExecution = {
-      ...changed.cleanupExecution!,
-      status: "completed",
-      startedAt: "2026-03-23T10:06:00.000Z",
-      completedAt: "2026-03-23T10:07:00.000Z",
-      actionResults: changed.cleanupExecution!.actionResults.map((actionResult) => ({
-        ...actionResult,
-        status: "succeeded",
-        executedAt: "2026-03-23T10:07:00.000Z",
-        detail: "External revoke execution was reported.",
-      })),
-    };
-    changed.result = {
-      ...changed.result,
-      executionPerformed: true,
-      classification: "execution_reported",
-      statusLabel: "Scan completed. Issues detected. Cleanup execution was reported.",
-    };
-    changed.summary = {
-      ...changed.summary,
-      executionPerformed: true,
-      classification: "execution_reported",
-      statusLabel: "Scan completed. Issues detected. Cleanup execution was reported.",
-    };
+    const changed = createExecutedReportIdInput();
 
     expect(buildWalletReportId(changed)).toMatch(/^wallet_report_/);
     expect(buildWalletReportId(changed)).not.toBe(buildWalletReportId(createReportIdInput()));
@@ -783,6 +796,48 @@ describe("buildWalletReportId", () => {
     );
   });
 
+  it("rejects report identity input with a manipulated snapshot linkage", () => {
+    const changed = cloneReportIdInput(createReportIdInput());
+
+    changed.result = {
+      ...changed.result,
+      snapshotId: "snapshot_other",
+    };
+
+    expect(() => buildWalletReportId(changed)).toThrowError(
+      "Wallet report capability truth requires result.snapshotId to match snapshot.snapshotId."
+    );
+  });
+
+  it("rejects report identity input when cleanup execution plan identity is forged", () => {
+    const changed = createExecutedReportIdInput();
+
+    changed.cleanupExecution = {
+      ...changed.cleanupExecution!,
+      planId: "plan_other",
+    };
+
+    expect(() => buildWalletReportId(changed)).toThrowError(
+      "Wallet report capability truth requires cleanupExecution.planId to match result.cleanupPlan.planId."
+    );
+  });
+
+  it("rejects report identity input when cleanup execution references undeclared actions", () => {
+    const changed = createExecutedReportIdInput();
+
+    changed.cleanupExecution = {
+      ...changed.cleanupExecution!,
+      actionResults: changed.cleanupExecution!.actionResults.map((actionResult) => ({
+        ...actionResult,
+        actionId: "action_other",
+      })),
+    };
+
+    expect(() => buildWalletReportId(changed)).toThrowError(
+      'Wallet report capability truth requires cleanup execution action "action_other" to reference a declared cleanup plan action.'
+    );
+  });
+
   it("rejects report identity input that overclaims EVM cleanup execution support", () => {
     const changed = cloneReportIdInput(createReportIdInput());
 
@@ -800,6 +855,51 @@ describe("buildWalletReportId", () => {
 
     expect(() => buildWalletReportId(changed)).toThrowError(
       'Layer 4 evm capability boundary "revoke_authorization" overclaims cleanup_execution support as "supported".'
+    );
+  });
+
+  it("rejects false cleanup execution injection on basic-only chains", () => {
+    const changed = cloneReportIdInput(createBasicOnlyReportIdInput("solana"));
+    const actionId = changed.result.cleanupPlan?.actions[0]?.actionId;
+    const evidence = changed.result.findings[0]?.evidence ?? [];
+
+    if (actionId === undefined) {
+      throw new Error("Expected Solana cleanup guidance action.");
+    }
+
+    changed.cleanupExecution = {
+      planId: changed.result.cleanupPlan!.planId,
+      walletChain: "solana",
+      walletAddress: changed.request.walletAddress,
+      networkId: changed.request.networkId,
+      status: "completed",
+      startedAt: "2026-03-23T10:05:00.000Z",
+      completedAt: "2026-03-23T10:06:00.000Z",
+      actionResults: [
+        {
+          actionId,
+          status: "succeeded",
+          executedAt: "2026-03-23T10:06:00.000Z",
+          detail: "Forged execution payload.",
+          evidence,
+        },
+      ],
+    };
+    changed.result = {
+      ...changed.result,
+      executionPerformed: true,
+      classification: "execution_reported",
+      statusLabel: "Scan completed. Issues detected. Cleanup execution was reported.",
+    };
+    changed.summary = {
+      ...changed.summary,
+      executionPerformed: true,
+      classification: "execution_reported",
+      statusLabel: "Scan completed. Issues detected. Cleanup execution was reported.",
+    };
+
+    expect(() => buildWalletReportId(changed)).toThrowError(
+      "Layer 4 solana capability does not support cleanup execution results."
     );
   });
 
